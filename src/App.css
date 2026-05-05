@@ -1,0 +1,19 @@
+@import url("https://fonts.cdnfonts.com/css/sf-pro-display");
+
+body {
+  font-family: "SF Pro Display", sans-serif;
+  cursor: none;
+  margin: 0;
+  width: 100%;
+  padding: 0;
+  /* background-color: red; */
+}
+
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  box-shadow: 0 0 0px 1000px transparent inset !important;
+  -webkit-box-shadow: 0 0 0px 1000px transparent inset !important;
+  -webkit-text-fill-color: white !important;
+  transition: background-color 9999s ease-in-out 0s;
+}

@@ -4,14 +4,7 @@ import Actions from "./actions";
 
 function Topsection() {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        width: "100%",
-        justifyContent: "space-between",
-      }}
-    >
+    <div className="flex flex-row w-full justify-between">
       <Greeting />
       <Actions />
     </div>

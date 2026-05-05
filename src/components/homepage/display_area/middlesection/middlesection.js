@@ -4,15 +4,7 @@ import Patientoverview from "./PatientOvervew";
 
 function Middlesection() {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        width: "100%",
-        gap: "60px",
-        height: "366px",
-      }}
-    >
+    <div className="flex flex-row w-full gap-[60px] h-[366px]">
       <PreviousScan />
       <Patientoverview />
     </div>

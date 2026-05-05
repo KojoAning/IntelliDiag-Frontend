@@ -2,61 +2,14 @@ import React from "react";
 
 function Patientoverview() {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "20px",
-        alignItems: "flex-start",
-        width: "100%",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          width: "100%",
-          justifyContent: "space-between",
-        }}
-      >
-        <div
-          style={{
-            backgroundColor: "rgba(6,148,251,0.17)",
-            display: "inline-flex",
-            //   width: "175px",
-            borderRadius: "11px",
-            padding: "6px 9px",
-          }}
-        >
-          <p
-            style={{
-              margin: "0px",
-              fontSize: "13px",
-              color: "rgba(6,148,251,1)",
-            }}
-          >
-            Patient / Case Overview
-          </p>
+    <div className="flex flex-col gap-5 items-start w-full">
+      <div className="flex flex-row w-full justify-between">
+        <div className="bg-[rgba(6,148,251,0.17)] inline-flex rounded-[11px] px-[9px] py-[6px]">
+          <p className="m-0 text-[13px] text-[#0694FB]">Patient / Case Overview</p>
         </div>
-        <p
-          style={{
-            margin: "0px",
-            fontSize: "13px",
-            color: "rgba(6,148,251,1)",
-          }}
-        >
-          View All
-        </p>
+        <p className="m-0 text-[13px] text-[#0694FB]">View All</p>
       </div>
-
-      <div
-        style={{
-          backgroundColor: "#0C0C0C",
-          height: "100%",
-          width: "100%",
-          borderRadius: "18px",
-        }}
-      ></div>
+      <div className="bg-[#0C0C0C] h-full w-full rounded-[18px]" />
     </div>
   );
 }

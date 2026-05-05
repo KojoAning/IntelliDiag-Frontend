@@ -5,20 +5,7 @@ import Bottomsection from "./bottomsection/bottomsection";
 
 function Display() {
   return (
-    <div
-      style={{
-        boxSizing: "border-box",
-        width: "90%",
-        height: "95%",
-        marginTop: "20px",
-        // marginBottom: "40px",
-        gap:"10px",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "space-between",
-        // backgroundColor: "blue",
-      }}
-    >
+    <div className="box-border w-[90%] h-[95%] mt-5 gap-[10px] flex flex-col justify-between">
       <Topsection />
       <Middlesection />
       <Bottomsection />

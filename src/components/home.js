@@ -612,6 +612,15 @@ function GradientOverlay({ size }) {
 }
 
 function ImmersiveOverlay({ close, size }) {
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSignIn = (e) => {
+    e.stopPropagation();
+    navigate("/dashboard");
+  };
+
   const transition = {
     duration: 0.35,
     ease: [0.59, 0, 0.35, 1],
@@ -667,13 +676,23 @@ function ImmersiveOverlay({ close, size }) {
           </ModalHeader>
 
           <ModalInputs>
-            <ModalInput type="text" placeholder="Email" />
+            <ModalInput
+              type="text"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
 
-            <ModalInput type="password" placeholder="Password" />
+            <ModalInput
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
           </ModalInputs>
 
           <ModalControls>
-            <ModalButton onClick={close} className="confirm">
+            <ModalButton onClick={handleSignIn} className="confirm">
               Sign In
             </ModalButton>
             <ModalFooterText>Don't have an account? Sign up</ModalFooterText>

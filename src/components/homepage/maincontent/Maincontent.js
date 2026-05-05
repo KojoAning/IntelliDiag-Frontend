@@ -4,17 +4,7 @@ import Display from "../display_area/Display";
 
 function Maincontent() {
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100vh",
-        display: "flex",
-        flexDirection: "row",
-        gap: "30px",
-        boxSizing: "border-box",
-        marginTop: "30px",
-      }}
-    >
+    <div className="w-full h-screen flex flex-row gap-[30px] box-border mt-[30px]">
       <Sidebar />
       <Display />
     </div>

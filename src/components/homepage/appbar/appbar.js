@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
 import { FaBell } from "react-icons/fa";
 import { IoChatbubbleEllipsesOutline } from "react-icons/io5";
-import { FiLogOut } from "react-icons/fi";
-import { useNavigate } from "react-router-dom";
+import { FiLogOut, FiChevronRight } from "react-icons/fi";
+import { useNavigate, useLocation } from "react-router-dom";
 
 const mockNotifications = [
   { id: 1, name: "Alex Montgomery", avatar: null, initials: "AM", message: "Got it. Thanks!", time: "minute ago", unread: true },
@@ -46,12 +46,43 @@ function NotificationItem({ n, index }) {
   );
 }
 
+function getBreadcrumbs(pathname) {
+  if (pathname.startsWith("/cases/")) {
+    return [
+      { label: "Cases",           path: "/cases" },
+      { label: "Patient Details", path: null },
+    ];
+  }
+  if (pathname === "/case-workspace/viewer") {
+    return [
+      { label: "Cases",     path: "/cases" },
+      { label: "Series",    path: "/case-workspace" },
+      { label: "Viewer",    path: null },
+    ];
+  }
+  if (pathname === "/case-workspace") {
+    return [
+      { label: "Cases",  path: "/cases" },
+      { label: "Series", path: null },
+    ];
+  }
+  const MAP = {
+    "/dashboard": [{ label: "Dashboard", path: null }],
+    "/cases":     [{ label: "Cases",     path: null }],
+    "/calendar":  [{ label: "Calendar",  path: null }],
+    "/new-case":  [{ label: "New Case",  path: null }],
+  };
+  return MAP[pathname] ?? [];
+}
+
 function Appbar() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef(null);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const breadcrumbs = getBreadcrumbs(pathname);
 
   const userName = localStorage.getItem("name") || "User";
   const userRole = localStorage.getItem("role") || "";
@@ -67,11 +98,39 @@ function Appbar() {
 
   return (
     <div className="bg-[#0D0D0D] px-[27px] py-[10px] w-full flex flex-row items-center justify-between box-border rounded-[15px] relative z-50">
-      <div className="flex flex-col justify-center">
-        <img src="intellidiag.png" alt="IntelliDiag Logo" className="h-[23px] w-auto" />
+      <div className="flex items-center gap-3">
+        <img src="/intellidiag.png" alt="IntelliDiag Logo" className="h-[23px] w-auto" />
+
+        {breadcrumbs.length > 0 && (
+          <>
+            <div className="w-px h-4 bg-[#2a2a2a]" />
+            <nav className="flex items-center gap-1">
+              {breadcrumbs.map((crumb, i) => {
+                const isLast = i === breadcrumbs.length - 1;
+                return (
+                  <React.Fragment key={i}>
+                    {i > 0 && <FiChevronRight size={11} className="text-[#3a3a3a] shrink-0" />}
+                    {crumb.path && !isLast ? (
+                      <button
+                        onClick={() => navigate(crumb.path)}
+                        className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer p-0 transition-colors"
+                      >
+                        {crumb.label}
+                      </button>
+                    ) : (
+                      <span className={`text-[12px] font-medium px-2 py-0.5 rounded-md ${isLast ? "text-[#0694FB] bg-[rgba(6,148,251,0.12)]" : "text-[#6B6B6B]"}`}>
+                        {crumb.label}
+                      </span>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </nav>
+          </>
+        )}
       </div>
 
-      <div className="flex flex-row items-center gap-5">
+      <div className="flex flex-row items-center gap-2">
         {/* Notification bell */}
         <div ref={ref} className="relative">
           <button
@@ -112,7 +171,7 @@ function Appbar() {
               }}
             >
               {/* Header */}
-             
+
 
               {/* List */}
               <div className="flex flex-col gap-2 px-3 py-3">
@@ -122,7 +181,7 @@ function Appbar() {
               </div>
             </div>
           )}
-        </div>
+        </div>d
 
         {/* User */}
         <div ref={profileRef} className="relative">
@@ -132,7 +191,7 @@ function Appbar() {
           >
             <img
               className="w-11 h-11 rounded-full"
-              src="https://placehold.co/44x44"
+              src={`https://api.dicebear.com/9.x/initials/jpg?seed=${encodeURIComponent(userName)}&scale=70`}
               alt="avatar"
             />
             <div className="inline-flex flex-col justify-start items-start">

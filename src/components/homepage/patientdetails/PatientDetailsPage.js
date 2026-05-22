@@ -210,7 +210,7 @@ function DocumentsSection() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <span className="text-white text-[19px]">Patient Documents</span>
+          <span className="text-white text-[17px]">Patient Documents</span>
           <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">Consent forms, referrals, insurance, and clinical records for this patient.</p>
         </div>
         <div className="flex items-center gap-2">
@@ -500,31 +500,18 @@ function PatientDetailsPage() {
 
           <div className="flex flex-col flex-1 min-w-0 overflow-y-auto gap-5 pr-1 pb-4 mt-0 pt-0">
 
-            {/* ── Top bar ── */}
-            <div className="flex items-center justify-between shrink-0">
-              {/* <button onClick={() => navigate("/cases")} className="flex items-center gap-2 text-[#6B6B6B] hover:text-white text-sm cursor-pointer bg-transparent border-none transition-colors">
-                <FiArrowLeft size={15} /> Back to Cases
-              </button> */}
-              {/* <div className="flex items-center gap-2">
-                <button className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-[#1E1E1E] text-[#6B6B6B] text-sm bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
-                  <FiFileText size={13} /> Export Report
-                </button>
-                <button onClick={() => navigate("/case-workspace")} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#0694FB] hover:bg-[#0578d1] text-white text-sm font-medium border-none cursor-pointer transition-colors">
-                  <FiMaximize2 size={13} /> Open in Workspace
-                </button>
-              </div> */}
-            </div>
-
+           
             {/* ── Body ── */}
             <div className="flex gap-5 flex-1 min-h-0">
 
-              <div className="flex flex-col  flex-1 min-w-0 overflow-y-auto pr-1" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
+              <div className="flex flex-col  mt-0 flex-1 min-w-0 overflow-y-auto pr-1" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
 
-                <motion.div className="flex flex-row justify-between" variants={fadeUp} initial="hidden" animate="show" custom={0}>
-                  <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-0 mb-3">Patient <span className="text-[#0694FB]">Case</span></h1>
+                <motion.div className="flex flex-col justify-between" variants={fadeUp} initial="hidden" animate="show" custom={0}>
+                  <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-0 mb-0">Patient <span className="text-[#0694FB]">Case Details</span></h1>
+                  <p className="text-[#868686] text-[13px]">View the case details for this patient</p>
                 </motion.div>
                 {/* Profile card */}
-                <motion.div className=" rounded-2xl p-5 flex gap-5 shrink-0 relative mb-5" variants={fadeUp} initial="hidden" animate="show" custom={1}>
+                <motion.div className=" rounded-2xl p-5 flex gap-5 shrink-0 relative mb-5 mt-1" variants={fadeUp} initial="hidden" animate="show" custom={1}>
                   {/* Edit Profile — top right corner */}
                   <div>
                     <button className="absolute right-4 bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap">
@@ -535,10 +522,10 @@ function PatientDetailsPage() {
                       <img
                         src={`https://api.dicebear.com/9.x/initials/jpg?seed=${encodeURIComponent(patient.name)}&scale=70&backgroundColor=5876dd`}
                         alt="avatar"
-                        className="w-[62px] h-[62px] rounded-full flex-shrink-0"
+                        className="w-[55px] h-[55px] rounded-full flex-shrink-0"
                       />
                       <div className="text-left">
-                        <p className="text-white text-[18px] font-normal m-0 leading-tight">{patient.name}</p>
+                        <p className="text-white text-[17px] font-normal m-0 leading-tight">{patient.name}</p>
                         <p className="text-[#696969] text-[15px] m-0 mt-0.5 font-mono">MRN {patient.mrn}</p>
                       </div>
                     </div>
@@ -572,7 +559,7 @@ function PatientDetailsPage() {
                 <motion.div className="bg-[#161616] border border-[#1E1E1E] rounded-2xl p-5 mb-7" variants={fadeUp} initial="hidden" animate="show" custom={2}>
                   <div className="flex items-start justify-between mb-4">
                     <div>
-                      <span className="text-white text-[19px]">Imaging Studies</span>
+                      <span className="text-white text-[17px]">Imaging Studies</span>
                       <p className="text-[#6B6B6B] text-[12px] m-0 mt-">All imaging studies associated with this patient. Click a study to open the series viewer.</p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -635,7 +622,7 @@ function PatientDetailsPage() {
                 <motion.div className="bg-[#161616] border border-[#1E1E1E] rounded-2xl p-5 mb-6" variants={fadeUp} initial="hidden" animate="show" custom={3}>
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <span className="text-white text-[19px]">Patient Reports</span>
+                      <span className="text-white text-[17px]">Patient Reports</span>
                       <p className="text-[#6B6B6B] text-[12px] m-0">Radiology reports generated for this patient. Click a report to view or download.</p>
                     </div>
                     {/* <SectionLabel>Reports</SectionLabel> */}

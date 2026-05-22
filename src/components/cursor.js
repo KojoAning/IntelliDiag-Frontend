@@ -1,58 +1,62 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import styled, { css } from "styled-components";
 
 const Cursor = styled.div`
   position: fixed;
-  top: ${props => props.y}px;
-  left: ${props => props.x}px;
+  top: 0;
+  left: 0;
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background-color: #FFFFFF;
+  background-color: #ffffff;
   pointer-events: none;
-  transform: translate(-50%, -50%);
+  will-change: transform;
   z-index: 9999;
-  mix-blend-mode: difference;
-  transition: transform 0.1s ease, width 0.2s ease, height 0.2s ease;
-  
-  /* Hide cursor on touch devices */
+  transition: width 0.2s ease, height 0.2s ease, background-color 0.2s ease;
+
   @media (pointer: coarse) {
     display: none;
   }
 
-  /* Different cursor states */
-  ${props => props.$isHovering && css`
-    width: 40px;
-    height: 40px;
-    background-color: rgba(255, 255, 255, 0.5);
-  `}
+  ${(props) =>
+    props.$isHovering &&
+    css`
+      width: 40px;
+      height: 40px;
+      background-color: rgba(255, 255, 255, 0.5);
+    `}
 
-  ${props => props.$isClicking && css`
-    width: 15px;
-    height: 15px;
-    background-color: #21A2FF;
-  `}
+  ${(props) =>
+    props.$isClicking &&
+    css`
+      width: 15px;
+      height: 15px;
+      background-color: #21a2ff;
+    `}
 
-  /* Responsive sizing */
   @media (max-width: 768px) {
     width: 16px;
     height: 16px;
-    
-    ${props => props.$isHovering && css`
-      width: 30px;
-      height: 30px;
-    `}
+
+    ${(props) =>
+      props.$isHovering &&
+      css`
+        width: 30px;
+        height: 30px;
+      `}
   }
 `;
 
 function CustomCursor() {
-  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const cursorRef = useRef(null);
   const [isHovering, setIsHovering] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
 
   useEffect(() => {
     const updatePosition = (e) => {
-      setPosition({ x: e.clientX, y: e.clientY });
+      if (cursorRef.current) {
+        cursorRef.current.style.transform = `translate(${e.clientX - 10}px, ${e.clientY - 10}px)`;
+      }
     };
 
     const handleMouseEnter = () => setIsHovering(true);
@@ -60,14 +64,13 @@ function CustomCursor() {
     const handleMouseDown = () => setIsClicking(true);
     const handleMouseUp = () => setIsClicking(false);
 
-    // Add hover detection for interactive elements
     const interactiveElements = document.querySelectorAll(
       'a, button, input, textarea, select, [role="button"]'
     );
 
-    interactiveElements.forEach(el => {
-      el.addEventListener('mouseenter', handleMouseEnter);
-      el.addEventListener('mouseleave', handleMouseLeave);
+    interactiveElements.forEach((el) => {
+      el.addEventListener("mouseenter", handleMouseEnter);
+      el.addEventListener("mouseleave", handleMouseLeave);
     });
 
     window.addEventListener("mousemove", updatePosition);
@@ -78,18 +81,17 @@ function CustomCursor() {
       window.removeEventListener("mousemove", updatePosition);
       window.removeEventListener("mousedown", handleMouseDown);
       window.removeEventListener("mouseup", handleMouseUp);
-      
-      interactiveElements.forEach(el => {
-        el.removeEventListener('mouseenter', handleMouseEnter);
-        el.removeEventListener('mouseleave', handleMouseLeave);
+
+      interactiveElements.forEach((el) => {
+        el.removeEventListener("mouseenter", handleMouseEnter);
+        el.removeEventListener("mouseleave", handleMouseLeave);
       });
     };
   }, []);
 
   return (
-    <Cursor 
-      x={position.x} 
-      y={position.y} 
+    <Cursor
+      ref={cursorRef}
       $isHovering={isHovering}
       $isClicking={isClicking}
     />

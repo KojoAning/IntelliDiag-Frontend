@@ -3,9 +3,10 @@
 @tailwind utilities;
 
 @import url("https://fonts.cdnfonts.com/css/sf-pro-display");
+@import url("https://fonts.googleapis.com/css2?family=Figtree:ital,wght@0,300..900;1,300..900&display=swap");
 
 body {
-  font-family: "SF Pro Display", sans-serif;
+  font-family: "Figtree", "SF Pro Display", sans-serif;
   cursor: none;
   margin: 0;
   width: 100%;

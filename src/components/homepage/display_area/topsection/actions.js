@@ -12,15 +12,15 @@ const Actions = ({
   const navigate = useNavigate();
 
   return (
-    <div className="flex flex-row gap-10 w-full max-w-[485px] h-full justify-center items-center flex-wrap md:gap-6 md:justify-start">
+    <div className="flex flex-row gap-10 w-full max-w-[485px] h-full justify-center items-end flex-wrap md:gap-6 md:justify-start">
       <button
         onClick={() => navigate("/new-case")}
-        className="bg-[#0694fb] rounded-[10px] py-3 px-3 cursor-pointer transition-all duration-200 min-w-[128px] text-center border-none hover:bg-[#0578d1] hover:-translate-y-0.5"
+        className="bg-[#0694fb] rounded-full py-[8px] px-3 cursor-pointer transition-all duration-200 min-w-[128px] text-center border-none hover:bg-[#0578d1] hover:-translate-y-0.5"
       >
         <p className="m-0 text-white font-normal text-[0.8rem]">{buttonText}</p>
       </button>
 
-      {stats.map((stat, index) => (
+      {/* {stats.map((stat, index) => (
         <div key={index} className="flex flex-col">
           <div className="bg-[rgba(6,148,251,0.17)] inline-flex rounded-[11px] px-[9px] py-[6px] mb-[5px]">
             <p className="m-0 text-xs text-[#0694FB] font-medium">{stat.label}</p>
@@ -29,7 +29,7 @@ const Actions = ({
             {stat.value}
           </h1>
         </div>
-      ))}
+      ))} */}
     </div>
   );
 };

@@ -1,79 +1,79 @@
-import React from "react";
+import React, { useState } from "react";
 import ModelCard from "./components/ModelCard.js";
+import AddModelModal from "./AddModelModal.js";
+
+const DEFAULT_MODELS = [
+  { id: "FD-v2.1",  name: "Fracture Detection",    version: "v2.1", tag: "Detection",       tagColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.17)]" },
+  { id: "STA-v1.4", name: "Soft Tissue Analyser",  version: "v1.4", tag: "Segmentation",    tagColor: "text-[#A855F7] bg-[rgba(168,85,247,0.17)]" },
+  { id: "CXR-v3.0", name: "Chest X-Ray Analyzer",  version: "v3.0", tag: "Classification",  tagColor: "text-[#0694FB] bg-[rgba(6,148,251,0.17)]" },
+];
 
 function ModelPanel() {
-  return (
-    <div
-      style={{
-        width: "100%",
-        maxHeight: "290px",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden", 
-        backgroundColor:"#0c0c0c",
-        borderRadius:"15px",
-        padding:"18px 18px",
-        boxSizing:"border-box",
-        gap:"19px",
-        scrollbarColor: "#1B1B1B #000000", // Firefox
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "row",
-          justifyContent: "space-between",
-          alignItems: "center",
-  
-          boxSizing: "border-box",
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            fontSize: "12px",
-            fontWeight: 400,
-            color: "#0694FB",
-            padding: "8px 9px",
-            width: "fit-content",
-            borderRadius: "10px",
-            backgroundColor: "rgba(6, 148, 251, 0.17)",
-          }}
-        >
-          Selected AI model
-        </div>
-        <div
-          style={{
-            fontSize: "14px",
-            fontWeight: 500,
-            color: "#FFFFFF",
-            padding: "8px 9px",
-            width: "fit-content",
-            borderRadius: "8px",
-            backgroundColor: "#0694FB",
-          }}
-        >
-          Add model
-        </div>
-      </div>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "16px",
-       
-          boxSizing: "border-box",
-          overflowY: "auto",
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
-        <ModelCard />
-        <ModelCard />
-        <ModelCard />
+  const [models, setModels]         = useState(DEFAULT_MODELS);
+  const [modalOpen, setModalOpen]   = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
 
+  const addedIds = new Set(models.map(m => m.id));
+
+  const handleAdd = (catalogueModel) => {
+    setModels(prev => [
+      ...prev,
+      {
+        id:       catalogueModel.id,
+        name:     catalogueModel.name,
+        version:  catalogueModel.version,
+        tag:      catalogueModel.type,
+        tagColor: catalogueModel.typeColor,
+      },
+    ]);
+  };
+
+  const handleRemove = (id) => {
+    setModels(prev => prev.filter(m => m.id !== id));
+  };
+
+  return (
+    <>
+      <div className="bg-[#161616] rounded-[15px] p-[18px] box-border flex flex-col gap-4 shrink-0">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5">
+            <p className="text-[#0694FB] text-[12px] font-medium m-0">Selected AI Models</p>
+          </div>
+          <button
+            onClick={() => setModalOpen(true)}
+            className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium px-3 py-[8px] rounded-full border-none cursor-pointer transition-colors"
+          >
+            + Add Model
+          </button>
+        </div>
+
+        {/* Model list */}
+        <div className="flex flex-col gap-3 overflow-y-auto" style={{ maxHeight: "220px", scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}>
+          {models.length === 0 ? (
+            <p className="text-[#868686] text-[11px] text-center py-4 m-0">No models added</p>
+          ) : (
+            models.map(m => (
+              <ModelCard
+                key={m.id}
+                model={m}
+                selected={selectedId === m.id}
+                onSelect={() => setSelectedId(id => id === m.id ? null : m.id)}
+                onRemove={() => handleRemove(m.id)}
+              />
+            ))
+          )}
+        </div>
       </div>
-    </div>
+
+      <AddModelModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        addedIds={addedIds}
+        onAdd={handleAdd}
+        onRemove={handleRemove}
+      />
+    </>
   );
 }
 

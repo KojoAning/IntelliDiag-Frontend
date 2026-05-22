@@ -1,33 +1,193 @@
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { FaBell } from "react-icons/fa";
+import { IoChatbubbleEllipsesOutline } from "react-icons/io5";
+import { FiLogOut } from "react-icons/fi";
+import { useNavigate } from "react-router-dom";
+
+const mockNotifications = [
+  { id: 1, name: "Alex Montgomery", avatar: null, initials: "AM", message: "Got it. Thanks!", time: "minute ago", unread: true },
+  { id: 2, name: "Jane Cooper", avatar: null, initials: "JC", message: "Hello!", time: "7:25 PM", unread: false },
+  { id: 3, name: "Gloria Smith", avatar: null, initials: "GS", message: "Hello, Dr. Sterling!", time: "8:47 PM", unread: false, prefix: "New message" },
+  { id: 4, name: "Joseph Berrington", avatar: null, initials: "JB", message: "Good afternoon, Doctor. I have a", time: "10:42 PM", unread: false, prefix: "New message" },
+  { id: 5, name: "Anthony Bradberry", avatar: null, initials: "AB", message: "Good afternoon, Doctor. I have a", time: "1 day ago", unread: false, prefix: "New message" },
+];
+
+const avatarColors = ["#0694FB", "#7C3AED", "#059669", "#DC2626", "#D97706"];
+
+function NotificationItem({ n, index }) {
+  return (
+    <div
+      className="notif-item flex items-center gap-3 px-3 py-2.5 rounded-2xl cursor-pointer transition-all duration-200"
+      style={{
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.07)",
+      }}
+    >
+      <div
+        className="w-9 h-9 rounded-full flex items-center justify-center text-white text-[12px] font-normal shrink-0"
+        style={{ backgroundColor: avatarColors[index % avatarColors.length] }}
+      >
+        {n.initials}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="text-white text-[13px] font-medium m-0 truncate">
+            {n.prefix ? <span className="text-white/50 font-normal">{n.prefix} </span> : null}
+            {n.name}
+          </p>
+          <span className="text-white/40 text-[11px] shrink-0">{n.time}</span>
+        </div>
+        <p className="text-white/50 text-[12px] m-0 mt-0.5 truncate">{n.message}</p>
+      </div>
+      {n.unread && (
+        <div className="w-2 h-2 rounded-full bg-[#0694FB] shrink-0" />
+      )}
+    </div>
+  );
+}
 
 function Appbar() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef(null);
+  const navigate = useNavigate();
+
+  const userName = localStorage.getItem("name") || "User";
+  const userRole = localStorage.getItem("role") || "";
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (profileRef.current && !profileRef.current.contains(e.target)) setProfileOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
   return (
-    <div className="bg-[#0D0D0D] px-[27px] py-[15px] w-full flex flex-row items-center justify-between box-border rounded-[15px]">
-      <div className="h-[42px] flex flex-col justify-center">
-        <img src="intellidiag.png" alt="IntelliDiag Logo" height="22px" />
+    <div className="bg-[#0D0D0D] px-[27px] py-[10px] w-full flex flex-row items-center justify-between box-border rounded-[15px] relative z-50">
+      <div className="flex flex-col justify-center">
+        <img src="intellidiag.png" alt="IntelliDiag Logo" className="h-[23px] w-auto" />
       </div>
 
       <div className="flex flex-row items-center gap-5">
-        <FaBell size={20} color="#0694FB" />
-        <div className="inline-flex">
-          <div className="inline-flex justify-start items-center gap-3">
+        {/* Notification bell */}
+        <div ref={ref} className="relative">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="relative flex items-center gap-2 border-none cursor-pointer overflow-hidden transition-all duration-300"
+            style={{
+              background: open ? "#0694FB" : "transparent",
+              borderRadius: "999px",
+              padding: open ? "6px 16px" : "6px 8px",
+            }}
+          >
+            <FaBell size={15} color="white" style={{ opacity: open ? 1 : undefined, color: open ? "white" : "#0694FB", flexShrink: 0 }} />
+            <span
+              className="text-white text-[13px] font-semibold whitespace-nowrap overflow-hidden transition-all duration-300"
+              style={{
+                maxWidth: open ? "120px" : "0px",
+                opacity: open ? 1 : 0,
+              }}
+            >
+              Notification
+            </span>
+            {/* unread dot — hide when open */}
+            {!open && (
+              <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-[#FF6B35] rounded-full border-2 border-[#0D0D0D]" />
+            )}
+          </button>
+
+          {/* Dropdown */}
+          {open && (
+            <div
+              className="absolute right-0 top-[calc(100%+10px)] w-[320px] rounded-[22px] overflow-hidden shadow-2xl"
+              style={{
+                background: "rgba(30,30,30,0.72)",
+                backdropFilter: "blur(28px)",
+                WebkitBackdropFilter: "blur(28px)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                animation: "notifFadeIn 0.18s ease forwards",
+              }}
+            >
+              {/* Header */}
+             
+
+              {/* List */}
+              <div className="flex flex-col gap-2 px-3 py-3">
+                {mockNotifications.map((n, i) => (
+                  <NotificationItem key={n.id} n={n} index={i} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* User */}
+        <div ref={profileRef} className="relative">
+          <button
+            onClick={() => setProfileOpen(v => !v)}
+            className="inline-flex justify-start items-center gap-3 bg-transparent border-none cursor-pointer rounded-xl px-2 py-1 hover:bg-white/5 transition-colors"
+          >
             <img
               className="w-11 h-11 rounded-full"
               src="https://placehold.co/44x44"
               alt="avatar"
             />
             <div className="inline-flex flex-col justify-start items-start">
-              <div className="flex flex-col justify-center text-white/50 text-[10px] font-medium uppercase font-[Inter]">
-                MD
+              <div className="text-white/50 text-[10px] font-medium uppercase font-[Inter]">{userRole}</div>
+              <div className="text-white/80 text-sm font-medium font-[Inter]">{userName}</div>
+            </div>
+          </button>
+
+          {/* Profile popover */}
+          {profileOpen && (
+            <div
+              className="absolute right-0 top-[calc(100%+10px)] w-[200px] rounded-[18px] overflow-hidden shadow-2xl"
+              style={{
+                background: "rgba(30,30,30,0.85)",
+                backdropFilter: "blur(28px)",
+                WebkitBackdropFilter: "blur(28px)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                animation: "notifFadeIn 0.15s ease forwards",
+              }}
+            >
+              {/* Profile header */}
+              <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]">
+                <img className="w-9 h-9 rounded-full shrink-0" src="https://placehold.co/44x44" alt="avatar" />
+                <div>
+                  <p className="text-white text-[13px] font-medium m-0">{userName}</p>
+                  <p className="text-white/40 text-[11px] m-0">{userRole}</p>
+                </div>
               </div>
-              <div className="text-white/80 text-sm font-medium font-[Inter]">
-                Courtney Smith
+
+              {/* Actions */}
+              <div className="px-2 py-2">
+                <button
+                  onClick={() => { setProfileOpen(false); navigate("/"); }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#FF6B6B] hover:bg-[rgba(255,107,107,0.1)] bg-transparent border-none cursor-pointer transition-colors text-[13px]"
+                >
+                  <FiLogOut size={14} />
+                  <span>Sign out</span>
+                </button>
               </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
+
+      <style>{`
+        @keyframes notifFadeIn {
+          from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .notif-item:hover {
+          background: rgba(6, 148, 251, 0.1) !important;
+          border-color: rgba(6, 148, 251, 0.25) !important;
+          transform: translateX(3px);
+        }
+      `}</style>
     </div>
   );
 }

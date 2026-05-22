@@ -15,6 +15,11 @@ import Others from "./components/others";
 import Partners2 from "./components/partners2";
 import Dashboard from "./components/homepage/Dashboard";
 import CaseDashboard from "./components/homepage/casedashboard/CaseDashboard";
+import WorkspaceViewer from "./components/homepage/casedashboard/WorkspaceViewer";
+import CasesPage from "./components/homepage/casespage/CasesPage";
+import NewCaseFlow from "./components/homepage/newcase/NewCaseFlow";
+import CalendarPage from "./components/homepage/calendar/CalendarPage";
+import PatientDetailsPage from "./components/homepage/patientdetails/PatientDetailsPage";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -311,14 +316,12 @@ function App() {
               </>
             }
           />
-          <Route
-            path="/new-case"
-            element={
-              <>
-                <CaseDashboard />
-              </>
-            }
-          />
+          <Route path="/new-case" element={<NewCaseFlow />} />
+          <Route path="/case-workspace" element={<CaseDashboard />} />
+          <Route path="/case-workspace/viewer" element={<WorkspaceViewer />} />
+          <Route path="/cases" element={<CasesPage />} />
+          <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/cases/:id" element={<PatientDetailsPage />} />
         </Routes>
       </Router>
     </div>

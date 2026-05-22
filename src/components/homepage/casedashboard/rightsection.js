@@ -4,7 +4,7 @@ import LLMResponse from "./rightsection/LLMResponse";
 
 function RightSection() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+    <div className="flex flex-col gap-4 h-full overflow-hidden">
       <ModelPanel />
       <LLMResponse />
     </div>

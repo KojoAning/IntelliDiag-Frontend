@@ -401,12 +401,52 @@ const ModalButton = styled.button`
 
 const ModalFooterText = styled.p`
   font-size: 15px;
-  display: none;
+  color: rgba(245, 245, 245, 0.75);
+  margin: 0;
 
   @media (min-width: 320px) and (max-width: 480px) {
-    font-size: 20px;
-    display: none;
+    font-size: 13px;
   }
+`;
+
+const ModalLink = styled.span`
+  color: #0694fb;
+  cursor: pointer;
+  font-weight: 500;
+  &:hover {
+    text-decoration: underline;
+  }
+`;
+
+const ModalSelect = styled.select`
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  height: 50px;
+  border-radius: 10px;
+  padding-left: 12px;
+  background-color: transparent;
+  color: white;
+  font-size: 16px;
+  outline: none;
+  box-sizing: border-box;
+  width: 100%;
+  option {
+    background-color: #111;
+    color: white;
+  }
+`;
+
+const ModalError = styled.p`
+  color: #ff4d4d;
+  font-size: 13px;
+  margin: 0;
+  text-align: center;
+`;
+
+const ModalSuccess = styled.p`
+  color: #4dff91;
+  font-size: 13px;
+  margin: 0;
+  text-align: center;
 `;
 
 const GradientContainer = styled.div`
@@ -613,12 +653,113 @@ function GradientOverlay({ size }) {
 
 function ImmersiveOverlay({ close, size }) {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [view, setView] = useState("signin");
 
-  const handleSignIn = (e) => {
+  // Sign in state
+  const [signInEmail, setSignInEmail] = useState("");
+  const [signInPassword, setSignInPassword] = useState("");
+
+  // Sign up state
+  const [fullName, setFullName] = useState("");
+  const [signUpEmail, setSignUpEmail] = useState("");
+  const [signUpPassword, setSignUpPassword] = useState("");
+  const [role, setRole] = useState("patient");
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+
+  function decodeToken(token) {
+    const payload = token.split(".")[1];                        // middle segment
+    const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/")); // base64url → base64
+    return JSON.parse(decoded);
+  }
+
+
+  const handleSignIn = async (e) => {
     e.stopPropagation();
-    navigate("/dashboard");
+    setError("");
+    setLoading(true);
+
+    try {
+      const baseURL = process.env.REACT_APP_API_URL || "";
+      const res = await fetch(`${baseURL}/auth/sign-in`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: signInEmail, password: signInPassword }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.log(data)
+        throw new Error(data.detail || data.message || "Invalid email or password");
+      }
+      const data = await res.json();
+      const token = data.access_token;
+      localStorage.setItem("token", token);
+
+
+      const { sub, role, name, exp } = decodeToken(token);
+      localStorage.setItem("name", name);
+      localStorage.setItem("role", role);
+      localStorage.setItem("sub",sub)
+      // console.log(sub,role,name)
+
+      navigate("/dashboard");
+
+      navigate("/dashboard");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignUp = async (e) => {
+    e.stopPropagation();
+    setError("");
+    setSuccess("");
+    setLoading(true);
+
+    try {
+      const baseURL = process.env.REACT_APP_API_URL || "";
+      const res = await fetch(`${baseURL}/users/create-user`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: signUpEmail,
+          full_name: fullName,
+          password: signUpPassword,
+          role,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || data.message || "Sign up failed");
+      }
+
+      setSuccess("Account created! Please sign in.");
+      setFullName("");
+      setSignUpEmail("");
+      setSignUpPassword("");
+      setRole("patient");
+      setTimeout(() => {
+        setSuccess("");
+        setView("signin");
+      }, 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const switchView = (v) => {
+    setError("");
+    setSuccess("");
+    setView(v);
   };
 
   const transition = {
@@ -648,7 +789,6 @@ function ImmersiveOverlay({ close, size }) {
 
   return (
     <OverlayRoot onClick={close}>
-      <GradientOverlay size={size} />
       <OverlayContent
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -665,38 +805,97 @@ function ImmersiveOverlay({ close, size }) {
           <ModalLogo
             src="intellidiag.png"
             alt="IntelliDiag Logo"
-            height="36px"
+            style={{ height: "24px", width: "auto" }}
           />
 
-          <ModalHeader>
-            <ModalTitle>Sign In to your account</ModalTitle>
-            <ModalSubtitle>
-              Sign in to access all the features and functions of our platform
-            </ModalSubtitle>
-          </ModalHeader>
+          {view === "signin" ? (
+            <>
+              <ModalHeader>
+                <ModalTitle>Sign In to your account</ModalTitle>
+                <ModalSubtitle>
+                  Sign in to access all the features and functions of our platform
+                </ModalSubtitle>
+              </ModalHeader>
 
-          <ModalInputs>
-            <ModalInput
-              type="text"
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
+              <ModalInputs>
+                <ModalInput
+                  type="text"
+                  placeholder="Email"
+                  value={signInEmail}
+                  onChange={(e) => setSignInEmail(e.target.value)}
+                />
+                <ModalInput
+                  type="password"
+                  placeholder="Password"
+                  value={signInPassword}
+                  onChange={(e) => setSignInPassword(e.target.value)}
+                />
+              </ModalInputs>
 
-            <ModalInput
-              type="password"
-              placeholder="Password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </ModalInputs>
+              {error ? <ModalError>{error}</ModalError> : null}
 
-          <ModalControls>
-            <ModalButton onClick={handleSignIn} className="confirm">
-              Sign In
-            </ModalButton>
-            <ModalFooterText>Don't have an account? Sign up</ModalFooterText>
-          </ModalControls>
+              <ModalControls>
+                <ModalButton onClick={handleSignIn} disabled={loading} className="confirm">
+                  {loading ? "Signing in..." : "Sign In"}
+                </ModalButton>
+                <ModalFooterText>
+                  Don't have an account?{" "}
+                  <ModalLink onClick={() => switchView("signup")}>Sign up</ModalLink>
+                </ModalFooterText>
+              </ModalControls>
+            </>
+          ) : (
+            <>
+              <ModalHeader>
+                <ModalTitle>Create an account</ModalTitle>
+                <ModalSubtitle>
+                  Join intelliDiag and start using AI-powered diagnostics
+                </ModalSubtitle>
+              </ModalHeader>
+
+              <ModalInputs>
+                <ModalInput
+                  type="text"
+                  placeholder="Full Name"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                />
+                <ModalInput
+                  type="text"
+                  placeholder="Email"
+                  value={signUpEmail}
+                  onChange={(e) => setSignUpEmail(e.target.value)}
+                />
+                <ModalInput
+                  type="password"
+                  placeholder="Password"
+                  value={signUpPassword}
+                  onChange={(e) => setSignUpPassword(e.target.value)}
+                />
+                <ModalSelect
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                >
+                  <option value="patient">Patient</option>
+                  <option value="doctor">Doctor</option>
+                  <option value="admin">Admin</option>
+                </ModalSelect>
+              </ModalInputs>
+
+              {error ? <ModalError>{error}</ModalError> : null}
+              {success ? <ModalSuccess>{success}</ModalSuccess> : null}
+
+              <ModalControls>
+                <ModalButton onClick={handleSignUp} disabled={loading}>
+                  {loading ? "Creating account..." : "Sign Up"}
+                </ModalButton>
+                <ModalFooterText>
+                  Already have an account?{" "}
+                  <ModalLink onClick={() => switchView("signin")}>Sign in</ModalLink>
+                </ModalFooterText>
+              </ModalControls>
+            </>
+          )}
         </ModalContent>
       </OverlayContent>
     </OverlayRoot>

@@ -114,7 +114,7 @@ function SeriesGrid({ study, onOpenSeries, onDeleteSeries, loading }) {
         <div className="flex items-center gap-2">
           <div className="bg-[rgba(6,148,251,0.17)] inline-flex rounded-[11px] px-[9px] py-[6px]">
             <p className="m-0 text-[13px] text-[#0694FB] font-medium">
-              {loading ? "—" : study.series.length} Series
+              {loading ? "—" : (study.series?.length ?? 0)} Series
             </p>
           </div>
         </div>
@@ -124,12 +124,14 @@ function SeriesGrid({ study, onOpenSeries, onDeleteSeries, loading }) {
       </div>
 
       {/* Grid */}
+      {loading ? (
+        <div className="flex flex-col items-center justify-center py-24 gap-3">
+          <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+          <p className="text-[#3a3a3a] text-[13px] m-0">Loading series…</p>
+        </div>
+      ) : (
       <div className="grid grid-cols-3 gap-4 2xl:grid-cols-4 xl:grid-cols-3">
-        {loading
-          ? Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="bg-[#0D0D0D] border border-[#1E1E1E] rounded-2xl p-5 min-h-[200px] animate-pulse" />
-            ))
-          : study.series.map((series, i) => (
+        {(study.series ?? []).map((series, i) => (
               <SeriesCard
                 key={series.id}
                 series={series}
@@ -149,6 +151,7 @@ function SeriesGrid({ study, onOpenSeries, onDeleteSeries, loading }) {
           <p className="text-[#3a3a3a] text-[12px] m-0 text-center">Add Series</p>
         </div>
       </div>
+      )}
     </div>
   );
 }

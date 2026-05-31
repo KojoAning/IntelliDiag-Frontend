@@ -3,10 +3,7 @@ import ModelCard from "./components/ModelCard.js";
 import AddModelModal from "./AddModelModal.js";
 
 const DEFAULT_MODELS = [
-  { id: "FD-v2.1",  name: "Fracture Detection",    version: "v2.1", tag: "Detection",       tagColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.17)]" },
-  { id: "STA-v1.4", name: "Soft Tissue Analyser",  version: "v1.4", tag: "Segmentation",    tagColor: "text-[#A855F7] bg-[rgba(168,85,247,0.17)]" },
-  { id: "CXR-v3.0", name: "Chest X-Ray Analyzer",  version: "v3.0", tag: "Classification",  tagColor: "text-[#0694FB] bg-[rgba(6,148,251,0.17)]" },
-];
+ ];
 
 function ModelPanel() {
   const [models, setModels]         = useState(DEFAULT_MODELS);

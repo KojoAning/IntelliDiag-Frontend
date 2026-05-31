@@ -297,11 +297,11 @@ function App() {
                   }}
                 />
                 <div style={{ zIndex: 3 }}>
-                  <Homepage />
-                  <About />
-                  <Others />
+                  <div id="home"><Homepage /></div>
+                  <div id="about"><About /></div>
+                  <div id="features"><Others /></div>
                   <Partners2 />
-                  <Reach />
+                  <div id="contact"><Reach /></div>
                   <Footer />
                 </div>
                 <Navbar />

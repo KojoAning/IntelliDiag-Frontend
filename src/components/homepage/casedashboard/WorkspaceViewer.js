@@ -4,7 +4,6 @@ import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
-import { mockStudies } from "./CaseDashboard";
 import { getImagesForStudy, getDicomDownloadUrl } from "../../../lib/api";
 
 function WorkspaceViewer() {
@@ -12,12 +11,14 @@ function WorkspaceViewer() {
   const navigate = useNavigate();
 
   // Use navState directly — avoids mock-ID mismatch when series IDs are real UUIDs
-  const activeStudy = navState?.study ?? mockStudies[0];
+  const activeStudy = navState?.study ?? {};
   const activeSeries = navState?.series ?? activeStudy.series?.[0];
 
   const [images, setImages] = useState([]);
   const [imagesLoading, setImagesLoading] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
+  const [aiResponse, setAiResponse]   = useState(null);
+  const [aiLoading, setAiLoading]     = useState(false);
 
   const fileInputRef = useRef(null);
 
@@ -77,6 +78,62 @@ function WorkspaceViewer() {
     fileInputRef.current?.click();
   };
 
+  const runAnalysis = async () => {
+    if (aiLoading) return;
+    setAiLoading(true);
+    setAiResponse("");
+    const prompt =
+      `You are a radiology AI assistant. Provide a concise structured clinical impression for the following imaging series.\n` +
+      `Series name: ${activeSeries?.name ?? "Unknown"}\n` +
+      `Modality: ${activeStudy?.modality ?? "Unknown"}\n` +
+      `Description: ${activeSeries?.description ?? "N/A"}\n\n` +
+      `Provide key imaging findings and any clinical recommendations in plain paragraphs. No asterisks, just plain paragraphs.`;
+    try {
+      const res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.REACT_APP_OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({ model: "gpt-4o-mini", input: prompt, store: true, stream: true }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message ?? `${res.status} ${res.statusText}`);
+      }
+
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        // Keep the last (potentially incomplete) line in the buffer
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6).trim();
+          if (raw === "[DONE]") break;
+          try {
+            const evt = JSON.parse(raw);
+            if (evt.type === "response.output_text.delta") {
+              setAiResponse(prev => prev + evt.delta);
+            }
+          } catch {}
+        }
+      }
+    } catch (e) {
+      setAiResponse(`Error: ${e.message}`);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   return (
     <div className="m-0 p-0 h-screen bg-black w-screen">
       <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
@@ -124,9 +181,11 @@ function WorkspaceViewer() {
                 images={images}
                 activeStudy={activeStudy}
                 activeSeries={activeSeries}
+                onRunAnalysis={runAnalysis}
+                aiLoading={aiLoading}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} />
               </div>
             </div>
 

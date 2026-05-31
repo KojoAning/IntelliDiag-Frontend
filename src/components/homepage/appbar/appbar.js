@@ -181,7 +181,7 @@ function Appbar() {
               </div>
             </div>
           )}
-        </div>d
+        </div>
 
         {/* User */}
         <div ref={profileRef} className="relative">

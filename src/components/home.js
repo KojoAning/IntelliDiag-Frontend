@@ -112,7 +112,7 @@ const HomepageSubheading = styled.h2`
 
   /* iPads, Tablets (481px - 768px) */
   @media (min-width: 481px) and (max-width: 768px) {
-    font-size: 22px;
+    font-size: 16px;
     margin-bottom: 25px;
   }
 
@@ -202,6 +202,7 @@ const OverlayContent = styled(motion.div)`
   gap: 20px;
   z-index: 1001;
   will-change: opacity;
+  background: radial-gradient(ellipse at 50% 40%, rgba(6, 148, 251, 0.18) 0%, rgba(0, 0, 0, 0.72) 65%);
 `;
 
 const ModalContent = styled(motion.div)`
@@ -220,6 +221,10 @@ const ModalContent = styled(motion.div)`
   -webkit-backdrop-filter: blur(8px);
   width: 90%;
   max-width: 400px;
+  max-height: 90vh;
+  overflow-y: auto;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
 
   /* Mobile devices (320px - 480px) */
   @media (min-width: 320px) and (max-width: 480px) {
@@ -358,16 +363,23 @@ const ModalInput = styled.input`
   height: 50px;
   border-radius: 10px;
   padding-left: 12px;
-  background-color: transparent;
+  background-color: rgba(255, 255, 255, 0.05);
   color: white;
   font-size: 16px;
   outline: none;
   box-sizing: border-box;
   width: 100%;
 
+  caret-color: #0694fb;
+
+  &::selection {
+    background: rgba(6, 148, 251, 0.5);
+    color: #fff;
+  }
+
   /* Small screens, laptops (769px - 1024px) */
   @media (min-width: 769px) and (max-width: 1024px) {
-    font-size: 20px;
+    font-size: 16px;
     color: #fff;
   }
 `;
@@ -663,7 +675,10 @@ function ImmersiveOverlay({ close, size }) {
   const [fullName, setFullName] = useState("");
   const [signUpEmail, setSignUpEmail] = useState("");
   const [signUpPassword, setSignUpPassword] = useState("");
-  const [role, setRole] = useState("patient");
+  const [role, setRole] = useState("doctor");
+  const [phone, setPhone] = useState("");
+  const [institution, setInstitution] = useState("");
+  const [licenseNumber, setLicenseNumber] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -732,6 +747,9 @@ function ImmersiveOverlay({ close, size }) {
           full_name: fullName,
           password: signUpPassword,
           role,
+          phone,
+          institution,
+          ...(role === "doctor" ? { license_number: licenseNumber } : {}),
         }),
       });
 
@@ -744,7 +762,10 @@ function ImmersiveOverlay({ close, size }) {
       setFullName("");
       setSignUpEmail("");
       setSignUpPassword("");
-      setRole("patient");
+      setRole("doctor");
+      setPhone("");
+      setInstitution("");
+      setLicenseNumber("");
       setTimeout(() => {
         setSuccess("");
         setView("signin");
@@ -861,7 +882,7 @@ function ImmersiveOverlay({ close, size }) {
                   onChange={(e) => setFullName(e.target.value)}
                 />
                 <ModalInput
-                  type="text"
+                  type="email"
                   placeholder="Email"
                   value={signUpEmail}
                   onChange={(e) => setSignUpEmail(e.target.value)}
@@ -872,14 +893,33 @@ function ImmersiveOverlay({ close, size }) {
                   value={signUpPassword}
                   onChange={(e) => setSignUpPassword(e.target.value)}
                 />
+                <ModalInput
+                  type="tel"
+                  placeholder="Phone Number"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+                <ModalInput
+                  type="text"
+                  placeholder="Hospital / Institution Name"
+                  value={institution}
+                  onChange={(e) => setInstitution(e.target.value)}
+                />
                 <ModalSelect
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
                 >
-                  <option value="patient">Patient</option>
                   <option value="doctor">Doctor</option>
                   <option value="admin">Admin</option>
                 </ModalSelect>
+                {role === "doctor" && (
+                  <ModalInput
+                    type="text"
+                    placeholder="Medical License Number"
+                    value={licenseNumber}
+                    onChange={(e) => setLicenseNumber(e.target.value)}
+                  />
+                )}
               </ModalInputs>
 
               {error ? <ModalError>{error}</ModalError> : null}

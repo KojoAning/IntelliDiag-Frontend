@@ -24,6 +24,7 @@ async function request(method, path, body) {
 // ── Generic resource fetchers ─────────────────────────────────────────────────
 
 export const getPatients    = (qs = "")  => request("GET", `/patients/${qs}`);
+export const getPatientById = (id)       => request("GET", `/patients/${id}`);
 export const getCases       = (qs = "")  => request("GET", `/cases/${qs}`);
 export const getStudies     = (qs = "")  => request("GET", `/studies/${qs}`);
 export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
@@ -85,6 +86,43 @@ export function uploadToS3(presignedUrl, file, onProgress) {
 }
 
 /**
+ * GET /documents/patient/{patient_id}
+ * Fetch all documents for a patient.
+ */
+export function getDocumentsForPatient(patientId) {
+  return request("GET", `/documents/patient/${patientId}`);
+}
+
+/**
+ * GET /documents/{document_id}/download-url
+ * Returns a presigned S3 URL to download the document.
+ * @returns {string} presigned URL
+ */
+export function getDocumentDownloadUrl(documentId) {
+  return request("GET", `/documents/${documentId}/download-url`);
+}
+
+/**
+ * POST /documents/request-upload
+ * Step 1: Creates a document record and returns a presigned S3 URL.
+ * @param {{ patient_id: string, file_name: string, document_type: string }} payload
+ * @returns {{ document_id: string, upload_url: string, s3_key: string }}
+ */
+export function requestDocumentUpload(payload) {
+  return request("POST", "/documents/request-upload", payload);
+}
+
+/**
+ * PATCH /documents/{document_id}/confirm-upload
+ * Step 2: Mark a document as uploaded or failed after the S3 PUT.
+ * @param {string} documentId
+ * @param {"uploaded"|"failed"} status
+ */
+export function confirmDocumentUpload(documentId, status) {
+  return request("PATCH", `/documents/${documentId}/confirm-upload`, { status });
+}
+
+/**
  * POST /series/
  * @param {{ series_name, series_number, modality, description, study_id }} payload
  */
@@ -97,4 +135,12 @@ export function createSeries(payload) {
  */
 export function deleteSeries(seriesId) {
   return request("DELETE", `/series/${seriesId}`);
+}
+
+/**
+ * GET /models/
+ * Returns all AI models available for inference.
+ */
+export function getModels() {
+  return request("GET", "/models/");
 }

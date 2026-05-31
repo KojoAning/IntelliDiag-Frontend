@@ -6,9 +6,9 @@ import { useNavigate } from "react-router-dom";
 const menuItems = [
   { name: "Home", icon: <FiHome size={20} />, path: "/dashboard" },
   { name: "Cases", icon: <FiUser size={20} />, path: "/cases" },
-  { name: "History", icon: <RiHistoryLine size={20} />, path: "/history" },
+  // { name: "History", icon: <RiHistoryLine size={20} />, path: "/history" },
   { name: "Calendar", icon: <FiCalendar size={20} />, path: "/calendar" },
-  { name: "Settings", icon: <FiSettings size={20} />, path: "/settings" },
+  // { name: "Settings", icon: <FiSettings size={20} />, path: "/settings" },
 ];
 
 function Sidebar({ activePage = "Home" }) {

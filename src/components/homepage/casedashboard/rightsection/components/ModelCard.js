@@ -18,7 +18,7 @@ function ModelCard({ model, selected, onSelect, onRemove }) {
         <p className={`text-[12px] font-medium m-0 truncate transition-colors ${selected ? "text-[#0694FB]" : "text-white"}`}>
           {model.name}
         </p>
-        <p className="text-[#6B6B6B] text-[10px] m-0">{model.id}</p>
+        <p className="text-[#6B6B6B] text-[10px] m-0">{model.version}</p>
         <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full w-fit ${model.tagColor}`}>
           {model.tag}
         </span>

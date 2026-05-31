@@ -1,99 +1,32 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { FiX, FiSearch, FiCheck, FiCpu } from "react-icons/fi";
+import { getModels } from "../../../../lib/api";
 
-// ── Available model catalogue ─────────────────────────────────────────────────
-const CATALOGUE = [
-  {
-    id: "FD-v2.1",
-    name: "Fracture Detection",
-    version: "v2.1",
-    description: "Detects cortical fractures and stress reactions in skeletal imaging using a dual-branch CNN.",
-    modalities: ["X-Ray", "CT"],
-    type: "Detection",
-    typeColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
-  },
-  {
-    id: "STA-v1.4",
-    name: "Soft Tissue Analyser",
-    version: "v1.4",
-    description: "Segments and classifies ligament, tendon, and cartilage abnormalities in MRI sequences.",
-    modalities: ["MRI"],
-    type: "Segmentation",
-    typeColor: "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
-  },
-  {
-    id: "CXR-v3.0",
-    name: "Chest X-Ray Analyzer",
-    version: "v3.0",
-    description: "Multi-label classifier for pneumonia, pleural effusion, cardiomegaly, and 10 other pathologies.",
-    modalities: ["X-Ray"],
-    type: "Classification",
-    typeColor: "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
-  },
-  {
-    id: "LUNA-v1.0",
-    name: "Lung Nodule Analyzer",
-    version: "v1.0",
-    description: "Automatically detects and measures pulmonary nodules from CT chest series, outputs Lung-RADS.",
-    modalities: ["CT"],
-    type: "Detection",
-    typeColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
-  },
-  {
-    id: "BRAINS-v2.0",
-    name: "Brain Tumour Segmentation",
-    version: "v2.0",
-    description: "3D U-Net based segmentation of glioblastoma, meningioma, and metastatic lesions in brain MRI.",
-    modalities: ["MRI"],
-    type: "Segmentation",
-    typeColor: "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
-  },
-  {
-    id: "CARDIAC-v1.2",
-    name: "Cardiac Function Estimator",
-    version: "v1.2",
-    description: "Estimates ejection fraction, chamber volumes, and wall motion from cardiac MRI cine series.",
-    modalities: ["MRI"],
-    type: "Quantification",
-    typeColor: "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
-  },
-  {
-    id: "RETINA-v1.0",
-    name: "Retinal OCT Classifier",
-    version: "v1.0",
-    description: "Identifies drusen, CNV, DME, and other retinal pathologies from optical coherence tomography.",
-    modalities: ["OCT"],
-    type: "Classification",
-    typeColor: "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
-  },
-  {
-    id: "SPINE-v1.3",
-    name: "Spine Alignment Analyser",
-    version: "v1.3",
-    description: "Measures Cobb angle, vertebral rotation, and disc height loss from spinal radiographs and MRI.",
-    modalities: ["X-Ray", "MRI"],
-    type: "Quantification",
-    typeColor: "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
-  },
-  {
-    id: "LIVER-v2.3",
-    name: "Liver Lesion Detector",
-    version: "v2.3",
-    description: "Detects and characterises focal liver lesions (HCC, metastases, cysts) in contrast-enhanced CT.",
-    modalities: ["CT"],
-    type: "Detection",
-    typeColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
-  },
-  {
-    id: "MAMMO-v1.1",
-    name: "Mammography Screener",
-    version: "v1.1",
-    description: "Flags suspicious masses, calcification clusters, and asymmetries in digital mammography.",
-    modalities: ["Mammography"],
-    type: "Detection",
-    typeColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
-  },
-];
+const TYPE_COLORS = {
+  Detection:      "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
+  Segmentation:   "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
+  Classification: "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
+  Quantification: "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
+};
+
+function parseModalities(raw) {
+  if (!raw) return [];
+  try { return JSON.parse(raw); } catch {}
+  return raw.split(",").map(s => s.trim()).filter(Boolean);
+}
+
+function mapModel(m) {
+  const type = m.model_type ?? "";
+  return {
+    id:        m.id,
+    name:      m.name,
+    version:   m.version ?? "",
+    description: m.description ?? "",
+    modalities: parseModalities(m.modalities),
+    type,
+    typeColor: TYPE_COLORS[type] ?? "text-white bg-[#1a1a1a]",
+  };
+}
 
 const MODALITY_FILTERS = ["All", "MRI", "CT", "X-Ray", "Ultrasound", "OCT", "Mammography"];
 
@@ -159,15 +92,30 @@ function CatalogueCard({ model, added, onAdd, onRemove }) {
 function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove }) {
   const [query, setQuery]         = useState("");
   const [activeFilter, setFilter] = useState("All");
+  const [catalogue, setCatalogue] = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getModels()
+      .then(data => { if (!cancelled) setCatalogue((data ?? []).map(mapModel)); })
+      .catch(err => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   const filtered = useMemo(() => {
-    return CATALOGUE.filter(m => {
+    return catalogue.filter(m => {
       const matchesModality = activeFilter === "All" || m.modalities.includes(activeFilter);
       const q = query.trim().toLowerCase();
-      const matchesQuery   = !q || m.name.toLowerCase().includes(q) || m.type.toLowerCase().includes(q) || m.id.toLowerCase().includes(q);
+      const matchesQuery   = !q || m.name.toLowerCase().includes(q) || m.type.toLowerCase().includes(q) || String(m.id).toLowerCase().includes(q);
       return matchesModality && matchesQuery;
     });
-  }, [query, activeFilter]);
+  }, [catalogue, query, activeFilter]);
 
   if (!isOpen) return null;
 
@@ -228,7 +176,17 @@ function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove }) {
           className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-3"
           style={{ scrollbarWidth: "thin", scrollbarColor: "#1a1a1a transparent" }}
         >
-          {filtered.length === 0 ? (
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3">
+              <div className="w-7 h-7 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+              <p className="text-[#3a3a3a] text-[13px] m-0">Loading models…</p>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2">
+              <FiCpu size={28} className="text-[#2a2a2a]" />
+              <p className="text-[#FF4A4A] text-[12px] m-0">{error}</p>
+            </div>
+          ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 gap-2">
               <FiCpu size={28} className="text-[#2a2a2a]" />
               <p className="text-[#3a3a3a] text-[13px] m-0">No models match your search</p>

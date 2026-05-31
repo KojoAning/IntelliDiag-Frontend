@@ -1,5 +1,20 @@
 import React from "react";
-import { Nav, NavLink, NavMenu, Bars } from "./NavBarElements";
+import { Nav, NavMenu } from "./NavBarElements";
+
+const NAV_ITEMS = [
+  { label: "Home",     id: "home"     },
+  { label: "About",    id: "about"    },
+  { label: "Features", id: "features" },
+  { label: "Contact",  id: "contact"  },
+];
+
+const scrollTo = (id) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const offset = 80; // account for fixed navbar height
+  const top = el.getBoundingClientRect().top + window.scrollY - offset;
+  window.scrollTo({ top, behavior: "smooth" });
+};
 
 const Navbar = () => {
   return (
@@ -14,27 +29,37 @@ const Navbar = () => {
           display: "flex",
           gap: "90px",
           justifyContent: "center",
+          alignItems: "center",
         }}
       >
-        
-          <h1>
-            <img src="intellidiag.png" alt="IntelliDiag Logo" height="30px" />
-          </h1>
-    
+        <img
+          src="/intellidiag.png"
+          alt="IntelliDiag Logo"
+          style={{ height: "18px", width: "auto", display: "block", cursor: "pointer" }}
+          onClick={() => scrollTo("home")}
+        />
 
         <NavMenu>
-          <NavLink to="/home" activeStyle={{ color: "#0094FF" }}>
-            Home
-          </NavLink>
-          <NavLink to="/about" activeStyle={{ color: "#0094FF" }}>
-            About
-          </NavLink>
-          <NavLink to="/features" activeStyle={{ color: "#0094FF" }}>
-            Features
-          </NavLink>
-          <NavLink to="/contact" activeStyle={{ color: "#0094FF" }}>
-            Contact
-          </NavLink>
+          {NAV_ITEMS.map(({ label, id }) => (
+            <button
+              key={id}
+              onClick={() => scrollTo(id)}
+              style={{
+                color: "#fff",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                padding: "0 1rem",
+                height: "100%",
+                fontSize: "inherit",
+                fontFamily: "inherit",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              {label}
+            </button>
+          ))}
         </NavMenu>
       </Nav>
     </div>

@@ -118,7 +118,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -330,8 +330,17 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
 
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#06fb64] hover:bg-[#05d183] text-black text-[13px] border border-[#1E1E1E]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
-            Run AI Analysis
+          <button
+            onClick={onRunAnalysis}
+            disabled={aiLoading}
+            className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#06fb64] hover:bg-[#05d183] text-black text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {aiLoading ? (
+              <>
+                <div className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin shrink-0" />
+                Analyzing…
+              </>
+            ) : "Run AI Analysis"}
           </button>
           <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
             Save Draft

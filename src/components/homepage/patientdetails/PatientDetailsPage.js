@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import Appbar from "../appbar/appbar";
@@ -8,8 +8,9 @@ import NewReportModal from "./NewReportModal";
 import ReportViewModal from "./ReportViewModal";
 import {
   FiArrowLeft, FiDownload, FiMaximize2,
-  FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX,
+  FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud,
 } from "react-icons/fi";
+import { requestDocumentUpload, uploadToS3, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -20,67 +21,6 @@ const fadeUp = {
   }),
 };
 
-// ─── Mock data ────────────────────────────────────────────────────────────────
-const mockPatients = [
-  { id: 1, name: "Darrell Steward", age: 32, gender: "Male", urgency: "Immediate", mrn: "6864558", dob: "1992-03-14", referringPhysician: "Dr. James Osei", studyDate: "Jan 15, 2024", accession: "ACC-2024-00112", modality: "MRI", region: "Right Forearm", clinicalIndication: "Evaluate suspected radial shaft injury following sports trauma. Rule out fracture or ligament damage." },
-  { id: 2, name: "Bessie Cooper", age: 28, gender: "Female", urgency: "Immediate", mrn: "6809137", dob: "1996-07-22", referringPhysician: "Dr. Ama Sarpong", studyDate: "Jan 15, 2024", accession: "ACC-2024-00113", modality: "X-Ray", region: "Left Shoulder", clinicalIndication: "Recurrent shoulder pain with limited range of motion. Assess for tendon calcification or bone spurs." },
-  { id: 3, name: "Jennifer Richardson", age: 39, gender: "Female", urgency: "Less Urgent", mrn: "1453029", dob: "1985-11-05", referringPhysician: "Dr. Kwame Boateng", studyDate: "Jan 14, 2024", accession: "ACC-2024-00098", modality: "MRI", region: "Cervical Spine", clinicalIndication: "Chronic neck stiffness with radiating pain to the upper extremities. Rule out disc herniation at C5-C7." },
-  { id: 4, name: "Jane Cooper", age: 54, gender: "Female", urgency: "Less Urgent", mrn: "3407430", dob: "1970-01-30", referringPhysician: "Dr. Efua Mensah", studyDate: "Jan 14, 2024", accession: "ACC-2024-00099", modality: "CT", region: "Lumbar Spine", clinicalIndication: "Follow-up imaging for known L4-L5 disc herniation. Evaluate progression and nerve root impingement." },
-  { id: 5, name: "Jenny Wilson", age: 23, gender: "Female", urgency: "Emergency", mrn: "2186613", dob: "2001-08-18", referringPhysician: "Dr. James Osei", studyDate: "Jan 15, 2024", accession: "ACC-2024-00120", modality: "MRI", region: "Bilateral Knees", clinicalIndication: "Acute bilateral knee pain, joint swelling. Rule out autoimmune arthropathy or ligament tear." },
-  { id: 6, name: "Cameron Williamson", age: 34, gender: "Male", urgency: "Emergency", mrn: "6088224", dob: "1990-05-09", referringPhysician: "Dr. Ama Sarpong", studyDate: "Jan 15, 2024", accession: "ACC-2024-00121", modality: "MRI", region: "Right Knee — ACL", clinicalIndication: "Suspected Grade II ACL tear following contact sports injury. Assess ligament integrity and meniscal involvement." },
-  { id: 7, name: "Dianne Russell", age: 46, gender: "Female", urgency: "Immediate", mrn: "6565607", dob: "1978-12-03", referringPhysician: "Dr. Kwame Boateng", studyDate: "Jan 13, 2024", accession: "ACC-2024-00089", modality: "CT", region: "Lumbar Spine", clinicalIndication: "Lumbar spinal stenosis with bilateral leg pain. Evaluate canal diameter and foraminal narrowing prior to surgical planning." },
-  { id: 8, name: "Brooklyn Simmons", age: 37, gender: "Female", urgency: "Immediate", mrn: "5385925", dob: "1987-04-27", referringPhysician: "Dr. Efua Mensah", studyDate: "Jan 13, 2024", accession: "ACC-2024-00090", modality: "Ultrasound", region: "Right Shoulder", clinicalIndication: "Right shoulder pain with weakness on abduction. Rule out rotator cuff tear, assess supraspinatus tendon integrity." },
-];
-
-const mockScans = [
-  { id: 1, modality: "MRI", label: "MRI Knee", series: "Series 1 — 24 images", date: "Jan 15, 2024", studyId: "study-1" },
-  { id: 2, modality: "MRI", label: "CT-Chest", series: "Series 2 — 18 images", date: "Jan 15, 2024", studyId: "study-1" },
-  { id: 3, modality: "X-Ray", label: "X-Ray Right Wrist", series: "Series 3 — 2 images", date: "Jan 10, 2024", studyId: "study-3" },
-  { id: 4, modality: "CT", label: "Sagittal Recon", series: "Series 4 — 32 images", date: "Dec 28, 2023", studyId: "study-2" },
-];
-
-const mockAIFindings = [
-  {
-    model: "Fracture Detection",
-    modelId: "FD-v2.1",
-    tag: "Fracture",
-    tagColor: "text-[#FF6B35] bg-[rgba(255,107,53,0.17)]",
-    confidence: 91,
-    status: "Positive",
-    statusColor: "text-[#FF6B35]",
-    findings: [
-      { region: "Radial shaft — mid-diaphysis", observation: "Hairline cortical discontinuity identified. Consistent with non-displaced stress fracture.", severity: "Moderate" },
-      { region: "Distal ulna", observation: "No acute fracture identified. Cortical margins intact.", severity: "Normal" },
-    ],
-  },
-  {
-    model: "Soft Tissue Analyser",
-    modelId: "STA-v1.4",
-    tag: "Ligament Injury",
-    tagColor: "text-[#A855F7] bg-[rgba(168,85,247,0.17)]",
-    confidence: 78,
-    status: "Inconclusive",
-    statusColor: "text-[#F59E0B]",
-    findings: [
-      { region: "Interosseous membrane", observation: "Mild thickening noted. May indicate early inflammatory response. Clinical correlation advised.", severity: "Mild" },
-    ],
-  },
-];
-
-const mockReports = [
-  { id: 1, title: "MRI Knee — Radiology Report", radiologist: "Dr. James Osei", date: "Jan 16, 2024", status: "Signed", modality: "MRI" },
-  { id: 2, title: "CT Chest — Preliminary Report", radiologist: "Dr. Ama Sarpong", date: "Jan 11, 2024", status: "Draft", modality: "CT" },
-  { id: 3, title: "X-Ray Right Wrist — Final Report", radiologist: "Dr. Kwame Boateng", date: "Dec 29, 2023", status: "Signed", modality: "X-Ray" },
-];
-
-const mockDocuments = [
-  { id: 1, name: "Consent Form — MRI Procedure", type: "PDF", size: "124 KB", uploadedBy: "Dr. James Osei", date: "Jan 15, 2024", category: "Consent" },
-  { id: 2, name: "Referral Letter — Orthopaedics", type: "PDF", size: "88 KB", uploadedBy: "Dr. Ama Sarpong", date: "Jan 14, 2024", category: "Referral" },
-  { id: 3, name: "Insurance Pre-Auth — MRI Knee", type: "PDF", size: "201 KB", uploadedBy: "Admin", date: "Jan 13, 2024", category: "Insurance" },
-  { id: 4, name: "Previous Surgical History", type: "DOCX", size: "56 KB", uploadedBy: "Dr. Kwame Boateng", date: "Dec 10, 2023", category: "History" },
-  { id: 5, name: "Lab Results — CBC Panel", type: "PDF", size: "310 KB", uploadedBy: "Lab Team", date: "Nov 28, 2023", category: "Lab" },
-];
-
 const categoryColors = {
   Consent: "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
   Referral: "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
@@ -90,17 +30,6 @@ const categoryColors = {
 };
 
 const fileIconColor = { PDF: "#FF6B35", DOCX: "#0694FB", PNG: "#22C55E", JPG: "#22C55E" };
-
-const mockNotes = [
-  { id: 1, author: "Dr. James Osei", role: "Radiologist", date: "Jan 16, 2024", time: "09:41 AM", content: "Patient presents with persistent knee pain post-sports injury. MRI confirms Grade II ACL involvement. Recommend orthopaedic referral." },
-  { id: 2, author: "Dr. Ama Sarpong", role: "Referring Physician", date: "Jan 15, 2024", time: "03:15 PM", content: "Urgent imaging requested. Patient reported acute onset pain. Please prioritise CT chest review for pulmonary involvement." },
-];
-
-const mockPriorStudies = [
-  { date: "Aug 22, 2023", modality: "X-Ray", region: "Right Wrist", indication: "Post-fall wrist pain", accession: "ACC-2023-00451" },
-  { date: "Mar 10, 2023", modality: "MRI", region: "Right Forearm", indication: "Sports injury follow-up", accession: "ACC-2023-00201" },
-  { date: "Nov 04, 2022", modality: "CT", region: "Chest", indication: "Annual screening", accession: "ACC-2022-00893" },
-];
 
 const urgencyStyles = {
   Immediate: "bg-[rgba(255,107,53,0.2)] text-[#FF6B35]",
@@ -197,13 +126,102 @@ function FindingCard({ finding }) {
   );
 }
 
-function DocumentsSection() {
-  const [docs] = useState(mockDocuments);
-  const [search, setSearch] = useState("");
+const DOCUMENT_TYPES = ["Consent", "Referral", "Insurance", "History", "Lab", "Other"];
+
+function DocumentsSection({ patientId }) {
+  const [docs, setDocs]         = useState([]);
+  const [docsLoading, setDocsLoading] = useState(true);
+  const [search, setSearch]     = useState("");
+
+  useEffect(() => {
+    if (!patientId) return;
+    setDocsLoading(true);
+    getDocumentsForPatient(patientId)
+      .then(data => {
+        setDocs((data ?? [])
+          .filter(d => d.status === "uploaded")
+          .map(d => ({
+            id:         d.id,
+            name:       d.file_name,
+            type:       d.file_name.split(".").pop().toUpperCase(),
+            size:       "",
+            uploadedBy: d.uploaded_by_id ?? "—",
+            date:       d.created_at ? new Date(d.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
+            category:   d.document_type ?? "Other",
+          }))
+        );
+      })
+      .catch(() => setDocs([]))
+      .finally(() => setDocsLoading(false));
+  }, [patientId]);
+
+  // Upload flow state
+  const fileInputRef              = useRef(null);
+  const [pendingFile, setPending] = useState(null);   // File awaiting type selection
+  const [docType, setDocType]     = useState("Consent");
+  const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
+  const [uploadErr, setUploadErr] = useState(null);
+
   const filtered = docs.filter(d =>
     d.name.toLowerCase().includes(search.toLowerCase()) ||
     d.category.toLowerCase().includes(search.toLowerCase())
   );
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPending(file);
+    setDocType("Consent");
+    setUploadErr(null);
+    e.target.value = null;
+  };
+
+  const handleUpload = async () => {
+    if (!pendingFile || !patientId) return;
+    setUploading(true);
+    setUploadPct(0);
+    setUploadErr(null);
+    try {
+      // Step 1 — request presigned URL
+      const { document_id, upload_url } = await requestDocumentUpload({
+        patient_id:    patientId,
+        file_name:     pendingFile.name,
+        document_type: docType,
+      });
+
+      // Step 2 — PUT directly to S3
+      let s3Ok = true;
+      try {
+        await uploadToS3(upload_url, pendingFile, setUploadPct);
+      } catch (s3Err) {
+        s3Ok = false;
+        await confirmDocumentUpload(document_id, "failed");
+        throw s3Err;
+      }
+
+      // Step 3 — confirm upload with backend
+      await confirmDocumentUpload(document_id, "uploaded");
+
+      // Add to local list
+      const ext = pendingFile.name.split(".").pop().toUpperCase();
+      setDocs(prev => [{
+        id:         document_id,
+        name:       pendingFile.name,
+        type:       ext,
+        size:       `${Math.round(pendingFile.size / 1024)} KB`,
+        uploadedBy: "You",
+        date:       new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        category:   docType,
+      }, ...prev]);
+
+      setPending(null);
+    } catch (err) {
+      setUploadErr(err.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <div className="bg-[#161616] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4">
@@ -221,11 +239,55 @@ function DocumentsSection() {
             onChange={e => setSearch(e.target.value)}
             className="bg-[#111] border border-[#1E1E1E] rounded-lg px-3 py-1.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors w-44"
           />
-          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all whitespace-nowrap">
-            <FiFolder size={12} /> Upload
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium border-none cursor-pointer transition-colors whitespace-nowrap"
+          >
+            <FiUploadCloud size={13} /> Upload
           </button>
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
         </div>
       </div>
+
+      {/* Inline upload panel — shown after file is selected */}
+      {pendingFile && (
+        <div className="bg-[#111] border border-[#1E1E1E] rounded-xl px-4 py-3 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 min-w-0">
+              <FiFileText size={14} className="text-[#0694FB] shrink-0" />
+              <p className="text-white text-[13px] m-0 truncate">{pendingFile.name}</p>
+              <span className="text-[#6B6B6B] text-[11px] shrink-0">{Math.round(pendingFile.size / 1024)} KB</span>
+            </div>
+            <button onClick={() => { setPending(null); setUploadErr(null); }} className="text-[#3a3a3a] hover:text-white bg-transparent border-none cursor-pointer transition-colors">
+              <FiX size={14} />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <select
+              value={docType}
+              onChange={e => setDocType(e.target.value)}
+              className="bg-[#0D0D0D] border border-[#1E1E1E] rounded-lg px-3 py-1.5 text-white text-[12px] outline-none focus:border-[#0694FB] transition-colors cursor-pointer flex-1"
+            >
+              {DOCUMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <button
+              onClick={handleUpload}
+              disabled={uploading}
+              className="px-4 py-1.5 rounded-lg bg-[#0694FB] hover:bg-[#0578d1] disabled:opacity-50 text-white text-[12px] font-medium border-none cursor-pointer transition-colors shrink-0"
+            >
+              {uploading ? `${uploadPct}%` : "Confirm Upload"}
+            </button>
+          </div>
+
+          {uploading && (
+            <div className="w-full h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
+              <div className="h-full bg-[#0694FB] rounded-full transition-all" style={{ width: `${uploadPct}%` }} />
+            </div>
+          )}
+          {uploadErr && <p className="text-[#FF4A4A] text-[11px] m-0">{uploadErr}</p>}
+        </div>
+      )}
 
       {/* Column headers */}
       <div className="grid grid-cols-[1fr_60px_130px_100px_32px] gap-3 px-3 pb-2 border-b border-[#1E1E1E]">
@@ -236,7 +298,12 @@ function DocumentsSection() {
 
       {/* Rows */}
       <div className="flex flex-col gap-0.5">
-        {filtered.length === 0 ? (
+        {docsLoading ? (
+          <div className="flex items-center justify-center py-10 gap-3">
+            <div className="w-5 h-5 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+            <p className="text-[#3a3a3a] text-[12px] m-0">Loading documents…</p>
+          </div>
+        ) : filtered.length === 0 ? (
           <p className="text-[#3a3a3a] text-[12px] text-center py-6 m-0">No documents found</p>
         ) : filtered.map((doc) => (
           <div
@@ -263,7 +330,20 @@ function DocumentsSection() {
             <p className="text-[#6B6B6B] text-[12px] m-0">{doc.type}</p>
             <p className="text-[#6B6B6B] text-[12px] m-0 truncate">{doc.uploadedBy}</p>
             <p className="text-[#6B6B6B] text-[12px] m-0">{doc.date}</p>
-            <button className="opacity-0 group-hover:opacity-100 w-7 h-7 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent hover:bg-[#1a1a1a] cursor-pointer transition-all">
+            <button
+              onClick={async () => {
+                try {
+                  const url = await getDocumentDownloadUrl(doc.id);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  a.download = doc.name;
+                  a.target = "_blank";
+                  a.rel = "noopener noreferrer";
+                  a.click();
+                } catch (_) {}
+              }}
+              className="opacity-0 group-hover:opacity-100 w-7 h-7 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent hover:bg-[#1a1a1a] cursor-pointer transition-all"
+            >
               <FiDownload size={12} color="#6B6B6B" />
             </button>
           </div>
@@ -274,7 +354,7 @@ function DocumentsSection() {
 }
 
 function NoteSection({ patient }) {
-  const [notes, setNotes] = useState(mockNotes);
+  const [notes, setNotes] = useState([]);
   const [text, setText] = useState("");
 
   const addNote = () => {
@@ -397,11 +477,11 @@ function StudiesModal({ isOpen, onClose, scans, onOpen }) {
                     <div className="w-full">
                       <div className="flex gap-1.5 flex-wrap mb-1.5">
                         <span className={`text-[11px] font-normal px-1.5 py-0.5 rounded ${modalityColors[scan.modality]}`}>{scan.modality}</span>
-                        {scan.flagged && <span className={`text-[11px] font-normal px-1.5 py-0.5 rounded ${modalityColors[scan.modality]}`}>AI Flagged</span>}
+                        {scan.flagged && <span className="text-[11px] font-normal px-1.5 py-0.5 rounded text-[#FF6B35] bg-[rgba(255,107,53,0.15)]">AI Flagged</span>}
                       </div>
                       <p className="text-white text-[15px] font-normal m-0 truncate">{scan.label}</p>
-                      <p className="text-[#636363] text-[12px] m-0">{scan.date}</p>
-                     
+                      {scan.region && <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5 truncate">{scan.region}</p>}
+                      <p className="text-[#3a3a3a] text-[11px] m-0 mt-0.5 font-mono">{scan.date}{scan.accNumber ? ` · ${scan.accNumber}` : ""}</p>
                     </div>
                   </div>
                 ))}
@@ -419,8 +499,23 @@ function PatientDetailsPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { state } = useLocation();
-  const patient = state?.patient || mockPatients.find((p) => p.id === Number(id)) || mockPatients[0];
+  const [patient, setPatient] = useState(state?.patient ?? null);
+  const [patientLoading, setPatientLoading] = useState(!state?.patient);
   const caseId = state?.caseId || patient?.case_id;
+
+  useEffect(() => {
+    if (state?.patient) {
+      console.log("patient (from state):", state.patient);
+      return;
+    }
+    if (!id) return;
+    setPatientLoading(true);
+    getPatientById(id)
+      .then(data => { console.log("patient (from API):", data); setPatient(data); })
+      .catch((err) => { console.error("patient fetch error:", err); setPatient(null); })
+      .finally(() => setPatientLoading(false));
+  }, [id, state?.patient]);
+
   const [activeStudy, setActiveStudy] = useState(null);
   const [addStudyOpen, setAddStudyOpen] = useState(false);
   const [newReportOpen, setNewReportOpen] = useState(false);
@@ -448,12 +543,14 @@ function PatientDetailsPage() {
         data
           .filter((s) => s.case_id === caseId)
           .map((s) => ({
-            id: s.id,
-            modality: s.modality,
-            label: s.study_name,
-            date: s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
-            studyId: s.id,
-            flagged: s.flagged,
+            id:         s.id,
+            modality:   s.modality,
+            label:      s.study_name,
+            region:     s.body_region ?? "",
+            accNumber:  s.acc_number ?? "",
+            date:       s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
+            studyId:    s.id,
+            flagged:    s.flagged,
           }))
       );
     } catch (_) {}
@@ -490,6 +587,23 @@ function PatientDetailsPage() {
       setReports((prev) => prev.filter((r) => r.id !== reportId));
     } catch (_) {}
   };
+  if (patientLoading) {
+    return (
+      <div className="m-0 p-0 h-screen bg-black w-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!patient) {
+    return (
+      <div className="m-0 p-0 h-screen bg-black w-screen flex flex-col items-center justify-center gap-3">
+        <p className="text-[#6B6B6B] text-[14px] m-0">Patient not found</p>
+        <button onClick={() => navigate("/cases")} className="text-[#0694FB] text-[13px] bg-transparent border-none cursor-pointer hover:underline">Back to Cases</button>
+      </div>
+    );
+  }
+
   return (
     <div className="m-0 p-0 h-screen bg-black w-screen">
       <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
@@ -536,16 +650,14 @@ function PatientDetailsPage() {
                   <div className="w-px bg-[#1E1E1E] shrink-0 self-stretch" />
 
                   {/* Stats grid */}
-                  <div className="grid grid-cols-4 gap-x-6 gap-y-[25px] flex-1 content-center">
+                  <div className="flex flex-wrap gap-x-32 gap-y-5 flex-1 content-center">
                     {[
                       { label: "Sex", value: patient.gender },
                       { label: "Age", value: `${patient.age} yrs` },
                       { label: "Blood", value: "A+" },
                       { label: "Urgency", value: patient.urgency },
-                      { label: "Modality", value: patient.modality },
-                      { label: "Region", value: patient.region },
                       { label: "Study Date", value: patient.studyDate },
-                      { label: "Accession", value: patient.accession },
+
                     ].map(({ label, value }) => (
                       <div key={label}>
                         <p className="text-[#818181] text-[12px] uppercase tracking-wide m-0 pb-0">{label}</p>
@@ -592,7 +704,7 @@ function PatientDetailsPage() {
                     {studies.map((scan) => (
                       <div
                         key={scan.id}
-                        onClick={() => navigate("/case-workspace", { state: { studyId: scan.studyId } })}
+                        onClick={() => navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan } })}
                         className="group relative flex flex-col items-start gap-3 bg-[#111] border border-[#1E1E1E] rounded-2xl p-5 cursor-pointer hover:border-[#0694FB] hover:bg-[rgba(6,148,251,0.04)] transition-all duration-200"
                       >
                         {/* Ellipsis */}
@@ -606,12 +718,14 @@ function PatientDetailsPage() {
                           <span className="text-[#aaaaaa] text-[14px] leading-none tracking-widest">···</span>
                         </button>
                         <img src="/folder.png" alt="folder" className="w-20 h-20 object-contain self-start group-hover:scale-105 transition-transform duration-200" />
-                        <div className=" w-full">
-                          <div className="flex gap-1.5 flex-wrap"> <span className={`text-[12px] font-normal px-1.5 py-0.5 rounded ${modalityColors[scan.modality]}`}>{scan.modality}</span> {scan.flagged && <span className={`text-[12px] font-normal px-1.5 py-0.5 rounded ${modalityColors[scan.modality]}`}>AI Flagged</span>}</div>
-
+                        <div className="w-full">
+                          <div className="flex gap-1.5 flex-wrap">
+                            <span className={`text-[12px] font-normal px-1.5 py-0.5 rounded ${modalityColors[scan.modality]}`}>{scan.modality}</span>
+                            {scan.flagged && <span className="text-[12px] font-normal px-1.5 py-0.5 rounded text-[#FF6B35] bg-[rgba(255,107,53,0.15)]">AI Flagged</span>}
+                          </div>
                           <p className="text-white text-[15px] font-normal m-0 mt-1.5 truncate">{scan.label}</p>
-                          {/* <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">{scan.series}</p> */}
-                          <p className="text-[#636363] text-[12px] m-0">{scan.date}</p>
+                          {scan.region && <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5 truncate">{scan.region}</p>}
+                          <p className="text-[#3a3a3a] text-[11px] m-0 mt-0.5 font-mono">{scan.date}{scan.accNumber ? ` · ${scan.accNumber}` : ""}</p>
                         </div>
                       </div>
                     ))}
@@ -669,13 +783,13 @@ function PatientDetailsPage() {
 
                 {/* Documents */}
                 <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4}>
-                  <DocumentsSection />
+                  <DocumentsSection patientId={patient.id} />
                 </motion.div>
 
                 {/* Notes */}
-                <motion.div variants={fadeUp} initial="hidden" animate="show" custom={5}>
+                {/* <motion.div variants={fadeUp} initial="hidden" animate="show" custom={5}>
                   <NoteSection patient={patient} />
-                </motion.div>
+                </motion.div> */}
               </div>
             </div>
           </div>
@@ -694,7 +808,7 @@ function PatientDetailsPage() {
         isOpen={studiesOpen}
         onClose={() => setStudiesOpen(false)}
         scans={studies}
-        onOpen={(scan) => { setStudiesOpen(false); navigate("/case-workspace", { state: { studyId: scan.studyId } }); }}
+        onOpen={(scan) => { setStudiesOpen(false); navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan } }); }}
       />
     </div>
   );

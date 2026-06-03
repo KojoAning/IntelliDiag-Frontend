@@ -4,13 +4,14 @@ import { motion, AnimatePresence } from "framer-motion";
 import Appbar from "../appbar/appbar";
 import Sidebar from "../sidebar/Sidebar";
 import AddStudyModal from "./AddStudyModal";
+import ImportStudyModal from "./ImportStudyModal";
 import NewReportModal from "./NewReportModal";
 import ReportViewModal from "./ReportViewModal";
 import {
   FiArrowLeft, FiDownload, FiMaximize2,
   FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud,
 } from "react-icons/fi";
-import { requestDocumentUpload, uploadToS3, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById } from "../../../lib/api";
+import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -183,21 +184,19 @@ function DocumentsSection({ patientId }) {
     setUploadPct(0);
     setUploadErr(null);
     try {
-      // Step 1 — request presigned URL
+      // Step 1 — request a signed GCS upload URL
       const { document_id, upload_url } = await requestDocumentUpload({
         patient_id:    patientId,
         file_name:     pendingFile.name,
         document_type: docType,
       });
 
-      // Step 2 — PUT directly to S3
-      let s3Ok = true;
+      // Step 2 — PUT directly to GCS
       try {
-        await uploadToS3(upload_url, pendingFile, setUploadPct);
-      } catch (s3Err) {
-        s3Ok = false;
+        await uploadToSignedUrl(upload_url, pendingFile, setUploadPct);
+      } catch (uploadErr) {
         await confirmDocumentUpload(document_id, "failed");
-        throw s3Err;
+        throw uploadErr;
       }
 
       // Step 3 — confirm upload with backend
@@ -518,6 +517,7 @@ function PatientDetailsPage() {
 
   const [activeStudy, setActiveStudy] = useState(null);
   const [addStudyOpen, setAddStudyOpen] = useState(false);
+  const [importStudyOpen, setImportStudyOpen] = useState(false);
   const [newReportOpen, setNewReportOpen] = useState(false);
   const [studiesOpen, setStudiesOpen] = useState(false);
   const [activeSeries, setActiveSeries] = useState(null);
@@ -683,6 +683,13 @@ function PatientDetailsPage() {
                         <FiMaximize2 size={13} />
                       </button>
                       <button
+                        onClick={() => setImportStudyOpen(true)}
+                        className="flex items-center gap-1.5 border border-[#0694FB] text-[#0694FB] hover:bg-[rgba(6,148,251,0.08)] text-[13px] px-4 py-[8px] rounded-full bg-transparent cursor-pointer transition-colors duration-200 whitespace-nowrap"
+                        title="Import a study from DICOM files — studies and series are detected automatically"
+                      >
+                        <FiUploadCloud size={14} /> Import DICOM
+                      </button>
+                      <button
                         onClick={() => setAddStudyOpen(true)}
                         className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap"
                       >
@@ -797,6 +804,7 @@ function PatientDetailsPage() {
       </div>
 
       <AddStudyModal isOpen={addStudyOpen} onClose={() => setAddStudyOpen(false)} caseId={caseId} onCreated={fetchStudies} />
+      <ImportStudyModal isOpen={importStudyOpen} onClose={() => setImportStudyOpen(false)} caseId={caseId} onCreated={fetchStudies} />
       <NewReportModal isOpen={newReportOpen} onClose={() => setNewReportOpen(false)} caseId={caseId} onCreated={fetchReports} />
       <ReportViewModal
         isOpen={!!selectedReport}

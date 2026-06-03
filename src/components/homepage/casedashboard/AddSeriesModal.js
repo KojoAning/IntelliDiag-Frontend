@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiX, FiUploadCloud, FiLoader } from "react-icons/fi";
-import { createSeries, requestDicomUpload, uploadToS3, confirmDicomUpload } from "../../../lib/api";
-import { parseDicomFile, renderDicomThumbnail, isDicomImage } from "../../../lib/dicomUtils";
+import { createSeries, uploadDicom } from "../../../lib/api";
+import { renderDicomThumbnail, isDicomImage } from "../../../lib/dicomUtils";
+import { uid } from "../../../lib/uid";
 
 const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
@@ -35,7 +36,7 @@ function SeriesCard({ s, index, total, onUpdate, onRemove }) {
 
   const addImages = (files) => {
     const newImgs = Array.from(files).map(file => ({
-      id: crypto.randomUUID(),
+      id: uid(),
       url: URL.createObjectURL(file),
       name: file.name,
       file,
@@ -172,7 +173,7 @@ function SeriesCard({ s, index, total, onUpdate, onRemove }) {
 }
 
 function AddSeriesModal({ isOpen, onClose, onAdd, studyId, studyModality = "" }) {
-  const blank = () => ({ id: crypto.randomUUID(), name: "", seriesNumber: "", modality: studyModality, description: "", images: [] });
+  const blank = () => ({ id: uid(), name: "", seriesNumber: "", modality: studyModality, description: "", images: [] });
   const [series, setSeries] = useState([blank()]);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState(null);
@@ -237,31 +238,15 @@ function AddSeriesModal({ isOpen, onClose, onAdd, studyId, studyModality = "" })
               const key = `${si}-${ii}`;
               setItemState(key, { status: "uploading" });
 
-              const { image_id: imageId, upload_url } = await requestDicomUpload({
-                series_id:       seriesId,
-                filename:        img.name,
-                instance_number: ii,
-              });
-
-              const dicomMeta = await parseDicomFile(img.file);
-
               try {
-                await uploadToS3(upload_url, img.file, (pct) =>
+                // Single-step: backend parses DICOM metadata server-side and
+                // stores it in the Healthcare API.
+                await uploadDicom(seriesId, img.file, (pct) =>
                   setItemState(key, { pct })
                 );
                 setItemState(key, { pct: 100, status: "done" });
-
-                const metaFields = Object.fromEntries(
-                  Object.entries(dicomMeta).filter(([, v]) => v != null)
-                );
-                await confirmDicomUpload(imageId, {
-                  status:          "uploaded",
-                  instance_number: ii,
-                  ...metaFields,
-                });
               } catch (uploadErr) {
                 setItemState(key, { status: "error" });
-                await confirmDicomUpload(imageId, { status: "failed" }).catch(() => {});
                 throw uploadErr;
               }
             })
@@ -270,7 +255,7 @@ function AddSeriesModal({ isOpen, onClose, onAdd, studyId, studyModality = "" })
       );
 
       const localSeries = valid.map((s, i) => ({
-        id:          created[i]?.id ?? crypto.randomUUID(),
+        id:          created[i]?.id ?? uid(),
         name:        s.name.trim(),
         description: s.description.trim(),
         modality:    s.modality,

@@ -2,14 +2,38 @@ import React, { useState, useEffect } from "react";
 import { FiUploadCloud } from "react-icons/fi";
 import { isDicomImage, renderDicomThumbnailFromUrl } from "../../../lib/dicomUtils";
 
+const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+
+/**
+ * For standard images served from the authenticated backend, fetch with the
+ * JWT and return a blob URL that <img> can display. For external/blob URLs,
+ * return them directly.
+ */
+async function fetchAuthenticatedThumb(url) {
+  const token = localStorage.getItem("token");
+  if (token && API_BASE && url.includes(API_BASE)) {
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    return URL.createObjectURL(blob);
+  }
+  return url;
+}
+
 // Renders a single thumbnail — canvas-decoded for DICOM, native <img> for others
 function SliceThumb({ img, index, selected, onSelect }) {
   const [thumbSrc, setThumbSrc] = useState(null);
   const [thumbLoading, setThumbLoading] = useState(false);
 
   useEffect(() => {
-    if (!isDicomImage(img)) { setThumbSrc(img.url); return; }
     let cancelled = false;
+    if (!isDicomImage(img)) {
+      setThumbLoading(true);
+      fetchAuthenticatedThumb(img.url).then(src => {
+        if (!cancelled) { setThumbSrc(src); setThumbLoading(false); }
+      });
+      return () => { cancelled = true; };
+    }
     setThumbLoading(true);
     renderDicomThumbnailFromUrl(img.url).then(dataUrl => {
       if (!cancelled) { setThumbSrc(dataUrl); setThumbLoading(false); }

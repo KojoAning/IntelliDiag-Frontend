@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiUploadCloud, FiX, FiCheck } from "react-icons/fi";
+import { uid } from "../../../lib/uid";
 
 // ─── Step indicator ────────────────────────────────────────────────────────────
 const steps = [
@@ -139,7 +140,7 @@ function StepUploadScans({ scans, onAdd, onRemove }) {
 
   const handleFiles = (files) => {
     const newScans = Array.from(files).map((file) => ({
-      id: crypto.randomUUID(),
+      id: uid(),
       url: URL.createObjectURL(file),
       name: file.name,
       file,

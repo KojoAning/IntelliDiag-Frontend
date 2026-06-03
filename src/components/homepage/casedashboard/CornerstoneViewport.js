@@ -120,7 +120,9 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     },
     setImageIndex(n) {
       const vp = ctx.current.viewport;
-      if (vp && n >= 0) {
+      if (!vp || n < 0) return;
+      const numImages = vp.getImageIds?.()?.length ?? 0;
+      if (n < numImages) {
         vp.setImageIdIndex(n);
         vp.render();
       }
@@ -221,7 +223,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         try { toolGroup.setToolEnabled(name); } catch (_) {}
       });
 
-      // Defaults: W/L on left, Pan on middle, Zoom on right, scroll through stack
+      // Defaults: W/L on left, Pan on middle, Zoom on right
       toolGroup.setToolActive(WindowLevelTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Primary }],
       });
@@ -231,18 +233,24 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       toolGroup.setToolActive(ZoomTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Secondary }],
       });
-      toolGroup.setToolActive(StackScrollTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Wheel }],
-      });
+      // StackScrollTool stays disabled until the stack has images — activating
+      // it on an empty stack causes "Stack Viewport has no images" errors.
 
       ctx.current.ready = true;
 
       // Load initial images
       if (imageIds.length) {
         await viewport.setStack(imageIds);
+        // Apply the image's native modality/VOI LUT (WindowCenter/Width) — without
+        // this, 16-bit signed pixels map to black until the user drags W/L.
+        try { viewport.resetProperties(); } catch (_) {}
         viewport.render();
         // Store base parallelScale for zoom calculation
         ctx.current.baseScale = viewport.getCamera().parallelScale ?? 1;
+        // Now safe to enable scroll
+        toolGroup.setToolActive(StackScrollTool.toolName, {
+          bindings: [{ mouseButton: MouseBindings.Wheel }],
+        });
       }
     })().catch(console.error);
 
@@ -284,8 +292,18 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     if (!vp || !imageIds.length) return;
     vp.setStack(imageIds)
       .then(() => {
+        try { vp.resetProperties(); } catch (_) {}
         vp.render();
         ctx.current.baseScale = vp.getCamera().parallelScale ?? 1;
+        // Enable stack scroll now that the stack is populated
+        const tg = ctx.current.toolGroup;
+        if (tg) {
+          try {
+            tg.setToolActive(StackScrollTool.toolName, {
+              bindings: [{ mouseButton: MouseBindings.Wheel }],
+            });
+          } catch (_) {}
+        }
       })
       .catch(console.error);
   }, [imageIds]);

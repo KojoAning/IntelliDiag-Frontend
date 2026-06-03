@@ -1,5 +1,21 @@
 import dicomParser from "dicom-parser";
 
+// ── Auth ────────────────────────────────────────────────────────────────────
+const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+
+/**
+ * Fetch a URL, attaching the JWT only for our authenticated backend (e.g. the
+ * /dicom/{id}/stream endpoint). Blob URLs and signed GCS URLs are left untouched.
+ */
+function authedFetch(url) {
+  const token = localStorage.getItem("token");
+  const headers = {};
+  if (token && API_BASE && (url || "").includes(API_BASE)) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return fetch(url, { headers });
+}
+
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
 function str(dataSet, tag) {
@@ -42,7 +58,7 @@ function formatTime(raw) {
  */
 export async function getDicomMetadata(url) {
   try {
-    const resp      = await fetch(url);
+    const resp      = await authedFetch(url);
     const buffer    = await resp.arrayBuffer();
     const byteArray = new Uint8Array(buffer);
     const ds        = dicomParser.parseDicom(byteArray);
@@ -193,12 +209,48 @@ export async function parseDicomFile(file) {
 }
 
 /**
+ * Parse a File as DICOM and return the identity + display fields needed to
+ * reconstruct the Study -> Series hierarchy on ingest. Returns null if the
+ * file isn't valid DICOM or is missing the UIDs that define the hierarchy.
+ */
+export async function parseDicomForIngest(file) {
+  try {
+    const buffer    = await file.arrayBuffer();
+    const byteArray = new Uint8Array(buffer);
+    const ds        = dicomParser.parseDicom(byteArray);
+
+    const studyUid  = str(ds, "x0020000d");
+    const seriesUid = str(ds, "x0020000e");
+    const sopUid    = str(ds, "x00080018");
+    if (!studyUid || !seriesUid || !sopUid) return null;  // not a filable instance
+
+    const seriesNumberRaw = str(ds, "x00200011");
+    const seriesNumber = seriesNumberRaw !== "" ? parseInt(seriesNumberRaw, 10) : null;
+
+    return {
+      studyUid,
+      seriesUid,
+      sopUid,
+      modality:           str(ds, "x00080060"),
+      studyDescription:   str(ds, "x00081030"),
+      seriesDescription:  str(ds, "x0008103e"),
+      seriesNumber:       Number.isFinite(seriesNumber) ? seriesNumber : null,
+      bodyPart:           str(ds, "x00180015"),
+      studyDate:          str(ds, "x00080020"),
+      accessionNumber:    str(ds, "x00080050"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fetch a presigned/http URL, parse the DICOM pixel data, and return a JPEG
  * thumbnail data-URL. Returns null if the file can't be decoded.
  */
 export async function renderDicomThumbnailFromUrl(url, thumbSize = 128) {
   try {
-    const resp = await fetch(url);
+    const resp = await authedFetch(url);
     const blob = await resp.blob();
     return renderDicomThumbnail(blob, thumbSize);
   } catch {
@@ -212,7 +264,7 @@ export async function renderDicomThumbnailFromUrl(url, thumbSize = 128) {
  */
 export async function getDicomFrameCount(url) {
   try {
-    const resp      = await fetch(url);
+    const resp      = await authedFetch(url);
     const buffer    = await resp.arrayBuffer();
     const byteArray = new Uint8Array(buffer);
     const dataSet   = dicomParser.parseDicom(byteArray, { untilTag: "x00280008" });

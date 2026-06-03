@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import CornerstoneViewport from "./CornerstoneViewport";
+import ImageComparisonSlider from "./ImageComparisonSlider";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
 import { annotation as csAnnotation, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import {
@@ -118,7 +119,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading, inferenceResult, onInferenceResult }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -445,6 +446,23 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             vpRef.current?.render?.();
           }} />
         </div>
+
+        {/* ── Inference comparison slider ── */}
+        {inferenceResult && selectedImage && (() => {
+          const overlay = inferenceResult.heatmap ?? inferenceResult.mask;
+          if (!overlay) return null;
+          const isBase64 = !overlay.startsWith("http") && !overlay.startsWith("data:");
+          const overlaySrc = isBase64 ? `data:image/png;base64,${overlay}` : overlay;
+          const label = inferenceResult.heatmap ? "Heatmap" : "Tumor Mask";
+          return (
+            <ImageComparisonSlider
+              originalSrc={selectedImage}
+              overlaySrc={overlaySrc}
+              overlayLabel={label}
+              onClose={() => onInferenceResult(null)}
+            />
+          );
+        })()}
       </div>
     </div>
   );

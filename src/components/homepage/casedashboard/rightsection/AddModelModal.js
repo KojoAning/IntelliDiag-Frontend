@@ -17,12 +17,18 @@ function parseModalities(raw) {
 
 function mapModel(m) {
   const type = m.model_type ?? "";
+  // Backend may store 0.0.0.0 which isn't reachable from a browser on Windows;
+  // swap to 127.0.0.1 so fetch() works.
+  const rawUrl = m.endpoint_url ?? m.url ?? m.endpoint ?? m.inference_url ?? "";
+  const url = rawUrl.replace("://0.0.0.0", "://127.0.0.1");
   return {
+    ...m,
     id:        m.id,
     name:      m.name,
     version:   m.version ?? "",
     description: m.description ?? "",
     modalities: parseModalities(m.modalities),
+    url,
     type,
     typeColor: TYPE_COLORS[type] ?? "text-white bg-[#1a1a1a]",
   };

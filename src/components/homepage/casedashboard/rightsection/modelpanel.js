@@ -5,7 +5,7 @@ import AddModelModal from "./AddModelModal.js";
 const DEFAULT_MODELS = [
  ];
 
-function ModelPanel() {
+function ModelPanel({ onModelSelect }) {
   const [models, setModels]         = useState(DEFAULT_MODELS);
   const [modalOpen, setModalOpen]   = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -16,9 +16,7 @@ function ModelPanel() {
     setModels(prev => [
       ...prev,
       {
-        id:       catalogueModel.id,
-        name:     catalogueModel.name,
-        version:  catalogueModel.version,
+        ...catalogueModel,
         tag:      catalogueModel.type,
         tagColor: catalogueModel.typeColor,
       },
@@ -27,6 +25,16 @@ function ModelPanel() {
 
   const handleRemove = (id) => {
     setModels(prev => prev.filter(m => m.id !== id));
+    if (selectedId === id) {
+      setSelectedId(null);
+      onModelSelect?.(null);
+    }
+  };
+
+  const handleSelect = (model) => {
+    const newId = selectedId === model.id ? null : model.id;
+    setSelectedId(newId);
+    onModelSelect?.(newId ? model : null);
   };
 
   return (
@@ -55,7 +63,7 @@ function ModelPanel() {
                 key={m.id}
                 model={m}
                 selected={selectedId === m.id}
-                onSelect={() => setSelectedId(id => id === m.id ? null : m.id)}
+                onSelect={() => handleSelect(m)}
                 onRemove={() => handleRemove(m.id)}
               />
             ))

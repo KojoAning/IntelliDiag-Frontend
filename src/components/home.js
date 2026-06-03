@@ -711,17 +711,13 @@ function ImmersiveOverlay({ close, size }) {
         throw new Error(data.detail || data.message || "Invalid email or password");
       }
       const data = await res.json();
-      const token = data.access_token;
-      localStorage.setItem("token", token);
+      localStorage.setItem("token", data.access_token);
+      localStorage.setItem("refresh_token", data.refresh_token);
 
-
-      const { sub, role, name, exp } = decodeToken(token);
+      const { sub, role, name, exp } = decodeToken(data.access_token);
       localStorage.setItem("name", name);
       localStorage.setItem("role", role);
-      localStorage.setItem("sub",sub)
-      // console.log(sub,role,name)
-
-      navigate("/dashboard");
+      localStorage.setItem("sub", sub);
 
       navigate("/dashboard");
     } catch (err) {

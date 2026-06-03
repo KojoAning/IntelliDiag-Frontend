@@ -1,4 +1,4 @@
-import { init as csInit, imageLoader } from "@cornerstonejs/core";
+import { init as csInit, imageLoader, eventTarget, Enums as csEnums } from "@cornerstonejs/core";
 import {
   init as csToolsInit,
   addTool,
@@ -64,6 +64,13 @@ export async function initCornerstone() {
       StackScrollTool,
     ].forEach((T) => {
       try { addTool(T); } catch (_) { /* already added */ }
+    });
+
+    // Suppress noisy unhandled image-load errors from Cornerstone —
+    // log them once with useful info instead of flooding the console.
+    eventTarget.addEventListener(csEnums.Events.IMAGE_LOAD_ERROR, (evt) => {
+      const { imageId, error } = evt.detail || {};
+      console.warn("[Cornerstone] image load failed:", imageId, error?.message || error);
     });
 
     initialized = true;

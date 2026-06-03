@@ -9,9 +9,9 @@ import NewReportModal from "./NewReportModal";
 import ReportViewModal from "./ReportViewModal";
 import {
   FiArrowLeft, FiDownload, FiMaximize2,
-  FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud,
+  FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud, FiTrash2,
 } from "react-icons/fi";
-import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById } from "../../../lib/api";
+import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById, deleteStudy } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -713,15 +713,20 @@ function PatientDetailsPage() {
                         onClick={() => navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan } })}
                         className="group relative flex flex-col items-start gap-3 bg-[#111] border border-[#1E1E1E] rounded-2xl p-5 cursor-pointer hover:border-[#0694FB] hover:bg-[rgba(6,148,251,0.04)] transition-all duration-200"
                       >
-                        {/* Ellipsis */}
+                        {/* Delete */}
                         <button
-                          onClick={(e) => e.stopPropagation()}
-                          className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg border-none cursor-pointer transition-colors duration-200"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!window.confirm(`Delete study "${scan.label}"? This cannot be undone.`)) return;
+                            deleteStudy(scan.id)
+                              .then(() => setStudies(prev => prev.filter(s => s.id !== scan.id)))
+                              .catch(err => alert(`Failed to delete: ${err.message}`));
+                          }}
+                          title="Delete study"
+                          className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg border-none cursor-pointer text-[#555] hover:text-[#FF4A4A] hover:bg-[rgba(255,74,74,0.1)] transition-all duration-200"
                           style={{ background: "rgba(255,255,255,0.07)" }}
-                          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.13)"}
-                          onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.07)"}
                         >
-                          <span className="text-[#aaaaaa] text-[14px] leading-none tracking-widest">···</span>
+                          <FiTrash2 size={13} />
                         </button>
                         <img src="/folder.png" alt="folder" className="w-20 h-20 object-contain self-start group-hover:scale-105 transition-transform duration-200" />
                         <div className="w-full">

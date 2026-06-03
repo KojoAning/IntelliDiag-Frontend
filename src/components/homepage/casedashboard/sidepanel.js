@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { FiUploadCloud } from "react-icons/fi";
+import { imageLoader, RenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
 import { isDicomImage, renderDicomThumbnailFromUrl } from "../../../lib/dicomUtils";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
@@ -18,6 +19,59 @@ async function fetchAuthenticatedThumb(url) {
   return url;
 }
 
+/**
+ * Fallback: use Cornerstone's full rendering pipeline (handles compressed
+ * DICOM — JPEG, JPEG2000, RLE, etc.). Creates a temporary offscreen
+ * viewport, renders the image, then captures the canvas as a data URL.
+ */
+let thumbRenderingEngine = null;
+async function renderViaCornerstoneThumb(url, size = 128) {
+  try {
+    const imageId = `wadouri:${url}`;
+
+    // Create a hidden container for the offscreen viewport
+    const container = document.createElement("div");
+    container.style.width = `${size}px`;
+    container.style.height = `${size}px`;
+    container.style.position = "fixed";
+    container.style.left = "-9999px";
+    container.style.top = "-9999px";
+    container.style.visibility = "hidden";
+    document.body.appendChild(container);
+
+    try {
+      // Reuse a single rendering engine for all thumbnails
+      if (!thumbRenderingEngine) {
+        thumbRenderingEngine = new RenderingEngine("thumbEngine");
+      }
+
+      const viewportId = `thumb_${Date.now()}_${Math.random()}`;
+      thumbRenderingEngine.enableElement({
+        viewportId,
+        element: container,
+        type: csEnums.ViewportType.STACK,
+      });
+
+      const viewport = thumbRenderingEngine.getViewport(viewportId);
+      await viewport.setStack([imageId]);
+      viewport.render();
+
+      // Wait a frame for the render to complete
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      const canvas = container.querySelector("canvas");
+      const dataUrl = canvas ? canvas.toDataURL("image/jpeg", 0.8) : null;
+
+      thumbRenderingEngine.disableElement(viewportId);
+      return dataUrl;
+    } finally {
+      document.body.removeChild(container);
+    }
+  } catch {
+    return null;
+  }
+}
+
 function SliceThumb({ img, index, selected, onSelect }) {
   const [thumbSrc, setThumbSrc] = useState(() => thumbCache.get(img.id) ?? null);
   const [thumbLoading, setThumbLoading] = useState(!thumbSrc);
@@ -33,17 +87,22 @@ function SliceThumb({ img, index, selected, onSelect }) {
     let cancelled = false;
     setThumbLoading(true);
 
-    const load = isDicomImage(img)
-      ? renderDicomThumbnailFromUrl(img.url)
-      : fetchAuthenticatedThumb(img.url);
-
-    load.then(src => {
+    (async () => {
+      let src = null;
+      if (isDicomImage(img)) {
+        // Try basic parser first (fast, works for uncompressed DICOM)
+        src = await renderDicomThumbnailFromUrl(img.url);
+        // Fall back to Cornerstone loader (handles compressed transfer syntaxes)
+        if (!src) src = await renderViaCornerstoneThumb(img.url);
+      } else {
+        src = await fetchAuthenticatedThumb(img.url);
+      }
       if (!cancelled && src) {
         thumbCache.set(img.id, src);
         setThumbSrc(src);
       }
       if (!cancelled) setThumbLoading(false);
-    });
+    })();
 
     return () => { cancelled = true; };
   }, [img.id, img.url]);

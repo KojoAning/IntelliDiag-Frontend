@@ -1,15 +1,61 @@
 const BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
+// ── Token refresh ────────────────────────────────────────────────────────────
+let refreshPromise = null;
+
+async function tryRefreshToken() {
+  // Deduplicate: if a refresh is already in flight, piggyback on it
+  if (refreshPromise) return refreshPromise;
+
+  const refreshToken = localStorage.getItem("refresh_token");
+  if (!refreshToken) return false;
+
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      localStorage.setItem("token", data.access_token);
+      localStorage.setItem("refresh_token", data.refresh_token);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 async function request(method, path, body) {
   const token = localStorage.getItem("token");
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, {
+  let res = await fetch(`${BASE}${path}`, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+
+  // On 401, try refreshing the access token and retry once
+  if (res.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      const newToken = localStorage.getItem("token");
+      headers["Authorization"] = `Bearer ${newToken}`;
+      res = await fetch(`${BASE}${path}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+    }
+  }
 
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
@@ -27,6 +73,7 @@ export const getPatients    = (qs = "")  => request("GET", `/patients/${qs}`);
 export const getPatientById = (id)       => request("GET", `/patients/${id}`);
 export const getCases       = (qs = "")  => request("GET", `/cases/${qs}`);
 export const getStudies     = (qs = "")  => request("GET", `/imaging-studies/${qs}`);
+export const deleteStudy    = (studyId)  => request("DELETE", `/imaging-studies/${studyId}`);
 export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
 export const getReports     = (qs = "")  => request("GET", `/reports/${qs}`);
 export const getImagesForStudy  = (seriesId) => request("GET", `/dicom/series/${seriesId}`);

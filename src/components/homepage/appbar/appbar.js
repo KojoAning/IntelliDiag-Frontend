@@ -277,7 +277,7 @@ function Appbar() {
               {/* Actions */}
               <div className="px-2 py-2">
                 <button
-                  onClick={() => { setProfileOpen(false); navigate("/"); }}
+                  onClick={() => { localStorage.removeItem("token"); localStorage.removeItem("refresh_token"); setProfileOpen(false); navigate("/"); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#FF6B6B] hover:bg-[rgba(255,107,107,0.1)] bg-transparent border-none cursor-pointer transition-colors text-[13px]"
                 >
                   <FiLogOut size={14} />

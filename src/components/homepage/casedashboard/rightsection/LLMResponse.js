@@ -1,6 +1,73 @@
 import React, { useState } from "react";
 import { FiCpu } from "react-icons/fi";
 
+/**
+ * Parse markdown-ish text into styled React elements:
+ *  - ### Headings   → blue, bold
+ *  - **bold**       → white, semi-bold
+ *  - *italic*       → dimmed, italic
+ *  - - bullet items → accent dot + text
+ *  - plain text     → default grey
+ */
+function renderReport(text) {
+  if (!text) return null;
+  const lines = text.split("\n");
+
+  return lines.map((line, i) => {
+    // Heading: ### Findings
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
+    if (headingMatch) {
+      return (
+        <p key={i} className="text-[#0694FB] text-[13px] font-semibold m-0 mt-2 mb-0.5">
+          {renderInline(headingMatch[2])}
+        </p>
+      );
+    }
+
+    // Bullet: - item or * item
+    const bulletMatch = line.match(/^[-*]\s+(.+)/);
+    if (bulletMatch) {
+      return (
+        <div key={i} className="flex items-start gap-2 my-0.5">
+          <span className="text-[#0694FB] text-[10px] mt-[3px] shrink-0">●</span>
+          <span className="text-[#CCCCCC] text-[12px] leading-relaxed">{renderInline(bulletMatch[1])}</span>
+        </div>
+      );
+    }
+
+    // Empty line → small spacer
+    if (!line.trim()) {
+      return <div key={i} className="h-1.5" />;
+    }
+
+    // Plain line
+    return (
+      <p key={i} className="text-[#CCCCCC] text-[12px] m-0 leading-relaxed">
+        {renderInline(line)}
+      </p>
+    );
+  });
+}
+
+/** Render inline markdown: **bold** and *italic* */
+function renderInline(text) {
+  // Split on **bold** and *italic* patterns, preserving delimiters as groups
+  const parts = text.split(/(\*\*[^*]+?\*\*|\*[^*]+?\*|__[^_]+?__|_[^_]+?_)/g);
+  return parts.map((part, i) => {
+    // **bold** or __bold__
+    if (/^\*\*(.+)\*\*$/.test(part) || /^__(.+)__$/.test(part)) {
+      const inner = part.replace(/^\*\*|\*\*$|^__|__$/g, "");
+      return <span key={i} className="text-white font-semibold">{inner}</span>;
+    }
+    // *italic* or _italic_
+    if (/^\*(.+)\*$/.test(part) || /^_(.+)_$/.test(part)) {
+      const inner = part.replace(/^\*|\*$|^_|_$/g, "");
+      return <span key={i} className="text-[#8a8a8a] italic">{inner}</span>;
+    }
+    return part;
+  });
+}
+
 function LLMResponse({ response, loading }) {
   const [impression, setImpression] = useState("");
 
@@ -34,11 +101,10 @@ function LLMResponse({ response, loading }) {
                 <span className="text-[#0694FB] text-[11px]">Generating…</span>
               </div>
             )}
-            <p className="text-[#CCCCCC] text-[12px] m-0 leading-relaxed whitespace-pre-wrap">
-              {response}
-              {/* blinking cursor while streaming */}
-              {loading && <span className="inline-block w-[2px] h-[13px] bg-[#0694FB] ml-0.5 align-middle animate-pulse" />}
-            </p>
+            <div className="flex flex-col">
+              {renderReport(response)}
+              {loading && <span className="inline-block w-[2px] h-[13px] bg-[#0694FB] ml-0.5 mt-1 animate-pulse" />}
+            </div>
           </div>
         )}
       </div>

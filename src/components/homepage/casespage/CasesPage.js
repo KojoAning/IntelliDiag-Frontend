@@ -52,18 +52,30 @@ function CasesPage() {
       if (!res.ok) return;
       const data = await res.json();
       setPatients(
-        data.map((c) => ({
-          id: c.patient?.id || c.patient_id,
-          case_id: c.id,
-          name: c.patient?.full_name || "",
-          gender: c.patient?.gender || "",
-          mrn: c.patient?.mrn || "",
-          urgency: normalizeUrgency(c.urgency),
-          reason: c.reason || "",
-          appointmentTime: c.appointment_datetime
-            ? new Date(c.appointment_datetime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
-            : "",
-        }))
+        data.map((c) => {
+          const dob = c.patient?.date_of_birth;
+          let age = null;
+          if (dob) {
+            const birth = new Date(dob);
+            const today = new Date();
+            age = today.getFullYear() - birth.getFullYear();
+            const m = today.getMonth() - birth.getMonth();
+            if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) age--;
+          }
+          return {
+            id: c.patient?.id || c.patient_id,
+            case_id: c.id,
+            name: c.patient?.full_name || "",
+            age,
+            gender: c.patient?.gender || "",
+            mrn: c.patient?.mrn || "",
+            urgency: normalizeUrgency(c.urgency),
+            reason: c.reason || "",
+            appointmentTime: c.appointment_datetime
+              ? new Date(c.appointment_datetime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+              : "",
+          };
+        })
       );
     } catch (_) {}
     finally { setLoading(false); }

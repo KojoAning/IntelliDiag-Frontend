@@ -256,9 +256,6 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     { name: "circle", icon: <LiaCircleSolid size={20} />, label: "Draw Circle (Elliptical ROI)" },
     { name: "square", icon: <IoSquareOutline size={20} />, label: "Draw Rectangle ROI" },
     { name: "arrow", icon: <GoArrowUpRight size={19} />, label: "Arrow annotation" },
-    { name: "polygon", icon: <PiPolygonLight size={20} />, label: "Freehand ROI" },
-    { name: "text", icon: <TfiText size={16} />, label: "Text (not yet supported)" },
-    { name: "sketch", icon: <RiSketching size={20} />, label: "Freehand (not yet supported)" },
   ];
 
   const measureTools = [

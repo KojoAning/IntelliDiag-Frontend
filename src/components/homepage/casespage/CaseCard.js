@@ -35,7 +35,7 @@ function CaseCard({ patient }) {
       {/* Name + demographics — always visible */}
       <div className="w-[160px] shrink-0">
         <p className="text-white font-normal text-[15px] m-0 leading-tight">{name}</p>
-        <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">{age} yrs · {gender}</p>
+        <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">{age != null ? `${age} yrs` : "—"} · {gender}</p>
       </div>
 
       {/* Urgency — always visible */}

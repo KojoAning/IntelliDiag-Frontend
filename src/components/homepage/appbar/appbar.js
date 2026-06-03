@@ -171,10 +171,10 @@ function Appbar() {
             >
               <div className="flex items-center justify-between px-4 pt-4 pb-2">
                 <p className="text-white text-[13px] font-medium m-0">Collaborators</p>
-                <button className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white border-none cursor-pointer transition-colors">
+                {/* <button className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white border-none cursor-pointer transition-colors">
                   <FiUserPlus size={12} />
                   Invite
-                </button>
+                </button> */}
               </div>
               <div className="flex flex-col items-center justify-center py-8 px-4 gap-2">
                 <HiUsers size={24} className="text-[#2a2a2a]" />

@@ -653,7 +653,6 @@ function PatientDetailsPage() {
                   <div className="flex flex-wrap gap-x-32 gap-y-5 flex-1 content-center">
                     {[
                       { label: "Sex", value: patient.gender },
-                      { label: "Age", value: patient.age != null ? `${patient.age} yrs` : "—" },
                       { label: "Blood", value: "A+" },
                       { label: "Urgency", value: patient.urgency },
                       { label: "Study Date", value: patient.studyDate },

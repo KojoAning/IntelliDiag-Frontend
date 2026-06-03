@@ -4,7 +4,9 @@ import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
-import { getImagesForStudy, getDicomDownloadUrl, uploadDicom } from "../../../lib/api";
+import { getImagesForStudy, uploadDicom } from "../../../lib/api";
+
+const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
 function WorkspaceViewer() {
   const { state: navState } = useLocation();
@@ -63,33 +65,26 @@ function WorkspaceViewer() {
     }
   }, [selectedImage, selectedModel?.id, images, getCachedInference]);
 
-  // Fetch all uploaded images for a series + their backend stream URLs.
+  // Fetch all uploaded images for a series.
+  // Constructs stream URLs directly (1 API call instead of N).
   const fetchImages = useCallback(async (seriesId) => {
     const records = await getImagesForStudy(seriesId);
     const uploaded = (records ?? []).filter(r => r.status === "uploaded");
-    const withUrls = await Promise.all(
-      uploaded.map(async (record) => {
-        try {
-          const { download_url, image_type } = await getDicomDownloadUrl(record.id);
-          const fname = record.filename ?? "";
-          const isStandardImage = /\.(jpe?g|png|gif|bmp|webp|tiff?)$/i.test(fname);
-          const isDicom = isStandardImage
-            ? false
-            : (image_type ?? record.image_type ?? "dicom") === "dicom";
-          const fallbackName = isDicom ? `${record.id}.dcm` : `${record.id}.img`;
-          return {
-            id: record.id,
-            url: download_url,
-            name: fname || fallbackName,
-            type: isDicom ? "application/dicom" : "image",
-            file: null,
-          };
-        } catch {
-          return null;
-        }
-      })
-    );
-    return withUrls.filter(Boolean);
+    return uploaded.map((record) => {
+      const fname = record.filename ?? "";
+      const isStandardImage = /\.(jpe?g|png|gif|bmp|webp|tiff?)$/i.test(fname);
+      const isDicom = isStandardImage
+        ? false
+        : (record.image_type ?? "dicom") === "dicom";
+      const fallbackName = isDicom ? `${record.id}.dcm` : `${record.id}.img`;
+      return {
+        id: record.id,
+        url: `${API_BASE}/dicom/${record.id}/stream`,
+        name: fname || fallbackName,
+        type: isDicom ? "application/dicom" : "image",
+        file: null,
+      };
+    });
   }, []);
 
   useEffect(() => {

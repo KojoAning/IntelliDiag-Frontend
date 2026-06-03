@@ -1,14 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { FiUploadCloud } from "react-icons/fi";
 import { isDicomImage, renderDicomThumbnailFromUrl } from "../../../lib/dicomUtils";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
-/**
- * For standard images served from the authenticated backend, fetch with the
- * JWT and return a blob URL that <img> can display. For external/blob URLs,
- * return them directly.
- */
+// Module-level cache so thumbnails survive re-renders and component remounts.
+const thumbCache = new Map();
+
 async function fetchAuthenticatedThumb(url) {
   const token = localStorage.getItem("token");
   if (token && API_BASE && url.includes(API_BASE)) {
@@ -20,26 +18,35 @@ async function fetchAuthenticatedThumb(url) {
   return url;
 }
 
-// Renders a single thumbnail — canvas-decoded for DICOM, native <img> for others
 function SliceThumb({ img, index, selected, onSelect }) {
-  const [thumbSrc, setThumbSrc] = useState(null);
-  const [thumbLoading, setThumbLoading] = useState(false);
+  const [thumbSrc, setThumbSrc] = useState(() => thumbCache.get(img.id) ?? null);
+  const [thumbLoading, setThumbLoading] = useState(!thumbSrc);
 
   useEffect(() => {
-    let cancelled = false;
-    if (!isDicomImage(img)) {
-      setThumbLoading(true);
-      fetchAuthenticatedThumb(img.url).then(src => {
-        if (!cancelled) { setThumbSrc(src); setThumbLoading(false); }
-      });
-      return () => { cancelled = true; };
+    // Already cached — skip fetch
+    if (thumbCache.has(img.id)) {
+      setThumbSrc(thumbCache.get(img.id));
+      setThumbLoading(false);
+      return;
     }
+
+    let cancelled = false;
     setThumbLoading(true);
-    renderDicomThumbnailFromUrl(img.url).then(dataUrl => {
-      if (!cancelled) { setThumbSrc(dataUrl); setThumbLoading(false); }
+
+    const load = isDicomImage(img)
+      ? renderDicomThumbnailFromUrl(img.url)
+      : fetchAuthenticatedThumb(img.url);
+
+    load.then(src => {
+      if (!cancelled && src) {
+        thumbCache.set(img.id, src);
+        setThumbSrc(src);
+      }
+      if (!cancelled) setThumbLoading(false);
     });
+
     return () => { cancelled = true; };
-  }, [img.url]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [img.id, img.url]);
 
   return (
     <div
@@ -51,7 +58,9 @@ function SliceThumb({ img, index, selected, onSelect }) {
       }`}
     >
       {thumbLoading && (
-        <div className="w-full h-full bg-[#111] animate-pulse" />
+        <div className="w-full h-full bg-[#111] flex items-center justify-center">
+          <div className="w-5 h-5 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+        </div>
       )}
       {!thumbLoading && thumbSrc && (
         <img
@@ -88,9 +97,11 @@ function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, l
         className="flex flex-col gap-1.5 overflow-y-auto flex-1"
         style={{ scrollbarWidth: "thin", scrollbarColor: "#1a1a1a transparent" }}
       >
-        {/* Skeleton placeholders while fetching from API */}
+        {/* Spinner placeholders while fetching from API */}
         {loading && Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="w-full aspect-square rounded-lg bg-[#111] animate-pulse shrink-0" />
+          <div key={i} className="w-full aspect-square rounded-lg bg-[#111] shrink-0 flex items-center justify-center">
+            <div className="w-5 h-5 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+          </div>
         ))}
 
         {!loading && images.length === 0 && (

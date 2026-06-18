@@ -96,9 +96,9 @@ function Topbar({ caseInfo, activeStudy, onCloseStudy, onAddScanClick }) {
             >
               Run AI Analysis
             </button>
-            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
+            {/* <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
               Save Draft
-            </button>
+            </button> */}
             <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium border-none cursor-pointer transition-colors">
               <FiFileText size={13} /> Sign Report
             </button>

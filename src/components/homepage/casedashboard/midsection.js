@@ -7,6 +7,7 @@ import {
   FiZoomIn, FiZoomOut, FiMaximize2, FiRotateCw, FiRotateCcw,
   FiChevronLeft, FiChevronRight,
   FiTrash2, FiDelete,
+  FiPlay, FiPause, FiSkipBack, FiSkipForward,
 } from "react-icons/fi";
 import { MdFlip, MdInvertColors } from "react-icons/md";
 import { RiContrastFill } from "react-icons/ri";
@@ -131,6 +132,31 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [inverted, setInverted] = useState(false);
   const [wlActive, setWlActive] = useState(false);
 
+  // Cine playback
+  const [playing, setPlaying] = useState(false);
+  const [fps, setFps] = useState(8);
+  const playRef = useRef(null);
+
+  useEffect(() => {
+    if (!playing || images.length <= 1) {
+      clearInterval(playRef.current);
+      playRef.current = null;
+      return;
+    }
+    playRef.current = setInterval(() => {
+      setCurrentIndex(prev => {
+        const next = prev + 1 >= images.length ? 0 : prev + 1;
+        onSelectImage?.(images[next]?.url);
+        vpRef.current?.setImageIndex(next);
+        return next;
+      });
+    }, 1000 / fps);
+    return () => clearInterval(playRef.current);
+  }, [playing, fps, images, onSelectImage]);
+
+  // Stop cine when images change
+  useEffect(() => { setPlaying(false); }, [images]);
+
   // DICOM metadata extracted from the first DICOM file in the series
   const [dicomMeta, setDicomMeta] = useState(null);
   // Live W/L values read from the viewport
@@ -145,6 +171,39 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   // Track whether any annotation is currently selected (drives toolbar button state)
   const [hasSelection, setHasSelection] = useState(false);
+
+  // Arrow annotation custom dialog
+  const [arrowDialog, setArrowDialog] = useState(null); // { resolve: (label) => void }
+  const [arrowLabel, setArrowLabel] = useState("");
+  const arrowInputRef = useRef(null);
+
+  const handleArrowTextRequest = useCallback((doneCallback) => {
+    setArrowLabel("");
+    setArrowDialog({ resolve: doneCallback });
+  }, []);
+
+  const submitArrowLabel = useCallback(() => {
+    if (arrowDialog) {
+      arrowDialog.resolve(arrowLabel.trim() || "");
+      setArrowDialog(null);
+      setArrowLabel("");
+    }
+  }, [arrowDialog, arrowLabel]);
+
+  const cancelArrowLabel = useCallback(() => {
+    if (arrowDialog) {
+      arrowDialog.resolve("");
+      setArrowDialog(null);
+      setArrowLabel("");
+    }
+  }, [arrowDialog]);
+
+  // Auto-focus the input when dialog opens
+  useEffect(() => {
+    if (arrowDialog && arrowInputRef.current) {
+      arrowInputRef.current.focus();
+    }
+  }, [arrowDialog]);
 
   // Listen for Cornerstone annotation selection changes
   useEffect(() => {
@@ -216,6 +275,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     const h = (e) => {
       // Delete / Backspace — remove selected annotation if one is active
       if (e.key === "Delete" || e.key === "Backspace") {
+        // Ignore if the user is typing in an input/textarea
+        const tag = e.target?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
         const removed = vpRef.current?.deleteSelectedAnnotations();
         if (removed) { setHasSelection(false); return; }
       }
@@ -256,6 +319,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     { name: "circle", icon: <LiaCircleSolid size={20} />, label: "Draw Circle (Elliptical ROI)" },
     { name: "square", icon: <IoSquareOutline size={20} />, label: "Draw Rectangle ROI" },
     { name: "arrow", icon: <GoArrowUpRight size={19} />, label: "Arrow annotation" },
+    { name: "polygon", icon: <PiPolygonLight size={19} />, label: "Polygon ROI" },
   ];
 
   const measureTools = [
@@ -340,9 +404,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               </>
             ) : "Run AI Analysis"}
           </button>
-          <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
+          {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
             Save Draft
-          </button>
+          </button> */}
           {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors">
             Sign Report
           </button> */}
@@ -367,6 +431,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             imageIds={imageIds}
             activeTool={activeTool}
             onIndexChange={setCurrentIndex}
+            onArrowTextRequest={handleArrowTextRequest}
           />
         </div>
 
@@ -444,6 +509,81 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           }} />
         </div>
 
+        {/* ── Cine playback panel ── */}
+        {images.length > 1 && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-[#0d0d0d]/85 border border-[#1E1E1E] rounded-full px-4 py-2 backdrop-blur-sm select-none">
+            {/* Skip to first */}
+            <button
+              onClick={() => { setPlaying(false); goTo(0); }}
+              title="First slice"
+              className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
+            >
+              <FiSkipBack size={14} />
+            </button>
+
+            {/* Play / Pause */}
+            <button
+              onClick={() => setPlaying(p => !p)}
+              title={playing ? "Pause" : "Play through slices"}
+              className={`w-9 h-9 flex items-center justify-center rounded-full border-none cursor-pointer transition-all ${
+                playing
+                  ? "bg-white text-black hover:bg-white/80"
+                  : "bg-[#0694FB] text-white hover:bg-[#0578d1]"
+              }`}
+            >
+              {playing ? <FiPause size={16} /> : <FiPlay size={16} style={{ marginLeft: 2 }} />}
+            </button>
+
+            {/* Skip to last */}
+            <button
+              onClick={() => { setPlaying(false); goTo(images.length - 1); }}
+              title="Last slice"
+              className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
+            >
+              <FiSkipForward size={14} />
+            </button>
+
+            {/* Divider */}
+            <div className="w-px h-5 bg-[#2a2a2a]" />
+
+            {/* Scrubber */}
+            <input
+              type="range"
+              min={0}
+              max={images.length - 1}
+              value={currentIndex}
+              onChange={(e) => { setPlaying(false); goTo(Number(e.target.value)); }}
+              className="w-[120px] h-1 accent-[#0694FB] cursor-pointer"
+              title={`Slice ${currentIndex + 1} / ${images.length}`}
+            />
+
+            {/* Frame counter */}
+            <span className="text-[#6B6B6B] text-[11px] font-mono w-[50px] text-center shrink-0">
+              {currentIndex + 1}/{images.length}
+            </span>
+
+            {/* Divider */}
+            <div className="w-px h-5 bg-[#2a2a2a]" />
+
+            {/* Speed control */}
+            <button
+              onClick={() => setFps(f => Math.max(1, f - 2))}
+              title="Slower"
+              className="text-[#6B6B6B] hover:text-white text-[11px] font-mono bg-transparent border-none cursor-pointer transition-colors px-1"
+            >
+              −
+            </button>
+            <span className="text-[#6B6B6B] text-[10px] font-mono w-[32px] text-center shrink-0">{fps} fps</span>
+            <button
+              onClick={() => setFps(f => Math.min(30, f + 2))}
+              title="Faster"
+              className="text-[#6B6B6B] hover:text-white text-[11px] font-mono bg-transparent border-none cursor-pointer transition-colors px-1"
+            >
+              +
+            </button>
+          </div>
+        )}
+
         {/* ── Inference comparison slider ── */}
         {inferenceResult && selectedImage && (() => {
           const overlay = inferenceResult.heatmap ?? inferenceResult.mask;
@@ -460,6 +600,52 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             />
           );
         })()}
+
+        {/* ── Arrow annotation label dialog ── */}
+        {arrowDialog && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div
+              className="w-[320px] rounded-3xl overflow-hidden shadow-2xl"
+              style={{
+                background: "rgba(22,22,22,0.95)",
+                border: "1px solid rgba(255,255,255,0.08)",
+              }}
+            >
+              <div className="px-5 pt-5 pb-3">
+                <p className="text-white text-[15px] font-medium m-0">Annotation Label</p>
+                <p className="text-white/40 text-[12px] m-0 mt-1">Enter a name for this annotation</p>
+              </div>
+              <div className="px-5 pb-4">
+                <input
+                  ref={arrowInputRef}
+                  type="text"
+                  value={arrowLabel}
+                  onChange={(e) => setArrowLabel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitArrowLabel();
+                    if (e.key === "Escape") cancelArrowLabel();
+                  }}
+                  placeholder="e.g. Lesion, Fracture, Mass…"
+                  className="w-full px-3 py-2.5 rounded-xl text-white text-[13px] bg-[#0d0d0d] border border-[#2a2a2a] focus:border-[#0694FB] outline-none transition-colors placeholder:text-[#3a3a3a]"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2 px-5 pb-5">
+                <button
+                  onClick={cancelArrowLabel}
+                  className="px-4 py-2 rounded-full text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border border-[#2a2a2a] hover:border-[#3a3a3a] cursor-pointer transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitArrowLabel}
+                  className="px-4 py-2 rounded-full text-white text-[12px] bg-[#0694FB] hover:bg-[#0578d1] border-none cursor-pointer transition-colors"
+                >
+                  Add Label
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

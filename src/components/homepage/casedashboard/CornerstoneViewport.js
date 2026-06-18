@@ -60,10 +60,12 @@ let instanceCounter = 0;
  *   getProperties() → object
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, onIndexChange },
+  { imageIds = [], activeTool = null, onIndexChange, onArrowTextRequest },
   ref
 ) {
   const divRef = useRef(null);
+  const arrowTextCbRef = useRef(onArrowTextRequest);
+  arrowTextCbRef.current = onArrowTextRequest;
 
   // Everything stateful about this viewport lives here so we can access it
   // from imperative handles and effects without stale closures.
@@ -216,6 +218,18 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       ];
       tools.forEach(T => toolGroup.addTool(T.toolName));
       toolGroup.addViewport(viewportId, engineId);
+
+      // Override ArrowAnnotateTool's prompt with a custom React dialog callback
+      const arrowTool = toolGroup.getToolInstance(ArrowAnnotateTool.toolName);
+      if (arrowTool) {
+        arrowTool.configuration.getTextCallback = (doneChangingTextCallback) => {
+          if (arrowTextCbRef.current) {
+            arrowTextCbRef.current(doneChangingTextCallback);
+          } else {
+            doneChangingTextCallback(prompt("Enter your annotation:"));
+          }
+        };
+      }
 
       // Bring annotation tools to Enabled state (addTool leaves them Disabled)
       // so setToolActive() can transition them cleanly later

@@ -303,9 +303,7 @@ function Footer() {
           <FooterColumn>
             <FooterTitle>Connect</FooterTitle>
             <FooterLink href="https://x.com/intelliDiag">X</FooterLink>
-            <FooterLink href="/">LinkedIn</FooterLink>
-            <FooterLink href="/">Facebook</FooterLink>
-            <FooterLink href="/">YouTube</FooterLink>
+            <FooterLink href="https://www.linkedin.com/company/intellidiag/">LinkedIn</FooterLink>
           </FooterColumn>
 
           <FooterColumn>
@@ -313,14 +311,14 @@ function Footer() {
             <FooterLink href="/">How it works</FooterLink>
             <FooterLink href="/">Help Center</FooterLink>
             <FooterLink href="/">Support</FooterLink>
-            <FooterLink href="/">What's new</FooterLink>
+            {/* <FooterLink href="/">What's new</FooterLink> */}
           </FooterColumn>
 
-          <FooterColumn>
+          {/* <FooterColumn>
             <FooterTitle>Company</FooterTitle>
             <FooterLink href="/">Blog</FooterLink>
             <FooterLink href="/">Careers</FooterLink>
-          </FooterColumn>
+          </FooterColumn> */}
 
           <FooterColumn>
             <FooterTitle>Subscribe to our updates</FooterTitle>

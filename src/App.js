@@ -10,7 +10,8 @@ import Partners from "./components/partners";
 import Reach from "./components/reach_us";
 import Footer from "./components/navbar/footer";
 import Features from "./components/features";
-import CustomCursor from "./components/cursor";
+
+import PrivacyPolicy from "./components/PrivacyPolicy";
 import Others from "./components/others";
 import Partners2 from "./components/partners2";
 import Dashboard from "./components/homepage/Dashboard";
@@ -213,7 +214,6 @@ function App() {
         width: "100%",
       }}
     >
-      <CustomCursor />
       {/* Loading Screen */}
       <div
         ref={loadingRef}
@@ -322,6 +322,7 @@ function App() {
           <Route path="/cases" element={<CasesPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/cases/:id" element={<PatientDetailsPage />} />
+          <Route path="/privacy" element={<PrivacyPolicy />} />
         </Routes>
       </Router>
     </div>

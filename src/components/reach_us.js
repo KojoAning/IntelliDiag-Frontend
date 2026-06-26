@@ -179,15 +179,21 @@ function Reach() {
 
       {/* Button */}
       <ActionButton
+        as="a"
+        href="mailto:jobs@intellidiag.app"
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
         transition={{ duration: 0.2 }}
+        style={{ textDecoration: "none" }}
       >
         For business
       </ActionButton>
       <ActionButton
+        as="a"
+        href="mailto:partners@intellidiag.app"
         style={{
           backgroundColor: "transparent",
+          textDecoration: "none",
         }}
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}

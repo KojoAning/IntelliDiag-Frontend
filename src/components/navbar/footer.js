@@ -337,28 +337,28 @@ function Footer() {
                 style={{
                   fontSize: "14px",
                 }}
-                href="/"
+                href="/privacy"
               >
                 Privacy Policy
               </FooterLink>
-              <FooterLink
+              {/* <FooterLink
                 style={{
                   fontSize: "14px",
                 }}
                 href="/"
               >
                 Terms of Use
-              </FooterLink>
+              </FooterLink> */}
             </LegalLinks>
           </div>
 
           <div>
             <LegalText>
-              For jobs <ContactEmail>jobs@intelliDiag.com</ContactEmail>
+              For jobs <ContactEmail>jobs@intelliDiag.app</ContactEmail>
             </LegalText>
             <LegalText>
               For partnerships{" "}
-              <ContactEmail>partners@intelliDiag.com</ContactEmail>
+              <ContactEmail>partners@intelliDiag.app</ContactEmail>
             </LegalText>
           </div>
         </FooterBottom>

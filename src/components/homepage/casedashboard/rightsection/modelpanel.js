@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ModelCard from "./components/ModelCard.js";
 import AddModelModal from "./AddModelModal.js";
 
@@ -9,6 +9,15 @@ function ModelPanel({ onModelSelect }) {
   const [models, setModels]         = useState(DEFAULT_MODELS);
   const [modalOpen, setModalOpen]   = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+
+  // Auto-select the first model whenever the list changes and nothing is selected
+  useEffect(() => {
+    if (models.length > 0 && (selectedId === null || !models.find(m => m.id === selectedId))) {
+      const first = models[0];
+      setSelectedId(first.id);
+      onModelSelect?.(first);
+    }
+  }, [models]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addedIds = new Set(models.map(m => m.id));
 
@@ -58,7 +67,8 @@ function ModelPanel({ onModelSelect }) {
           {models.length === 0 ? (
             <p className="text-[#868686] text-[11px] text-center py-4 m-0">No models added</p>
           ) : (
-            models.map(m => (
+              models.map(m => (
+              
               <ModelCard
                 key={m.id}
                 model={m}

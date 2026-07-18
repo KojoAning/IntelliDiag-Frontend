@@ -134,7 +134,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   // Cine playback
   const [playing, setPlaying] = useState(false);
-  const [fps, setFps] = useState(8);
+  const [fps, setFps] = useState(3);
   const playRef = useRef(null);
 
   useEffect(() => {

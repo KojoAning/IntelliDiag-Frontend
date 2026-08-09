@@ -1,5 +1,63 @@
 import dicomParser from "dicom-parser";
 
+/**
+ * Parse a multipart/related ArrayBuffer into an array of part ArrayBuffers.
+ * Each part has its MIME headers stripped — only the binary payload is returned.
+ */
+/**
+ * Parse the Instance Number (0020,0013) and SOP Instance UID (0008,0018)
+ * from a raw DICOM ArrayBuffer. Returns { instanceNumber, sopUid }.
+ */
+export function parseDicomInstanceInfo(buffer) {
+  try {
+    const byteArray = new Uint8Array(buffer);
+    const ds = dicomParser.parseDicom(byteArray);
+    const n = parseInt(ds.string("x00200013"), 10);
+    return {
+      instanceNumber: isFinite(n) ? n : null,
+      sopUid: (ds.string("x00080018") || "").trim() || null,
+    };
+  } catch {
+    return { instanceNumber: null, sopUid: null };
+  }
+}
+
+export function parseMultipartBody(buffer, boundary) {
+  const bytes = new Uint8Array(buffer);
+  const enc   = new TextEncoder();
+  const sep   = enc.encode(`\r\n--${boundary}`);
+  const parts = [];
+
+  // Collect positions of every boundary marker
+  const positions = [];
+  outer: for (let i = 0; i <= bytes.length - sep.length; i++) {
+    for (let j = 0; j < sep.length; j++) {
+      if (bytes[i + j] !== sep[j]) continue outer;
+    }
+    positions.push(i);
+  }
+
+  for (let p = 0; p < positions.length - 1; p++) {
+    const partStart = positions[p] + sep.length;
+    const partEnd   = positions[p + 1];
+
+    // Skip past the part headers to find \r\n\r\n
+    let dataStart = partStart;
+    for (let i = partStart; i < partEnd - 3; i++) {
+      if (bytes[i] === 13 && bytes[i+1] === 10 && bytes[i+2] === 13 && bytes[i+3] === 10) {
+        dataStart = i + 4;
+        break;
+      }
+    }
+
+    if (dataStart > partStart) {
+      parts.push(buffer.slice(dataStart, partEnd));
+    }
+  }
+
+  return parts;
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
@@ -10,7 +68,7 @@ const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "")
 function authedFetch(url) {
   const token = localStorage.getItem("token");
   const headers = {};
-  if (token && API_BASE && (url || "").includes(API_BASE)) {
+  if (token && API_BASE && (url || "").includes(process.env.REACT_APP_API_BASE)) {
     headers.Authorization = `Bearer ${token}`;
   }
   return fetch(url, { headers });
@@ -295,17 +353,22 @@ export function isDicomImage(img) {
 export async function buildImageIds(images) {
   const results = await Promise.all(
     images.map(async (img) => {
-      if (!img.url) return [];
+      // Prefer local blob URL (pre-fetched via bulk) to avoid a /stream round-trip
+      const src = img.blobUrl ?? img.url;
+      if (!src) return [];
       if (isDicomImage(img)) {
-        const frameCount = await getDicomFrameCount(img.url);
-        if (frameCount <= 1) return [`wadouri:${img.url}`];
-        // Use & if the URL already has query params (e.g. presigned S3 URLs)
-        const sep = img.url.includes("?") ? "&" : "?";
+        // Only parse frame count from local blob URLs — blob fetches are free and local.
+        // For stream URLs (bulk-fetch fallback), assume single-frame to avoid hitting the backend.
+        const frameCount = src.startsWith("blob:")
+          ? await getDicomFrameCount(src)
+          : (img.frameCount ?? 1);
+        if (frameCount <= 1) return [`wadouri:${src}`];
+        const sep = src.includes("?") ? "&" : "?";
         return Array.from({ length: frameCount }, (_, i) =>
-          `wadouri:${img.url}${sep}frame=${i}`
+          `wadouri:${src}${sep}frame=${i}`
         );
       }
-      return [`web:${img.url}`];
+      return [`web:${src}`];
     })
   );
   return results.flat();

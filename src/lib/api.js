@@ -1,4 +1,4 @@
-const BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+const BASE = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
 // ── Token refresh ────────────────────────────────────────────────────────────
 let refreshPromise = null;
@@ -17,12 +17,20 @@ async function tryRefreshToken() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
-      if (!res.ok) return false;
+      if (!res.ok) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("refresh_token");
+        window.location.href = "/login";
+        return false;
+      }
       const data = await res.json();
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("refresh_token", data.refresh_token);
       return true;
     } catch {
+      localStorage.removeItem("token");
+      localStorage.removeItem("refresh_token");
+      window.location.href = "/login";
       return false;
     } finally {
       refreshPromise = null;
@@ -103,35 +111,43 @@ export function getSeriesForStudy(studyId) {
  * @param {(pct: number) => void} [onProgress]
  * @returns {Promise<object>} the created DicomImageResponse
  */
-export function uploadDicom(seriesId, file, onProgress) {
+function _xhrUpload(url, form, onProgress) {
   return new Promise((resolve, reject) => {
-    const form = new FormData();
-    form.append("series_id", seriesId);
-    form.append("file", file);
-
     const token = localStorage.getItem("token");
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${BASE}/dicom/upload`);
+    xhr.open("POST", url);
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-
     xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable && onProgress) {
-        onProgress(Math.round((e.loaded / e.total) * 100));
-      }
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
     });
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try { resolve(xhr.responseText ? JSON.parse(xhr.responseText) : null); }
-        catch { resolve(null); }
-      } else {
-        let message = `DICOM upload failed: ${xhr.status}`;
-        try { const d = JSON.parse(xhr.responseText); message = d.detail || message; } catch { }
-        reject(new Error(message));
-      }
-    };
-    xhr.onerror = () => reject(new Error("DICOM upload network error"));
+    xhr.onload = () => resolve(xhr);
+    xhr.onerror = () => reject(new Error("Network error"));
     xhr.send(form);
   });
+}
+
+async function _xhrUploadWithRefresh(url, form, errorPrefix, onProgress) {
+  let xhr = await _xhrUpload(url, form, onProgress);
+
+  if (xhr.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) xhr = await _xhrUpload(url, form, onProgress);
+  }
+
+  if (xhr.status >= 200 && xhr.status < 300) {
+    try { return xhr.responseText ? JSON.parse(xhr.responseText) : null; }
+    catch { return null; }
+  }
+  let message = `${errorPrefix}: ${xhr.status}`;
+  try { const d = JSON.parse(xhr.responseText); message = d.detail || message; } catch { }
+  throw new Error(message);
+}
+
+export function uploadDicom(seriesId, file, onProgress) {
+  const form = new FormData();
+  form.append("series_id", seriesId);
+  form.append("file", file);
+  return _xhrUploadWithRefresh(`${BASE}/dicom/upload`, form, "DICOM upload failed", onProgress);
 }
 
 /**
@@ -145,34 +161,10 @@ export function uploadDicom(seriesId, file, onProgress) {
  * @returns {Promise<object>} the DicomIngestResponse
  */
 export function ingestDicom(caseId, file, onProgress) {
-  return new Promise((resolve, reject) => {
-    const form = new FormData();
-    form.append("case_id", caseId);
-    form.append("file", file);
-
-    const token = localStorage.getItem("token");
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${BASE}/dicom/ingest`);
-    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-
-    xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable && onProgress) {
-        onProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    });
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try { resolve(xhr.responseText ? JSON.parse(xhr.responseText) : null); }
-        catch { resolve(null); }
-      } else {
-        let message = `DICOM ingest failed: ${xhr.status}`;
-        try { const d = JSON.parse(xhr.responseText); message = d.detail || message; } catch { }
-        reject(new Error(message));
-      }
-    };
-    xhr.onerror = () => reject(new Error("DICOM ingest network error"));
-    xhr.send(form);
-  });
+  const form = new FormData();
+  form.append("case_id", caseId);
+  form.append("file", file);
+  return _xhrUploadWithRefresh(`${BASE}/dicom/ingest`, form, "DICOM ingest failed", onProgress);
 }
 
 /**

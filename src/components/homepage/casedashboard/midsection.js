@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import CornerstoneViewport from "./CornerstoneViewport";
-import ImageComparisonSlider from "./ImageComparisonSlider";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
 import { annotation as csAnnotation, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import {
@@ -120,7 +119,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading, inferenceResult, onInferenceResult }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -146,7 +145,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     playRef.current = setInterval(() => {
       setCurrentIndex(prev => {
         const next = prev + 1 >= images.length ? 0 : prev + 1;
-        onSelectImage?.(images[next]?.url);
+        onSelectImage?.(images[next]?.blobUrl ?? images[next]?.url);
         vpRef.current?.setImageIndex(next);
         return next;
       });
@@ -168,6 +167,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [panelDragging, setPanelDragging] = useState(false);
 
   const vpRef = useRef(null); // CornerstoneViewport imperative handle
+
+  // Mask overlay opacity (0–1) — controlled by the user slider
+  const [maskOpacity, setMaskOpacity] = useState(0.5);
 
   // Track whether any annotation is currently selected (drives toolbar button state)
   const [hasSelection, setHasSelection] = useState(false);
@@ -228,12 +230,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     return () => { cancelled = true; };
   }, [images]);
 
-  // Extract DICOM metadata from the first DICOM image in the series
+  // Extract DICOM metadata from the first DICOM image in the series.
+  // Only use the local blob URL — never hit the stream endpoint for metadata.
   useEffect(() => {
     const firstDicom = images.find(isDicomImage);
-    if (!firstDicom) { setDicomMeta(null); return; }
+    const metaSrc = firstDicom?.blobUrl;
+    if (!metaSrc) { setDicomMeta(null); return; }
     let cancelled = false;
-    getDicomMetadata(firstDicom.url).then(meta => {
+    getDicomMetadata(metaSrc).then(meta => {
       if (!cancelled) setDicomMeta(meta);
     });
     return () => { cancelled = true; };
@@ -253,11 +257,15 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     return () => clearInterval(id);
   }, [imageIds]);
 
-  // Keep Cornerstone in sync with the selected image
+  // Keep Cornerstone in sync with the selected image.
+  // Guard: only call setImageIndex if the viewport isn't already on that index —
+  // otherwise the IMAGE_RENDERED → onSelectImage → setImageIndex loop blanks the viewport.
   useEffect(() => {
-    const idx = images.findIndex(img => img.url === selectedImage);
+    const idx = images.findIndex(img => (img.blobUrl ?? img.url) === selectedImage);
     if (idx >= 0) {
-      vpRef.current?.setImageIndex(idx);
+      if (vpRef.current?.getCurrentIndex?.() !== idx) {
+        vpRef.current?.setImageIndex(idx);
+      }
       setCurrentIndex(idx);
     }
   }, [selectedImage, images]);
@@ -265,7 +273,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Slice navigation
   const goTo = useCallback((idx) => {
     if (idx >= 0 && idx < images.length) {
-      onSelectImage?.(images[idx].url);
+      onSelectImage?.(images[idx].blobUrl ?? images[idx].url);
       vpRef.current?.setImageIndex(idx);
       setCurrentIndex(idx);
     }
@@ -393,15 +401,27 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
         <div className="flex items-center gap-2">
           <button
-            onClick={onRunAnalysis}
+            onClick={() => onRunAnalysis()}
             disabled={aiLoading}
-            className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#06fb64] hover:bg-[#05d183] text-black text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-4 py-[8px] rounded-full bg-[#06fb64] hover:bg-[#05d183] text-black text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed min-w-[140px]"
           >
             {aiLoading ? (
-              <>
-                <div className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin shrink-0" />
-                Analyzing…
-              </>
+              inferenceProgress != null ? (
+                <div className="flex items-center gap-2 w-full">
+                  <div className="flex-1 h-1.5 bg-black/20 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-black rounded-full transition-all duration-300"
+                      style={{ width: `${inferenceProgress}%` }}
+                    />
+                  </div>
+                  <span className="text-[12px] font-mono shrink-0">{inferenceProgress}%</span>
+                </div>
+              ) : (
+                <>
+                  <div className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin shrink-0" />
+                  Analyzing…
+                </>
+              )
             ) : "Run AI Analysis"}
           </button>
           {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
@@ -430,7 +450,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             ref={vpRef}
             imageIds={imageIds}
             activeTool={activeTool}
-            onIndexChange={setCurrentIndex}
+            onIndexChange={(idx) => {
+              setCurrentIndex(idx);
+              // Keep selectedImage in sync so thumbnail highlight and mask overlay follow scroll
+              const img = images[idx];
+              if (img) onSelectImage?.(img.blobUrl ?? img.url);
+            }}
             onArrowTextRequest={handleArrowTextRequest}
           />
         </div>
@@ -584,20 +609,60 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           </div>
         )}
 
-        {/* ── Inference comparison slider ── */}
-        {inferenceResult && selectedImage && (() => {
-          const overlay = inferenceResult.heatmap ?? inferenceResult.mask;
+        {/* ── Segmentation mask overlay ── */}
+        {inferenceResult && (() => {
+          const sliceData = inferenceResult.slices?.[currentIndex];
+          const overlay = sliceData?.mask ?? inferenceResult.heatmap ?? inferenceResult.mask;
           if (!overlay) return null;
           const isBase64 = !overlay.startsWith("http") && !overlay.startsWith("data:");
           const overlaySrc = isBase64 ? `data:image/png;base64,${overlay}` : overlay;
-          const label = inferenceResult.heatmap ? "Heatmap" : "Tumor Mask";
+          const hasTumor = sliceData?.has_tumor;
+          const conf = sliceData?.confidence;
           return (
-            <ImageComparisonSlider
-              originalSrc={selectedImage}
-              overlaySrc={overlaySrc}
-              overlayLabel={label}
-              onClose={() => onInferenceResult(null)}
-            />
+            <>
+              {/* Mask image — screen blend so white regions light up over the DICOM,
+                  coloured orange-red via CSS filter for clinical clarity */}
+              <img
+                src={overlaySrc}
+                alt="segmentation mask"
+                style={{
+                  opacity: maskOpacity,
+                  mixBlendMode: "screen",
+                  filter: "sepia(1) saturate(8) hue-rotate(320deg)",
+                }}
+                className="absolute inset-0 w-full h-full object-contain z-20 pointer-events-none"
+              />
+
+              {/* Mask controls — opacity slider + dismiss */}
+              <div className="absolute top-3 right-3 z-30 flex flex-col items-end gap-1.5">
+                <div className="flex items-center gap-2 bg-[#0d0d0d]/90 border border-[#1E1E1E] rounded-xl px-3 py-2 backdrop-blur-sm">
+                  <span className={`text-[10px] font-mono ${hasTumor ? "text-red-400" : "text-[#6B6B6B]"}`}>
+                    {hasTumor
+                      ? `Tumor · ${conf != null ? (conf * 100).toFixed(0) + "%" : ""}`
+                      : "No tumor"}
+                  </span>
+                  <div className="w-px h-3 bg-[#2a2a2a]" />
+                  <span className="text-[#6B6B6B] text-[10px]">Mask</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={maskOpacity}
+                    onChange={e => setMaskOpacity(Number(e.target.value))}
+                    className="w-[80px] h-1 accent-[#0694FB] cursor-pointer"
+                  />
+                  <span className="text-[#6B6B6B] text-[10px] w-[28px] text-right">
+                    {Math.round(maskOpacity * 100)}%
+                  </span>
+                  <button
+                    onClick={() => onInferenceResult(null)}
+                    className="text-[#3a3a3a] hover:text-white text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors ml-1"
+                    title="Close overlay"
+                  >✕</button>
+                </div>
+              </div>
+            </>
           );
         })()}
 

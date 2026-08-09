@@ -257,7 +257,7 @@ function About() {
               whileHover={{ scale: isDesktop ? 1.05 : 1.015 }}
               transition={{ type: isDesktop ? "spring" : "", stiffness: 400 }}
             >
-              
+
               <AboutCardImage src={`card${item}.webp`} alt="Diagnostic tools" />
             </AboutCard>
           ))}

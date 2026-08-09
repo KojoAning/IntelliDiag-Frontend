@@ -1,78 +1,27 @@
 import React, { useState, useEffect, useRef } from "react";
 import { FiUploadCloud } from "react-icons/fi";
-import { imageLoader, RenderingEngine, Enums as csEnums } from "@cornerstonejs/core";
-import { isDicomImage, renderDicomThumbnailFromUrl } from "../../../lib/dicomUtils";
 
-const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+const API_BASE = (process.env.REACT_APP_API_BASE || "").trim().replace(/\/$/, "");
 
 // Module-level cache so thumbnails survive re-renders and component remounts.
-const thumbCache = new Map();
+// Exported so WorkspaceViewer can pre-populate it from the bulk endpoint.
+export const thumbCache = new Map();
 
 async function fetchAuthenticatedThumb(url) {
   const token = localStorage.getItem("token");
-  if (token && API_BASE && url.includes(API_BASE)) {
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  try {
+    const resp = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     if (!resp.ok) return null;
     const blob = await resp.blob();
     return URL.createObjectURL(blob);
-  }
-  return url;
-}
-
-/**
- * Fallback: use Cornerstone's full rendering pipeline (handles compressed
- * DICOM — JPEG, JPEG2000, RLE, etc.). Creates a temporary offscreen
- * viewport, renders the image, then captures the canvas as a data URL.
- */
-let thumbRenderingEngine = null;
-async function renderViaCornerstoneThumb(url, size = 128) {
-  try {
-    const imageId = `wadouri:${url}`;
-
-    // Create a hidden container for the offscreen viewport
-    const container = document.createElement("div");
-    container.style.width = `${size}px`;
-    container.style.height = `${size}px`;
-    container.style.position = "fixed";
-    container.style.left = "-9999px";
-    container.style.top = "-9999px";
-    container.style.visibility = "hidden";
-    document.body.appendChild(container);
-
-    try {
-      // Reuse a single rendering engine for all thumbnails
-      if (!thumbRenderingEngine) {
-        thumbRenderingEngine = new RenderingEngine("thumbEngine");
-      }
-
-      const viewportId = `thumb_${Date.now()}_${Math.random()}`;
-      thumbRenderingEngine.enableElement({
-        viewportId,
-        element: container,
-        type: csEnums.ViewportType.STACK,
-      });
-
-      const viewport = thumbRenderingEngine.getViewport(viewportId);
-      await viewport.setStack([imageId]);
-      viewport.render();
-
-      // Wait a frame for the render to complete
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-
-      const canvas = container.querySelector("canvas");
-      const dataUrl = canvas ? canvas.toDataURL("image/jpeg", 0.8) : null;
-
-      thumbRenderingEngine.disableElement(viewportId);
-      return dataUrl;
-    } finally {
-      document.body.removeChild(container);
-    }
   } catch {
     return null;
   }
 }
 
-function SliceThumb({ img, index, selected, onSelect }) {
+function SliceThumb({ img, index, selected, onSelect, hasTumor }) {
   const [thumbSrc, setThumbSrc] = useState(() => thumbCache.get(img.id) ?? null);
   const [thumbLoading, setThumbLoading] = useState(!thumbSrc);
 
@@ -88,15 +37,9 @@ function SliceThumb({ img, index, selected, onSelect }) {
     setThumbLoading(true);
 
     (async () => {
-      let src = null;
-      if (isDicomImage(img)) {
-        // Try basic parser first (fast, works for uncompressed DICOM)
-        src = await renderDicomThumbnailFromUrl(img.url);
-        // Fall back to Cornerstone loader (handles compressed transfer syntaxes)
-        if (!src) src = await renderViaCornerstoneThumb(img.url);
-      } else {
-        src = await fetchAuthenticatedThumb(img.url);
-      }
+      // Use the pre-rendered JPEG thumbnail from the backend — fast, no DICOM
+      // parsing in the browser. Falls back to the stream URL for non-DICOM images.
+      const src = await fetchAuthenticatedThumb(img.thumbnailUrl ?? img.url);
       if (!cancelled && src) {
         thumbCache.set(img.id, src);
         setThumbSrc(src);
@@ -105,11 +48,11 @@ function SliceThumb({ img, index, selected, onSelect }) {
     })();
 
     return () => { cancelled = true; };
-  }, [img.id, img.url]);
+  }, [img.id, img.thumbnailUrl]);
 
   return (
     <div
-      onClick={() => onSelect(img.url)}
+      onClick={() => onSelect(img.blobUrl ?? img.url)}
       className={`relative rounded-lg overflow-hidden border cursor-pointer transition-all duration-150 shrink-0 aspect-square ${
         selected
           ? "border-[#0694FB] ring-1 ring-[#0694FB]"
@@ -134,6 +77,11 @@ function SliceThumb({ img, index, selected, onSelect }) {
           <span className="text-[#2a2a2a] text-[9px] font-mono">DCM</span>
         </div>
       )}
+      {hasTumor && (
+        <div className="absolute top-1 left-1 z-10 w-4 h-4 bg-red-500 rounded-full flex items-center justify-center shadow-md">
+          <span className="text-white text-[8px] font-bold leading-none">!</span>
+        </div>
+      )}
       <span className="absolute bottom-1 right-1.5 text-[9px] text-white/50 font-mono leading-none">
         {String(index + 1).padStart(3, "0")}
       </span>
@@ -141,7 +89,7 @@ function SliceThumb({ img, index, selected, onSelect }) {
   );
 }
 
-function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, loading }) {
+function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, loading, inferenceResult }) {
   return (
     <div className="w-[160px] min-w-[160px] h-full flex flex-col gap-2 overflow-hidden">
 
@@ -174,8 +122,9 @@ function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, l
             key={img.id}
             img={img}
             index={i}
-            selected={selectedImage === img.url}
+            selected={selectedImage === (img.blobUrl ?? img.url)}
             onSelect={onSelectImage}
+            hasTumor={inferenceResult?.slices?.[i]?.has_tumor ?? false}
           />
         ))}
 

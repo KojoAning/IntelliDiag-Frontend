@@ -66,6 +66,8 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
   const divRef = useRef(null);
   const arrowTextCbRef = useRef(onArrowTextRequest);
   arrowTextCbRef.current = onArrowTextRequest;
+  const onIndexChangeCbRef = useRef(onIndexChange);
+  onIndexChangeCbRef.current = onIndexChange;
 
   // Everything stateful about this viewport lives here so we can access it
   // from imperative handles and effects without stale closures.
@@ -155,6 +157,11 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     },
     render() {
       ctx.current.viewport?.render();
+    },
+    /** Capture the current rendered frame as a JPEG data-URL. */
+    captureFrame() {
+      const canvas = divRef.current?.querySelector("canvas");
+      return canvas?.toDataURL("image/jpeg", 0.92) ?? null;
     },
   }));
 
@@ -251,6 +258,18 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       // it on an empty stack causes "Stack Viewport has no images" errors.
 
       ctx.current.ready = true;
+
+      // Fire onIndexChange whenever Cornerstone finishes rendering a frame —
+      // this covers StackScrollTool (mouse wheel) which never calls back into React.
+      let lastIndex = -1;
+      const onRendered = () => {
+        const idx = ctx.current.viewport?.getCurrentImageIdIndex?.() ?? -1;
+        if (idx !== lastIndex && idx >= 0) {
+          lastIndex = idx;
+          onIndexChangeCbRef.current?.(idx);
+        }
+      };
+      divRef.current?.addEventListener(Enums.Events.IMAGE_RENDERED, onRendered);
 
       // Load initial images
       if (imageIds.length) {

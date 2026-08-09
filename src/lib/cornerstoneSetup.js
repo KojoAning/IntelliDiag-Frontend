@@ -32,13 +32,13 @@ export async function initCornerstone() {
     // Initialize the DICOM image loader (wado-uri scheme handles blob:/http: DICOM).
     // beforeSend returns headers that are merged onto the XHR — inject the JWT so
     // requests to the authenticated backend /dicom/{id}/stream endpoint succeed.
-    const apiBase = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+    const apiBase = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
     dicomImageLoader.init({
       maxWebWorkers: 1,
       beforeSend: (xhr, imageId) => {
         const token = localStorage.getItem("token");
         // Only attach the token for our backend (not blob: URLs or 3rd-party CDNs)
-        if (token && apiBase && (imageId || "").includes(apiBase)) {
+        if (token && (!apiBase || (imageId || "").includes(apiBase))) {
           return { Authorization: `Bearer ${token}` };
         }
         return {};

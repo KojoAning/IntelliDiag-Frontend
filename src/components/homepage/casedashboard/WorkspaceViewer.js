@@ -82,7 +82,7 @@ function WorkspaceViewer() {
         const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
         if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
         const { url } = await res.json();
-        const results = await fetch(url).then(r => r.json());
+        const results = await fetch(url['url']).then(r => r.json());
         if (cancelled) return;
         updateCtx(pollModelId, { inferenceResult: results, aiResponse: buildSummary(results), jobStatus: "completed" });
       } catch {

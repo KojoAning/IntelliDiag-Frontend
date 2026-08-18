@@ -1,3 +1,4 @@
+import { ExpandIcon } from "lucide-react";
 import React, { useState } from "react";
 import { FiCpu } from "react-icons/fi";
 
@@ -68,7 +69,7 @@ function renderInline(text) {
   });
 }
 
-function LLMResponse({ response, loading }) {
+function LLMResponse({ response, loading ,expandReport}) {
   const [impression, setImpression] = useState("");
 
   return (
@@ -81,6 +82,8 @@ function LLMResponse({ response, loading }) {
         <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
           <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Report</p>
         </div>
+        <button onClick={()=>expandReport()}><ExpandIcon size={20}  className="text-[#0694FB]"/></button>
+        
       </div>
 
       {/* Response area */}

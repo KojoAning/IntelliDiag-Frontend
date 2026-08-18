@@ -170,8 +170,8 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
             {/* Header */}
             <div className="flex items-start justify-between px-7 pt-7 pb-5 shrink-0">
               <div>
-                <h2 className="text-white text-lg font-medium m-0">Import DICOM Study</h2>
-                <p className="text-[#6B6B6B] text-xs m-0 mt-0.5">
+                <h2 className="text-white text-[16px] font-medium m-0">Import DICOM Study</h2>
+                <p className="text-[#6B6B6B] text-[14px] m-0 mt-0.5">
                   Drop a study's .dcm files — studies &amp; series are detected automatically
                 </p>
               </div>

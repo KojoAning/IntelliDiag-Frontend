@@ -70,6 +70,8 @@ function CasesPage() {
             gender: c.patient?.gender || "",
             mrn: c.patient?.mrn || "",
             urgency: normalizeUrgency(c.urgency),
+            created_at: c.patient?.created_at,
+            updated_at: c.patient?.updated_at,
             reason: c.reason || "",
             appointmentTime: c.appointment_datetime
               ? new Date(c.appointment_datetime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
@@ -124,7 +126,7 @@ function CasesPage() {
               variants={fadeUp} initial="hidden" animate="show" custom={0}
             >
               <div>
-                <p className="m-0 text-white text-sm leading-[1.4] text-normal  opacity-80">{date}</p>
+
                 <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-1">Your Cases</h1>
                 <div className="bg-[rgba(6,148,251,0.17)] inline-flex rounded-[11px] px-[9px] py-[4px] mt-1">
                   <p className="m-0 text-[13px] text-[#0694FB]"> {filtered.length} patient{filtered.length !== 1 ? "s" : ""}</p>

@@ -7,6 +7,8 @@ import {
   FiChevronLeft, FiChevronRight,
   FiTrash2, FiDelete,
   FiPlay, FiPause, FiSkipBack, FiSkipForward,
+  FiX,
+  FiLoader,
 } from "react-icons/fi";
 import { MdFlip, MdInvertColors } from "react-icons/md";
 import { RiContrastFill } from "react-icons/ri";
@@ -119,7 +121,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationMode, onCloseTranslation, jobStatus }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -167,6 +169,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [panelDragging, setPanelDragging] = useState(false);
 
   const vpRef = useRef(null); // CornerstoneViewport imperative handle
+  const vpRef2 = useRef(null); // Right panel (translation result)
 
   // Mask overlay opacity (0–1) — controlled by the user slider
   const [maskOpacity, setMaskOpacity] = useState(0.5);
@@ -403,12 +406,15 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           <button
             onClick={() => onRunAnalysis()}
             disabled={aiLoading}
-            className="flex items-center gap-2 px-4 py-[8px] rounded-full bg-[#06fb64] hover:bg-[#05d183] text-black text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed min-w-[140px]"
+            className="flex items-center justify-center gap-2 px-4 py-[8px] rounded-full bg-[#06fb64] hover:bg-[#05d183] text-black text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+            style={{ minWidth: 148 }}
           >
             {aiLoading ? (
               inferenceProgress != null ? (
-                <div className="flex items-center gap-2 w-full">
+                <div className="flex items-center gap-2" style={{ width: 116 }}>
+                   <FiLoader size={18} className="animate-spin" />
                   <div className="flex-1 h-1.5 bg-black/20 rounded-full overflow-hidden">
+                   
                     <div
                       className="h-full bg-black rounded-full transition-all duration-300"
                       style={{ width: `${inferenceProgress}%` }}
@@ -422,11 +428,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   Analyzing…
                 </>
               )
-            ) : "Run AI Analysis"}
+            ) : "Run AI Inference"}
           </button>
-          {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
-            Save Draft
-          </button> */}
+          <button
+            onClick={()=>onRunTranslation()}
+          
+            className="flex items-center gap-1.5 px-4 py-[8px] rounded-full  bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px]  hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
+           Translate Image
+          </button>
           {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors">
             Sign Report
           </button> */}
@@ -434,6 +443,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       </div>
 
       {/* ── Viewport ── */}
+      <div className="flex-1 min-h-0 flex flex-row gap-2">
       <div ref={viewportWrapRef} className="flex-1 bg-black rounded-xl relative overflow-hidden">
 
         {/* Empty state */}
@@ -477,6 +487,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         {wlActive && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-black/60 border border-[#0694FB]/30 rounded-lg px-3 py-1 pointer-events-none">
             <p className="text-[#0694FB] text-[10px] font-mono m-0">Left drag: adjust Window / Level</p>
+          </div>
+        )}
+
+        {/* ── Job failed banner ── */}
+        {jobStatus === "failed" && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-[#1a0a0a] border border-red-500/30 rounded-lg px-4 py-2 pointer-events-none">
+            <FiX size={12} className="text-red-400 shrink-0" />
+            <p className="text-red-400 text-[12px] font-mono m-0">Inference job failed</p>
           </div>
         )}
 
@@ -708,6 +726,39 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   Add Label
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+        {/* ── Right panel: translation result ── */}
+        {translationActive && (
+          <div className="flex-1 bg-black rounded-xl relative overflow-hidden flex flex-col">
+            {/* Label */}
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-[#0d0d0d]/90 border border-[#3B82F6]/30 rounded-full px-3 py-1 pointer-events-none">
+              <span className="text-[#3B82F6] text-[11px] font-mono">
+                {translationMode?.from} → {translationMode?.to} · Translation Result
+              </span>
+            </div>
+
+            {/* Close split button */}
+            <button
+              onClick={onCloseTranslation}
+              className="absolute top-3 right-3 z-30 w-7 h-7 flex items-center justify-center rounded-full bg-[#1a1a1a] border border-[#2a2a2a] text-[#6B6B6B] hover:text-white hover:border-[#3a3a3a] cursor-pointer transition-all"
+              title="Close split view"
+            >
+              <FiX size={13} />
+            </button>
+
+            {/* Empty state */}
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-0 pointer-events-none">
+              <img src="/dimensions.png" alt="" className="w-10 h-10 object-contain opacity-10" />
+              <p className="text-[#2a2a2a] text-sm m-0">Translated image will appear here</p>
+            </div>
+
+            {/* Empty Cornerstone viewport */}
+            <div className="absolute inset-0 z-10">
+              <CornerstoneViewport ref={vpRef2} imageIds={[]} activeTool={null} />
             </div>
           </div>
         )}

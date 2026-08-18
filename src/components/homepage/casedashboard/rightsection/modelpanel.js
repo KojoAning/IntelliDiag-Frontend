@@ -5,10 +5,22 @@ import AddModelModal from "./AddModelModal.js";
 const DEFAULT_MODELS = [
  ];
 
-function ModelPanel({ onModelSelect }) {
+function ModelPanel({ onModelSelect, selectedModel: externalModel }) {
   const [models, setModels]         = useState(DEFAULT_MODELS);
   const [modalOpen, setModalOpen]   = useState(false);
   const [selectedId, setSelectedId] = useState(null);
+
+  // When a model is injected from outside (e.g. navigated from Jobs page),
+  // add it to the list if absent and mark it as selected.
+  useEffect(() => {
+    if (!externalModel) return;
+    setModels(prev => {
+      const exists = prev.find(m => String(m.id) === String(externalModel.id));
+      return exists ? prev : [...prev, { ...externalModel, tag: externalModel.type, tagColor: externalModel.typeColor }];
+    });
+    setSelectedId(externalModel.id);
+    onModelSelect?.(externalModel);
+  }, [externalModel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-select the first model whenever the list changes and nothing is selected
   useEffect(() => {
@@ -50,22 +62,22 @@ function ModelPanel({ onModelSelect }) {
     <>
       <div className="bg-[#161616] rounded-[15px] p-[18px] box-border flex flex-col gap-4 shrink-0">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5">
-            <p className="text-[#0694FB] text-[12px] font-medium m-0">Selected AI Models</p>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 whitespace-nowrap">
+            <p className="text-[#0694FB] text-[12px] font-medium m-0">Inference Models</p>
           </div>
           <button
             onClick={() => setModalOpen(true)}
-            className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium px-3 py-[8px] rounded-full border-none cursor-pointer transition-colors"
+            className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium px-3 py-[8px] rounded-full border-none cursor-pointer transition-colors whitespace-nowrap"
           >
-            + Add Model
+            + Add Inference Model
           </button>
         </div>
 
         {/* Model list */}
         <div className="flex flex-col gap-3 overflow-y-auto" style={{ maxHeight: "220px", scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}>
           {models.length === 0 ? (
-            <p className="text-[#868686] text-[11px] text-center py-4 m-0">No models added</p>
+            <p className="text-[#868686] text-[11px] text-center py-4 m-0">No inference models added</p>
           ) : (
               models.map(m => (
               

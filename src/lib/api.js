@@ -84,6 +84,11 @@ export const getStudies     = (qs = "")  => request("GET", `/imaging-studies/${q
 export const deleteStudy    = (studyId)  => request("DELETE", `/imaging-studies/${studyId}`);
 export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
 export const getReports     = (qs = "")  => request("GET", `/reports/${qs}`);
+export const getRecentJobs  = ()         => request("GET", `/jobs/recent`);
+export const getSettings              = ()     => request("GET",   `/settings`);
+export const patchProfileSettings     = (body) => request("PATCH", `/settings/profile`,       body);
+export const patchNotificationSettings= (body) => request("PATCH", `/settings/notifications`, body);
+export const patchSecuritySettings    = (body) => request("PATCH", `/settings/security`,      body);
 export const getImagesForStudy  = (seriesId) => request("GET", `/dicom/series/${seriesId}`);
 // Backend returns a relative stream path (e.g. "/dicom/{id}/stream"); prepend
 // our API base so Cornerstone fetches it from the backend (and the JWT hook,
@@ -245,6 +250,30 @@ export function createSeries(payload) {
 export function deleteSeries(seriesId) {
   return request("DELETE", `/series/${seriesId}`);
 }
+
+// ── Notifications ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /notifications/
+ * @param {{ unread_only?: boolean, limit?: number, offset?: number }} params
+ */
+export function getNotifications(params = {}) {
+  const qs = new URLSearchParams();
+  if (params.unread_only) qs.set("unread_only", "true");
+  if (params.limit != null) qs.set("limit", params.limit);
+  if (params.offset != null) qs.set("offset", params.offset);
+  const q = qs.toString();
+  return request("GET", `/notifications/${q ? `?${q}` : ""}`);
+}
+
+/** GET /notifications/unread-count */
+export const getUnreadCount = () => request("GET", "/notifications/unread-count");
+
+/** PATCH /notifications/{id}/read */
+export const markNotificationRead = (id) => request("PATCH", `/notifications/${id}/read`);
+
+/** PATCH /notifications/read-all */
+export const markAllNotificationsRead = () => request("PATCH", "/notifications/read-all");
 
 /**
  * GET /models/

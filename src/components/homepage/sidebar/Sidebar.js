@@ -1,14 +1,12 @@
 import React from "react";
-import { FiHome, FiSettings, FiUser, FiCalendar } from "react-icons/fi";
-import { RiHistoryLine } from "react-icons/ri";
+import { FiHome, FiSettings, FiUser, FiCpu } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
 
 const menuItems = [
-  { name: "Home", icon: <FiHome size={20} />, path: "/dashboard" },
-  { name: "Cases", icon: <FiUser size={20} />, path: "/cases" },
-  // { name: "History", icon: <RiHistoryLine size={20} />, path: "/history" },
-  { name: "Calendar", icon: <FiCalendar size={20} />, path: "/calendar" },
-  // { name: "Settings", icon: <FiSettings size={20} />, path: "/settings" },
+  { name: "Home",     icon: <FiHome size={20} />,     path: "/dashboard" },
+  { name: "Cases",    icon: <FiUser size={20} />,     path: "/cases" },
+  { name: "Jobs",     icon: <FiCpu size={20} />,      path: "/jobs" },
+  { name: "Settings", icon: <FiSettings size={20} />, path: "/settings" },
 ];
 
 function Sidebar({ activePage = "Home" }) {

@@ -82,8 +82,7 @@ function WorkspaceViewer() {
         const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
         if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
         const { url } = await res.json();
-        console.log(url)
-        const results = await fetch(url['url']).then(r => r.json());
+        const results = await fetch(url).then(r => r.json());
         if (cancelled) return;
         updateCtx(pollModelId, { inferenceResult: results, aiResponse: buildSummary(results), jobStatus: "completed" });
       } catch {
@@ -636,16 +635,11 @@ function WorkspaceViewer() {
         if (status.status === "running") {
           updateCtx(capturedModelId, { inferenceProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
-          console.log('lnskdjnfldnlf')
           updateCtx(capturedModelId, { inferenceProgress: 100 });
           const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
           if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
           const { url } = await res.json();
-          console.log(url)
-          const results = await fetch(url['url']).then(r => r.json());
-          // results = await authFetch(
-          //   `${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`
-          // ).then(r => r.json());
+          results = await fetch(url).then(r => r.json());
           break;
         } else if (status.status === "failed") {
           updateCtx(capturedModelId, { jobStatus: "failed" });

@@ -57,29 +57,29 @@ function SettingRow({ label, description, value, fieldKey, onSave, badge, danger
               className="bg-[#111] border border-[#0694FB]/40 text-white text-[14px] rounded-lg px-3 py-1.5 focus:outline-none focus:border-[#0694FB] w-52"
             />
             <button onClick={handleSave} disabled={saving}
-              className="w-7 h-7 rounded-lg bg-[#0694FB] border-none flex items-center justify-center cursor-pointer hover:bg-[#0578d1] transition-colors shrink-0 disabled:opacity-70">
+              className="w-7 h-7 rounded-full bg-[#0694FB] border-none flex items-center justify-center cursor-pointer hover:bg-[#0578d1] transition-colors shrink-0 disabled:opacity-70">
               {saving
                 ? <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin block" />
                 : <FiCheck size={13} color="white" />
               }
             </button>
             <button onClick={handleCancel}
-              className="w-7 h-7 rounded-lg bg-[#1E1E1E] border border-[#2a2a2a] flex items-center justify-center cursor-pointer hover:bg-[#2a2a2a] transition-colors shrink-0">
+              className="w-7 h-7 rounded-full bg-[#1E1E1E] border border-[#2a2a2a] flex items-center justify-center cursor-pointer hover:bg-[#2a2a2a] transition-colors shrink-0">
               <FiX size={13} color="#6B6B6B" />
             </button>
           </>
         ) : (
           <>
-            {value && <span className="text-[13.5px] text-[#ffffff94] font-mono">{value}</span>}
+            {value && <span className="text-[13.5px] text-[#ffffff] ">{value}</span>}
             {!danger && onSave && (
               <button onClick={() => setEditing(true)}
-                className="text-[12px] font-medium px-3 py-1.5 rounded-lg border border-[#1E1E1E] text-[#0694FB] hover:bg-[rgba(6,148,251,0.08)] bg-transparent cursor-pointer transition-colors">
+                className="text-[12px] font-medium px-3 py-1.5 rounded-full text-[#0694FB] hover:bg-[rgba(6,148,251,0.08)] bg-transparent cursor-pointer transition-colors">
                 Edit
               </button>
             )}
             {danger && onDanger && (
               <button onClick={onDanger}
-                className="text-[12px] font-medium px-3 py-1.5 rounded-lg border border-red-500/30 text-red-400 hover:bg-red-500/10 bg-transparent cursor-pointer transition-colors">
+                className="text-[12px] font-medium px-3 py-1.5 rounded-lg  text-red-400 hover:bg-red-500/10 bg-transparent cursor-pointer transition-colors">
                 Remove
               </button>
             )}
@@ -97,7 +97,11 @@ function SliderRow({ label, description, value, min = 1, max = 30, unit = "days"
 
   useEffect(() => { setDraft(value ?? max); setDirty(false); }, [value, max]);
 
-  const handleChange = (v) => { setDraft(v); setDirty(v !== (value ?? max)); };
+  const handleChange = (v) => {
+    const clamped = Math.min(max, Math.max(min, v));
+    setDraft(clamped);
+    setDirty(clamped !== (value ?? max));
+  };
 
   const handleSave = async () => {
     if (!onSave) return;
@@ -109,8 +113,6 @@ function SliderRow({ label, description, value, min = 1, max = 30, unit = "days"
 
   const handleCancel = () => { setDraft(value ?? max); setDirty(false); };
 
-  const pct = ((draft - min) / (max - min)) * 100;
-
   return (
     <div className="flex items-center justify-between py-5 border-b border-[#1a1a1a] last:border-0 gap-6">
       <div className="min-w-0 flex-1">
@@ -118,31 +120,37 @@ function SliderRow({ label, description, value, min = 1, max = 30, unit = "days"
         {description && <p className="m-0 text-[14px] text-[#6b6a6a] mt-0">{description}</p>}
       </div>
       <div className="flex items-center gap-3 shrink-0">
-        <span className="text-[13.5px] text-[#0694FB] font-mono w-[52px] text-right shrink-0">
-          {draft} {unit}
-        </span>
-        <input
-          type="range"
-          min={min}
-          max={max}
-          value={draft}
-          onChange={e => handleChange(Number(e.target.value))}
-          className="w-[160px] h-1 rounded-full appearance-none cursor-pointer"
-          style={{
-            background: `linear-gradient(to right, #0694FB ${pct}%, #1E1E1E ${pct}%)`,
-          }}
-        />
-        <span className="text-[11px] text-[#3a3a3a] font-mono shrink-0">{max}d max</span>
+        {/* Stepper */}
+        <div className="flex items-center bg-[#111] border border-[#1E1E1E] rounded-xl overflow-hidden">
+          <button
+            onClick={() => handleChange(draft - 1)}
+            disabled={draft <= min}
+            className="w-9 h-9 flex items-center justify-center text-[#6B6B6B] hover:text-white hover:bg-[#1E1E1E] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer border-none bg-transparent transition-colors text-[18px] font-light"
+          >
+            −
+          </button>
+          <span className="text-[14px] text-[#0694FB]  px-3 select-none min-w-[64px] text-center">
+            {draft} {unit}
+          </span>
+          <button
+            onClick={() => handleChange(draft + 1)}
+            disabled={draft >= max}
+            className="w-9 h-9 flex items-center justify-center text-[#6B6B6B] hover:text-white hover:bg-[#1E1E1E] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer border-none bg-transparent transition-colors text-[18px] font-light"
+          >
+            +
+          </button>
+        </div>
+        <span className="text-[14px] text-[#6B6B6B] shrink-0">max {max}d</span>
         {dirty && (
           <>
             <button onClick={handleSave} disabled={saving}
-              className="w-7 h-7 rounded-lg bg-[#0694FB] border-none flex items-center justify-center cursor-pointer hover:bg-[#0578d1] transition-colors shrink-0 disabled:opacity-70">
+              className="w-7 h-7 rounded-full bg-[#0694FB] border-none flex items-center justify-center cursor-pointer hover:bg-[#0578d1] transition-colors shrink-0 disabled:opacity-70">
               {saving
                 ? <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin block" />
                 : <FiCheck size={13} color="white" />}
             </button>
             <button onClick={handleCancel}
-              className="w-7 h-7 rounded-lg bg-[#1E1E1E] border border-[#2a2a2a] flex items-center justify-center cursor-pointer hover:bg-[#2a2a2a] transition-colors shrink-0">
+              className="w-7 h-7 rounded-full bg-[#1E1E1E] border border-[#2a2a2a] flex items-center justify-center cursor-pointer hover:bg-[#2a2a2a] transition-colors shrink-0">
               <FiX size={13} color="#6B6B6B" />
             </button>
           </>
@@ -234,7 +242,7 @@ function SecurityTab({ s, onUpdate }) {
       </SectionCard>
       <SectionCard title="Active Sessions">
         <SettingRow label="Current session" description="Windows 11 · Chrome · Accra, Ghana"
-          badge={{ label: "Active", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" }} />
+          badge={{ label: "Active", cls: " text-emerald-400 border-none" }} />
         <SettingRow label="Sign out all other sessions" description="Force sign-out on all other devices." danger onDanger={() => { }} />
       </SectionCard>
     </div>

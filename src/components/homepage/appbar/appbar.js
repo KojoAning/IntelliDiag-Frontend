@@ -70,10 +70,13 @@ function getBreadcrumbs(pathname) {
     ];
   }
   const MAP = {
-    "/dashboard": [{ label: "Dashboard", path: null }],
-    "/cases":     [{ label: "Cases",     path: null }],
-    "/calendar":  [{ label: "Calendar",  path: null }],
-    "/new-case":  [{ label: "New Case",  path: null }],
+    "/dashboard": [{ label: "Dashboard",      path: null }],
+    "/cases":     [{ label: "Cases",          path: null }],
+    "/calendar":  [{ label: "Calendar",       path: null }],
+    "/new-case":  [{ label: "New Case",       path: null }],
+    "/jobs":             [{ label: "Inference Jobs",  path: null }],
+    "/settings":        [{ label: "Settings",        path: null }],
+    "/patient-reports": [{ label: "Patient Reports", path: null }],
   };
   return MAP[pathname] ?? [];
 }
@@ -171,12 +174,12 @@ function Appbar() {
                     {crumb.path && !isLast ? (
                       <button
                         onClick={() => navigate(crumb.path, { state: locationState })}
-                        className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer p-0 transition-colors"
+                        className="text-[#6B6B6B] hover:text-white text-[14px] bg-transparent border-none cursor-pointer p-0 transition-colors"
                       >
                         {crumb.label}
                       </button>
                     ) : (
-                      <span className={`text-[12px] font-medium px-2 py-0.5 rounded-md ${isLast ? "text-[#0694FB] bg-[rgba(6,148,251,0.12)]" : "text-[#6B6B6B]"}`}>
+                      <span className={`text-[14px] font-medium px-2 py-0.5 rounded-md ${isLast ? "text-[#0694FB] bg-[rgba(6,148,251,0.12)]" : "text-[#6B6B6B]"}`}>
                         {crumb.label}
                       </span>
                     )}
@@ -309,8 +312,8 @@ function Appbar() {
                   </div>
                 ) : notifications.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-8 gap-2">
-                    <FaBell size={20} className="text-[#2a2a2a]" />
-                    <p className="text-[#3a3a3a] text-[12px] m-0">No notifications</p>
+                    <FaBell size={20} className="text-[#6B6B6B]" />
+                    <p className="text-[#6B6B6B] text-[12px] m-0">No notifications</p>
                   </div>
                 ) : (
                   notifications.map((n, i) => (
@@ -363,7 +366,7 @@ function Appbar() {
               {/* Actions */}
               <div className="px-2 py-2">
                 <button
-                  onClick={() => { localStorage.removeItem("token"); localStorage.removeItem("refresh_token"); setProfileOpen(false); navigate("/"); }}
+                  onClick={() => { ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k)); setProfileOpen(false); navigate("/"); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#FF6B6B] hover:bg-[rgba(255,107,107,0.1)] bg-transparent border-none cursor-pointer transition-colors text-[13px]"
                 >
                   <FiLogOut size={14} />

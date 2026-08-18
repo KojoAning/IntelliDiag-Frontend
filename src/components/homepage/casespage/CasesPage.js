@@ -5,6 +5,7 @@ import Appbar from "../appbar/appbar";
 import Sidebar from "../sidebar/Sidebar";
 import CaseCard from "./CaseCard";
 import NewCaseModal from "../newcase/NewCaseFlow";
+import { authFetch } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
@@ -45,10 +46,7 @@ function CasesPage() {
     setLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${baseURL}/cases/?limit=100`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authFetch(`${baseURL}/cases/?limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       setPatients(

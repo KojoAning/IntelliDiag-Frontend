@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 
 const urgencyStyles = {
   Immediate: "bg-[rgba(255,107,53,0.2)] text-[#FF6B35]",
-  Emergency: "bg-[#331E1F] text-[#FF3B3B]",
+  Emergency: "bg-[#382221] text-[#ff2c2c]",
   "Less Urgent": "bg-[rgba(147,51,234,0.2)] text-[#A855F7]",
   Routine: "bg-[rgba(6,148,251,0.2)] text-[#0694FB]",
 };

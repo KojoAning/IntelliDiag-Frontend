@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  FiUsers, FiBriefcase, FiLayers, FiAlertTriangle,
-  FiClock, FiChevronRight, FiCheck, FiLoader,
+  FiClock, FiChevronRight, FiCheck, FiLoader, FiAlertTriangle,
 } from "react-icons/fi";
+import { HiUsers, HiBriefcase, HiClock, HiExclamationTriangle } from "react-icons/hi2";
 import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs } from "../../../lib/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,9 +60,9 @@ function StatCard({ icon, label, value, color, loading }) {
   return (
     <div className="flex-1 bg-[#161616] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-3 min-w-0">
       <div className="flex items-center justify-between">
-        <span className="py-1 px-[10px] rounded-full text-xs font-medium uppercase tracking-wide" style={{ background: `${color}18`, color }}>{label}</span>
-        <div className={`w-8 h-8 rounded-xl flex items-center justify-center`} style={{ background: `${color}18` }}>
-          {React.cloneElement(icon, { size: 15, color })}
+        <span className="py-1  rounded-full text-[15px] font-semibold  tracking-wide" style={{  color:"#FFFFFF" }}>{label}</span>
+        <div className={`w-8 h-8 rounded-xl flex items-center justify-center`} >
+          {React.cloneElement(icon, { size: 20, color })}
         </div>
       </div>
       <p className="m-0 text-white text-[40px] font-normal leading-none">
@@ -91,7 +91,7 @@ function ActivityTable({ headers, children }) {
       <thead>
         <tr>
           {headers.map((h, i) => (
-            <th key={i} className={`text-[#0694FB] text-[11px] font-medium uppercase tracking-wide rounded-sm border-b bg-[#161616] p-4 border-[#111] ${i === headers.length - 1 ? "text-right" : ""}`}>
+            <th key={i} className={`text-[#ffffff] text-[13px] font-bold uppercase   border-b bg-[#161616] p-4 border-[#111] ${i === headers.length - 1 ? "text-right" : ""}`}>
               {h}
             </th>
           ))}
@@ -140,55 +140,59 @@ function Badge({ label, styleMap }) {
   );
 }
 
-function ActivityRow({ primary, age, gender, details, modality, severity, status, time, tat, onClick }) {
+function ActivityRow({ primary, age, gender, details, modelName, modelType, modality, severity, status, tat, onClick }) {
   return (
     <tr
       onClick={onClick}
-      className="group px-4 cursor-pointer border-b border-[#111] last:border-0 hover:bg-white/[0.02] transition-colors"
+      className="group px-0 cursor-pointer border-b border-[#111] last:border-0 hover:bg-white/[0.02] transition-colors"
     >
       {/* Patient */}
-      <td className="py-5 px-4 max-w-0 w-[22%]">
+      <td className="py-5 px-4 max-w-0 w-[20%]">
         <span className="text-white text-[14px] group-hover:text-white transition-colors block truncate">
           {primary}
           {(age || gender) && (
             <span className="ml-2 text-white/40">[{[age, gender].filter(Boolean).join("/")}]</span>
           )}
         </span>
+        {details && <span className="text-[#3a3a3a] text-[11px] block truncate mt-0.5">{details}</span>}
       </td>
 
       {/* Details */}
-      <td className="py-5 pr-4 max-w-0 w-[28%]">
-        <span className="text-[#3a3a3a] text-[14px]  text-white/80 block truncate">
-          {details || "—"}
-        </span>
+      <td className="py-5 px-4 max-w-0 w-[22%]">
+        <span className="text-white/80 text-[14px] block truncate">{details || "—"}</span>
+        {modelType && <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{modelType}</span>}
+      </td>
+
+      {/* Model */}
+      <td className="py-5 px-4 max-w-0 w-[18%]">
+        {modelName
+          ? <span className="text-white/80 text-[13px] block truncate">{modelName}</span>
+          : <span className="text-[#2a2a2a] text-[13px]">—</span>
+        }
       </td>
 
       {/* Modality */}
-      <td className="py-5 pr-4 whitespace-nowrap">
+      <td className="py-5 px-4 whitespace-nowrap">
         {modality
-          ? <span className=" text-white/80 text-[14px]  uppercase">{modality}</span>
-          : <span className="text-[#2a2a2a] text-[14px] ">—</span>
+          ? <span className="text-white/80 text-[14px] uppercase">{modality}</span>
+          : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
-      </td>
-      {/* Job Type */}
-      <td className="py-5 pr-4 whitespace-nowrap">
-        <Badge label={status} styleMap={STATUS_STYLES} />
       </td>
 
       {/* Severity */}
-      <td className="py-5 pr-4 whitespace-nowrap">
+      <td className="py-5 px-4 whitespace-nowrap">
         <Badge label={severity} styleMap={SEVERITY_STYLES} />
       </td>
 
       {/* Status */}
-      <td className="py-5 pr-4 whitespace-nowrap">
+      <td className="py-5 px-4 whitespace-nowrap">
         <Badge label={status} styleMap={STATUS_STYLES} />
       </td>
 
       {/* TAT */}
-      <td className="py-5 text-right whitespace-nowrap px-3">
-        <span className={`text-[12px] font-mono ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
-          {tat || "—"}
+      <td className="py-5 pr-6 text-right whitespace-nowrap px-3">
+        <span className={`text-[12px] ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
+          <div className="flex flex-row gap-2 items-center justify-end"><HiClock size={14} />{tat || "—"}</div>
         </span>
       </td>
     </tr>
@@ -236,7 +240,7 @@ function Display() {
   const name = localStorage.getItem("name") || "Doctor";
 
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ patients: 0, openCases: 0, studies: 0, flagged: 0 });
+  const [stats, setStats] = useState({ patients: 0, openCases: 0, tat: 0, flagged: 0 });
   const [recentJobs, setRecentJobs] = useState([]);
   const [modalityFilter, setModalityFilter] = useState("All");
   const [severityFilter, setSeverityFilter] = useState("All");
@@ -265,10 +269,19 @@ function Display() {
         !["closed", "completed", "archived"].includes((c.status || "").toLowerCase())
       );
 
+      const completedWithTAT = jobs.filter(j =>
+        (j.status || "").toLowerCase() === "completed" && j.created_at && j.estimated_completion
+      );
+      const avgTatMs = completedWithTAT.length
+        ? completedWithTAT.reduce((sum, j) =>
+            sum + (new Date(j.estimated_completion).getTime() - new Date(j.created_at).getTime()), 0
+          ) / completedWithTAT.length
+        : 0;
+
       setStats({
         patients: patients.length,
         openCases: openCases.length,
-        studies: studies.length,
+        tat: avgTatMs > 0 ? fmtDuration(avgTatMs) : "—",
         flagged: studies.filter(s => s.flagged).length,
       });
 
@@ -304,10 +317,10 @@ function Display() {
 
       {/* ── Stat Cards ── */}
       <div className="flex gap-4 shrink-0 mb-4">
-        <StatCard icon={<FiUsers />} label="Total Patients" value={stats.patients} color="#0694FB" loading={loading} />
-        <StatCard icon={<FiBriefcase />} label="Open Cases" value={stats.openCases} color="#F59E0B" loading={loading} />
-        <StatCard icon={<FiLayers />} label="Average TAT" value={stats.studies} color="#A855F7" loading={loading} />
-        <StatCard icon={<FiAlertTriangle />} label="Flagged Studies" value={stats.flagged} color="#FF6B35" loading={loading} />
+        <StatCard icon={<HiUsers />} label="Total Patients" value={stats.patients} color="#0694FB" loading={loading} />
+        <StatCard icon={<HiBriefcase />} label="Open Cases" value={stats.openCases} color="#F59E0B" loading={loading} />
+        <StatCard icon={<HiClock />} label="Average TAT" value={stats.tat} color="#A855F7" loading={loading} />
+        <StatCard icon={<HiExclamationTriangle />} label="Flagged Studies" value={stats.flagged} color="#FF6B35" loading={loading} />
       </div>
 
       {/* ── Recent Jobs ── */}
@@ -360,36 +373,52 @@ function Display() {
         </div>
         <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl overflow-hidden">
           {loading
-            ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-10 bg-[#111]  m-3 animate-pulse" />
-            ))
+            ? (
+              <div className="flex flex-col items-center justify-center py-24 gap-3">
+                <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+                <p className="text-[#3a3a3a] text-[13px] m-0">Loading jobs…</p>
+              </div>
+            )
             : recentJobs.length === 0
               ? <div className="p-5"><EmptyRow text="No jobs yet" /></div>
-              : (
-                <ActivityTable headers={["Patient", "Details", "Modality", "Job Type", "Severity", "Status", "TAT"]}>
-                  {recentJobs.filter(j => {
+              : (() => {
+                  const filtered = recentJobs.filter(j => {
                     const mod = (j.modality || "").toUpperCase();
                     const sev = (j.severity || "").toLowerCase();
                     if (modalityFilter !== "All" && mod !== modalityFilter) return false;
                     if (severityFilter !== "All" && sev !== severityFilter) return false;
                     return true;
-                  }).map(j => (
-                    <ActivityRow
-                      key={j.job_id}
-                      primary={j.patient_name || "Unknown"}
-                      age={j.patient_age}
-                      gender={j.patient_gender}
-                      details={j.case_title || ""}
-                      modality={j.modality || ""}
-                      severity={j.severity || j.case_urgency || ""}
-                      status={j.status || ""}
-                      time={timeAgo(j.created_at)}
-                      tat={j.status === "completed" ? calcTAT(j.created_at, j.estimated_completion) : calcTimeLeft(j.estimated_completion)}
-                      onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study" }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
-                    />
-                  ))}
-                </ActivityTable>
-              )
+                  });
+                  return (
+                    <ActivityTable headers={["Patient Name", "Details", "Model", "Modality", "Severity", "Status", "TAT"]}>
+                      {filtered.length === 0
+                        ? (
+                          <tr>
+                            <td colSpan={7} className="py-10 text-center text-[#5e5e5e] text-[14px]">
+                              No jobs found for this search
+                            </td>
+                          </tr>
+                        )
+                        : filtered.map(j => (
+                          <ActivityRow
+                            key={j.job_id}
+                            primary={j.patient_name || "Unknown"}
+                            age={j.patient_age}
+                            gender={j.patient_gender}
+                            details={j.case_title || ""}
+                            modelName={j.model_name || ""}
+                            modelType={j.model_type || ""}
+                            modality={j.modality || ""}
+                            severity={j.severity || j.case_urgency || ""}
+                            status={j.status || ""}
+                            tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
+                            onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study" }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
+                          />
+                        ))
+                      }
+                    </ActivityTable>
+                  );
+                })()
           }
         </div>
       </div>

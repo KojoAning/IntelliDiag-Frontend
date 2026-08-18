@@ -60,7 +60,7 @@ function ModelPanel({ onModelSelect, selectedModel: externalModel }) {
 
   return (
     <>
-      <div className="bg-[#161616] rounded-[15px] p-[18px] box-border flex flex-col gap-4 shrink-0">
+      <div className="bg-[#161616] rounded-[15px] p-[18px] box-border flex flex-col gap-4 shrink-0 max-h-[250px]">
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 whitespace-nowrap">
@@ -70,7 +70,7 @@ function ModelPanel({ onModelSelect, selectedModel: externalModel }) {
             onClick={() => setModalOpen(true)}
             className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium px-3 py-[8px] rounded-full border-none cursor-pointer transition-colors whitespace-nowrap"
           >
-            + Add Inference Model
+            Add Inference Model
           </button>
         </div>
 

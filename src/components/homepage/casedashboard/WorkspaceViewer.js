@@ -6,7 +6,7 @@ import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
-import { getImagesForStudy, uploadDicom, getModels } from "../../../lib/api";
+import { getImagesForStudy, uploadDicom, getModels, authFetch } from "../../../lib/api";
 import { renderDicomThumbnail, parseMultipartBody, parseDicomInstanceInfo, getDicomMetadata } from "../../../lib/dicomUtils";
 import { thumbCache } from "./sidepanel";
 import { Info, } from "lucide-react";
@@ -38,6 +38,7 @@ function WorkspaceViewer() {
   const [selectedTranslationMode, setselectedTranslationMode] = useState(null);
   const [translationActive, setTranslationActive] = useState(false);
   const [jobFailedDialog, setJobFailedDialog] = useState(false);
+  const [impression, setImpression] = useState("");
 
   const fileInputRef = useRef(null);
 
@@ -51,38 +52,36 @@ function WorkspaceViewer() {
   }, []);
 
   const currentModelId = selectedModel?.id ?? null;
-  const currentCtx     = modelContexts[currentModelId] ?? {};
-  const aiResponse      = currentCtx.aiResponse      ?? null;
-  const aiLoading       = currentCtx.aiLoading       ?? false;
+  const currentCtx = modelContexts[currentModelId] ?? {};
+  const aiResponse = currentCtx.aiResponse ?? null;
+  const aiLoading = currentCtx.aiLoading ?? false;
   const inferenceResult = currentCtx.inferenceResult ?? null;
   const inferenceProgress = currentCtx.inferenceProgress ?? null;
-  const jobStatus       = currentCtx.jobStatus       ?? null;
+  const jobStatus = currentCtx.jobStatus ?? null;
 
   // ── Job status polling (when navigated from Jobs page) ───────────────────────
   useEffect(() => {
     if (!from_jobs || !jobId) return;
     let cancelled = false;
 
-    // Fetch and pre-select the model that was used for this job
+    // Pre-select the model that was used for this job
     const modelId = navState?.model_id ?? null;
-    console.log(modelId)
     if (modelId) {
-      console.log(modelId)
       getModels().then(models => {
         const found = (Array.isArray(models) ? models : []).find(m => String(m.id) === String(modelId));
         if (found && !cancelled) setSelectedModel(found);
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     // Key context updates under the job's model id (falls back to jobId if model unknown)
     const pollModelId = navState?.model_id ?? jobId;
 
     const fetchResults = async () => {
+      updateCtx(pollModelId, { aiLoading: true, inferenceProgress: null });
       try {
-        const results = await fetch(
-          `${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`,
-          { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
-        ).then(r => r.json());
+        const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+        if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
+        const results = await res.json();
         if (cancelled) return;
         updateCtx(pollModelId, { inferenceResult: results, aiResponse: buildSummary(results), jobStatus: "completed" });
       } catch {
@@ -96,19 +95,18 @@ function WorkspaceViewer() {
       const status = (initialJobStatus || "").toLowerCase();
 
       if (status === "failed") { updateCtx(pollModelId, { jobStatus: "failed" }); return; }
+
+      // Completed — auto-load results immediately, no user action needed
       if (status === "completed") { await fetchResults(); return; }
 
-      // Show the existing inference button progress UI while job runs
+      // Still running/pending — show progress UI and poll until done
       updateCtx(pollModelId, { aiLoading: true, inferenceProgress: status === "running" ? 0 : null });
 
       while (!cancelled) {
         await new Promise(r => setTimeout(r, 2500));
         if (cancelled) break;
         try {
-          const res = await fetch(
-            `${API_BASE}/jobs/check_status/${jobId}`,
-            { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
-          );
+          const res = await authFetch(`${API_BASE}/jobs/check_status/${jobId}`);
           if (!res.ok || cancelled) break;
           const data = await res.json();
           if (data.status === "running") {
@@ -137,6 +135,63 @@ function WorkspaceViewer() {
   // ── Inference cache (localStorage) ──────────────────────────────────────────
   // Key: "inference_<imageId>_<modelId>"  Value: { result, report }
   const cacheKey = useCallback((imageId, modelId) => `inference_${imageId}_${modelId}`, []);
+  function renderReport(text) {
+    if (!text) return null;
+    const lines = text.split("\n");
+
+    return lines.map((line, i) => {
+      // Heading: ### Findings
+      const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
+      if (headingMatch) {
+        return (
+          <p key={i} className="text-[#0694FB] text-[13px] font-semibold m-0 mt-2 mb-0.5">
+            {renderInline(headingMatch[2])}
+          </p>
+        );
+      }
+
+      // Bullet: - item or * item
+      const bulletMatch = line.match(/^[-*]\s+(.+)/);
+      if (bulletMatch) {
+        return (
+          <div key={i} className="flex items-start gap-2 my-0.5">
+            <span className="text-[#0694FB] text-[10px] mt-[3px] shrink-0">●</span>
+            <span className="text-[#CCCCCC] text-[12px] leading-relaxed">{renderInline(bulletMatch[1])}</span>
+          </div>
+        );
+      }
+
+      // Empty line → small spacer
+      if (!line.trim()) {
+        return <div key={i} className="h-1.5" />;
+      }
+
+      // Plain line
+      return (
+        <p key={i} className="text-[#CCCCCC] text-[12px] m-0 leading-relaxed">
+          {renderInline(line)}
+        </p>
+      );
+    });
+  }
+
+  function renderInline(text) {
+    // Split on **bold** and *italic* patterns, preserving delimiters as groups
+    const parts = text.split(/(\*\*[^*]+?\*\*|\*[^*]+?\*|__[^_]+?__|_[^_]+?_)/g);
+    return parts.map((part, i) => {
+      // **bold** or __bold__
+      if (/^\*\*(.+)\*\*$/.test(part) || /^__(.+)__$/.test(part)) {
+        const inner = part.replace(/^\*\*|\*\*$|^__|__$/g, "");
+        return <span key={i} className="text-white font-semibold">{inner}</span>;
+      }
+      // *italic* or _italic_
+      if (/^\*(.+)\*$/.test(part) || /^_(.+)_$/.test(part)) {
+        const inner = part.replace(/^\*|\*$|^_|_$/g, "");
+        return <span key={i} className="text-[#8a8a8a] italic">{inner}</span>;
+      }
+      return part;
+    });
+  }
 
   const getCachedInference = useCallback((imageId, modelId) => {
     if (!imageId || !modelId) return null;
@@ -163,15 +218,20 @@ function WorkspaceViewer() {
   useEffect(() => {
     if (!currentModelId) return;
     if (!selectedImage) {
-      updateCtx(currentModelId, { inferenceResult: null, aiResponse: null });
+      // Don't wipe a result that was already fetched (e.g. auto-loaded from Jobs page)
+      // — images reset to [] during DICOM loading which briefly sets selectedImage to null.
+      if (!inferenceResultRef.current) {
+        updateCtx(currentModelId, { inferenceResult: null, aiResponse: null });
+      }
       return;
     }
     const img = images.find(i => (i.blobUrl ?? i.url) === selectedImage);
     const cached = getCachedInference(img?.id, currentModelId);
     if (cached) {
       updateCtx(currentModelId, { inferenceResult: cached.result, aiResponse: cached.report });
-    } else if (!inferenceResultRef.current?.slices) {
-      // Only clear for single-image results; bulk results stay until explicitly dismissed
+    } else if (!inferenceResultRef.current) {
+      // Only clear if this model has no results at all — switching back to a model
+      // that already completed inference should preserve its results regardless of type.
       updateCtx(currentModelId, { inferenceResult: null, aiResponse: null });
     }
   }, [selectedImage, currentModelId, images, getCachedInference, updateCtx]);
@@ -367,6 +427,7 @@ function WorkspaceViewer() {
       if (result.scores?.length) {
         lines.push(`Scores: ${result.scores.map(s => s.toFixed(3)).join(", ")}`);
       }
+      if (result.heatmap) lines.push(`GradCAM heatmap available`);
     } else if (result.has_tumor !== undefined) {
       lines.push(`Tumor detected: ${result.has_tumor ? "Yes" : "No"}`);
       lines.push(`Coverage: ${(result.tumor_coverage_pct * 100).toFixed(1)}%`);
@@ -436,9 +497,7 @@ function WorkspaceViewer() {
           if (event.status === "processing") {
             updateCtx(capturedModelId, { inferenceProgress: Math.round(event.processed / event.total * 100) });
           } else if (event.status === "done") {
-            const results = await fetch(`${API_BASE}/results/${event.job_id}`, {
-              headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-            }).then(r => r.json());
+            const results = await authFetch(`${API_BASE}/results/${event.job_id}`).then(r => r.json());
             const summary = buildSummary(results);
             updateCtx(capturedModelId, { inferenceResult: results, aiResponse: summary });
             setCachedInference(img.id, capturedModelId, results, summary);
@@ -477,9 +536,8 @@ function WorkspaceViewer() {
   // Used by both prefetchBulk (for DICOM retrieval) and runAnalysis (for inference).
   const getSeriesToken = async (seriesId) => {
     const id = seriesId ?? activeSeries?.id;
-    const res = await fetch(`${process.env.REACT_APP_API_BASE}/series/${id}/inference-token`, {
+    const res = await authFetch(`${process.env.REACT_APP_API_BASE}/series/${id}/inference-token`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
     });
     if (!res.ok) throw new Error("Failed to get inference token");
     const data = await res.json();
@@ -514,9 +572,8 @@ function WorkspaceViewer() {
       const seriesToken = await getSeriesToken();
 
       // Step 1: Submit job, get job_id back
-      const jobs_response = await fetch(`${API_BASE}/series/${activeSeries?.id}/jobs`, {
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` },
-
+      const jobs_response = await authFetch(`${API_BASE}/series/${activeSeries?.id}/jobs`, {
+        headers: { "Content-Type": "application/json" },
       });
       if (!jobs_response.ok) {
         const errText = await jobs_response.text().catch(() => "");
@@ -532,7 +589,7 @@ function WorkspaceViewer() {
         job_id = existingJob.id;
       } else {
         const newJobId = crypto.randomUUID();
-        const response = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/segment`, {
+        const response = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}${selectedModel.endpoint_url}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -560,10 +617,7 @@ function WorkspaceViewer() {
       while (true) {
         await new Promise(r => setTimeout(r, 2000));
 
-        const statusRes = await fetch(
-          `${API_BASE}/jobs/check_status/${job_id}`,
-          { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
-        );
+        const statusRes = await authFetch(`${API_BASE}/jobs/check_status/${job_id}`);
         if (!statusRes.ok) {
           const errText = await statusRes.text().catch(() => "");
           throw new Error(`Status check failed: ${statusRes.status} — ${errText.slice(0, 200)}`);
@@ -576,9 +630,8 @@ function WorkspaceViewer() {
           updateCtx(capturedModelId, { inferenceProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
           updateCtx(capturedModelId, { inferenceProgress: 100 });
-          results = await fetch(
-            `${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`,
-            { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } }
+          results = await authFetch(
+            `${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`
           ).then(r => r.json());
           break;
         } else if (status.status === "failed") {
@@ -592,55 +645,60 @@ function WorkspaceViewer() {
       if (!results) throw new Error("No results received from inference job");
       updateCtx(capturedModelId, { inferenceResult: results });
 
-      // Step 4: Stream the report
-      const tumorSlices = results.slices.filter(s => s.has_tumor);
-      const firstTumor = results.slices.findIndex(s => s.has_tumor);
-      const lastTumor = results.slices.findLastIndex(s => s.has_tumor);
+      // Step 4: Stream the report (segmentation path only — GradCAM/classification use buildSummary)
+      if (Array.isArray(results.slices)) {
+        const tumorSlices = results.slices.filter(s => s.has_tumor);
+        const firstTumor = results.slices.findIndex(s => s.has_tumor);
+        const lastTumor = results.slices.findLastIndex(s => s.has_tumor);
 
-      const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          metadata: dicomMetadata ? {
-            modality: dicomMetadata.modality ?? null,
-            series_description: dicomMetadata.seriesDescription ?? null,
-            slice_thickness_mm: dicomMetadata.sliceThickness ?? null,
-            pixel_spacing_mm: dicomMetadata.pixelSpacing ?? null,
-            rows: dicomMetadata.rows ?? null,
-            columns: dicomMetadata.columns ?? null,
-          } : null,
-          patient_context: dicomMetadata ? [
-            dicomMetadata.patientName && `Patient: ${dicomMetadata.patientName}`,
-            dicomMetadata.patientDob && `DOB: ${dicomMetadata.patientDob}`,
-            dicomMetadata.patientSex && `Sex: ${dicomMetadata.patientSex}`,
-            dicomMetadata.studyDate && `Study date: ${dicomMetadata.studyDate}`,
-            dicomMetadata.studyDescription && `Study: ${dicomMetadata.studyDescription}`,
-            dicomMetadata.institution && `Institution: ${dicomMetadata.institution}`,
-            dicomMetadata.modality && `Modality: ${dicomMetadata.modality}`,
-          ].filter(Boolean).join(". ") || null : null,
-          has_tumor: tumorSlices.length > 0,
-          tumor_coverage_pct: results.slices.reduce((a, s) => a + s.tumor_size, 0) / results.slice_count,
-          mean_confidence: results.slices.reduce((a, s) => a + s.confidence, 0) / results.slice_count,
-          total_slices: results.slice_count,
-          slices_with_tumor: tumorSlices.length,
-          max_slice_coverage_pct: Math.max(...results.slices.map(s => s.tumor_size)),
-          tumor_location: firstTumor !== -1 ? `slices ${firstTumor + 1}-${lastTumor + 1} of ${results.slice_count}` : null,
-        }),
-      });
+        const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: dicomMetadata ? {
+              modality: dicomMetadata.modality ?? null,
+              series_description: dicomMetadata.seriesDescription ?? null,
+              slice_thickness_mm: dicomMetadata.sliceThickness ?? null,
+              pixel_spacing_mm: dicomMetadata.pixelSpacing ?? null,
+              rows: dicomMetadata.rows ?? null,
+              columns: dicomMetadata.columns ?? null,
+            } : null,
+            patient_context: dicomMetadata ? [
+              dicomMetadata.patientName && `Patient: ${dicomMetadata.patientName}`,
+              dicomMetadata.patientDob && `DOB: ${dicomMetadata.patientDob}`,
+              dicomMetadata.patientSex && `Sex: ${dicomMetadata.patientSex}`,
+              dicomMetadata.studyDate && `Study date: ${dicomMetadata.studyDate}`,
+              dicomMetadata.studyDescription && `Study: ${dicomMetadata.studyDescription}`,
+              dicomMetadata.institution && `Institution: ${dicomMetadata.institution}`,
+              dicomMetadata.modality && `Modality: ${dicomMetadata.modality}`,
+            ].filter(Boolean).join(". ") || null : null,
+            has_tumor: tumorSlices.length > 0,
+            tumor_coverage_pct: results.slices.reduce((a, s) => a + s.tumor_size, 0) / results.slice_count,
+            mean_confidence: results.slices.reduce((a, s) => a + s.confidence, 0) / results.slice_count,
+            total_slices: results.slice_count,
+            slices_with_tumor: tumorSlices.length,
+            max_slice_coverage_pct: Math.max(...results.slices.map(s => s.tumor_size)),
+            tumor_location: firstTumor !== -1 ? `slices ${firstTumor + 1}-${lastTumor + 1} of ${results.slice_count}` : null,
+          }),
+        });
 
-      if (reportRes.ok && reportRes.body) {
-        const reportReader = reportRes.body.getReader();
-        const reportDecoder = new TextDecoder();
-        let reportText = "";
-        while (true) {
-          const { done, value } = await reportReader.read();
-          if (done) break;
-          reportText += reportDecoder.decode(value, { stream: true });
-          updateCtx(capturedModelId, { aiResponse: reportText });
+        if (reportRes.ok && reportRes.body) {
+          const reportReader = reportRes.body.getReader();
+          const reportDecoder = new TextDecoder();
+          let reportText = "";
+          while (true) {
+            const { done, value } = await reportReader.read();
+            if (done) break;
+            reportText += reportDecoder.decode(value, { stream: true });
+            updateCtx(capturedModelId, { aiResponse: reportText });
+          }
+          reportText += reportDecoder.decode();
+          updateCtx(capturedModelId, { aiResponse: reportText || buildSummary(results) });
+        } else {
+          updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
         }
-        reportText += reportDecoder.decode();
-        updateCtx(capturedModelId, { aiResponse: reportText || buildSummary(results) });
       } else {
+        // GradCAM / classification / binary detection — use local summary
         updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
       }
 
@@ -654,6 +712,8 @@ function WorkspaceViewer() {
       updateCtx(capturedModelId, { aiLoading: false, inferenceProgress: null });
     }
   };
+
+
 
 
   const runTranslation = async () => {
@@ -755,7 +815,7 @@ function WorkspaceViewer() {
                   <FiX size={18} />
                 </button>
               </div>
-       
+
 
               {/* Footer */}
               <div className="px-7 pb-6">
@@ -786,28 +846,47 @@ function WorkspaceViewer() {
               exit={{ y: 16, opacity: 0, scale: 0.97 }}
               transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
               onClick={e => e.stopPropagation()}
-              className="relative w-full max-w-[400px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+              className="relative w-full max-w-[600px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden max-h-[700px]"
             >
               {/* Header */}
-              <div className="flex items-start justify-between px-7 pt-7 pb-5">
+              <div className="flex-col items-start justify-between px-7 pt-7 pb-5 gap-3">
                 <div>
                   <div className="flex items-center justify-between shrink-0">
                     <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
                       <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Report</p>
                     </div>
+                    <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                      <FiX size={18} />
+                    </button>
                   </div>
                 </div>
-                <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
-                  <FiX size={18} />
-                </button>
+                
+
               </div>
+              <div className="flex flex-col flex-1 overflow-y-auto px-7 pb-4" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
+                {renderReport(aiResponse)}
+              </div>
+
+              {/* Radiologist Impression */}
+              <div className="px-7 pb-4 flex flex-col gap-2 border-t border-[#1E1E1E] pt-4 shrink-0 h-[180px]">
+                <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0 shrink-0">Radiologist Impression</p>
+                <textarea
+                  value={impression}
+                  onChange={e => setImpression(e.target.value)}
+                  placeholder="Add your impression..."
+                  className="flex-1 min-h-0 w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none"
+                  style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
+                />
+              </div>
+
               {/* Footer */}
-              <div className="px-7 pb-6">
+              <div className="px-7 pb-6 shrink-0">
                 <button
                   onClick={() => setshowExpandedAiReport(false)}
-                  className="w-full py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"
+                  disabled={!aiResponse && !impression.trim()}
+                  className="w-full py-2.5 rounded-full text-[13px] font-medium border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#0694FB] hover:bg-[#0578d1] enabled:cursor-pointer text-white"
                 >
-                  Save and Generate Report
+                  Save & Generate Report
                 </button>
               </div>
             </motion.div>

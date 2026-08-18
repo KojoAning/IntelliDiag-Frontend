@@ -5,6 +5,7 @@ import {
   FiChevronRight, FiAlertTriangle, FiLoader, FiCheck,
   FiClock, FiSearch, FiRefreshCw,
 } from "react-icons/fi";
+import { HiClock } from "react-icons/hi2";
 import { getRecentJobs } from "../../../lib/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -81,12 +82,12 @@ function Badge({ label, styleMap }) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-const COLS = ["Patient", "Case", "Modality", "Status", "Severity", "Started", "TAT / ETA"];
+const COLS = ["Patient Name", "Details", "Model", "Modality", "Severity", "Status", "TAT"];
 
 function JobRow({ j, onClick }) {
   const status = (j.status || "").toLowerCase();
   const tat = status === "completed"
-    ? calcTAT(j.created_at, j.estimated_completion)
+    ? calcTAT(j.created_at, j.completed_at)
     : calcTimeLeft(j.estimated_completion);
 
   return (
@@ -94,55 +95,75 @@ function JobRow({ j, onClick }) {
       onClick={onClick}
       className="group border-b border-[#111] last:border-0 hover:bg-white/[0.02] cursor-pointer transition-colors"
     >
-      <td className="py-4 px-5 max-w-0 w-[18%]">
-        <span className="text-white text-[13.5px] block truncate">
+      {/* Patient */}
+      <td className="py-5 px-4 max-w-0 w-[20%]">
+        <span className="text-white text-[14px] block truncate">
           {j.patient_name || "Unknown"}
           {(j.patient_age || j.patient_gender) && (
-            <span className="ml-2 text-white/35 text-[12px]">
+            <span className="ml-2 text-white/40">
               [{[j.patient_age, j.patient_gender].filter(Boolean).join("/")}]
             </span>
           )}
         </span>
-      </td>
-      <td className="py-4 pr-4 max-w-0 w-[24%]">
-        <span className="text-white/70 text-[13.5px] block truncate">{j.case_title || "—"}</span>
-        {j.model_name && (
-          <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{j.model_name}</span>
+        {j.case_title && (
+          <span className="text-[#3a3a3a] text-[11px] block truncate mt-0.5">{j.case_title}</span>
         )}
       </td>
-      <td className="py-4 pr-4 whitespace-nowrap">
-        <span className="text-white/80 text-[13.5px] uppercase font-mono">{j.modality || "—"}</span>
+      {/* Details */}
+      <td className="py-5 px-4 max-w-0 w-[22%]">
+        <span className="text-white/80 text-[14px] block truncate">{j.case_title || "—"}</span>
+        {j.model_type && (
+          <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{j.model_type}</span>
+        )}
       </td>
-      <td className="py-4 pr-4 whitespace-nowrap">
-        <Badge label={j.status} styleMap={STATUS_STYLES} />
+      {/* Model */}
+      <td className="py-5 px-4 max-w-0 w-[18%]">
+        {j.model_name
+          ? <span className="text-white/80 text-[13px] block truncate">{j.model_name}</span>
+          : <span className="text-[#2a2a2a] text-[13px]">—</span>
+        }
       </td>
-      <td className="py-4 pr-4 whitespace-nowrap">
+      {/* Modality */}
+      <td className="py-5 px-4 whitespace-nowrap">
+        {j.modality
+          ? <span className="text-white/80 text-[14px] uppercase">{j.modality}</span>
+          : <span className="text-[#2a2a2a] text-[14px]">—</span>
+        }
+      </td>
+      {/* Severity */}
+      <td className="py-5 px-4 whitespace-nowrap">
         <Badge label={j.severity || j.case_urgency} styleMap={SEVERITY_STYLES} />
       </td>
-      <td className="py-4 pr-4 whitespace-nowrap">
-        <span className="text-white/50 text-[12px] font-mono">{timeAgo(j.created_at)}</span>
+      {/* Status */}
+      <td className="py-5 px-4 whitespace-nowrap">
+        <Badge label={j.status} styleMap={STATUS_STYLES} />
       </td>
-      <td className="py-4 px-5 text-right whitespace-nowrap">
-        <span className={`text-[12px] font-mono ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
-          {tat || "—"}
+      {/* TAT */}
+      <td className="py-5 pr-6 text-right whitespace-nowrap px-3">
+        <span className={`text-[12px] ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
+          <div className="flex flex-row gap-2 items-center justify-end">
+            <HiClock size={14} />
+            {tat || "—"}
+          </div>
         </span>
       </td>
     </tr>
   );
 }
 
-// ── Skeleton ──────────────────────────────────────────────────────────────────
+// ── Loading spinner row ───────────────────────────────────────────────────────
 
-function SkeletonRows() {
-  return Array.from({ length: 8 }).map((_, i) => (
-    <tr key={i} className="border-b border-[#111]">
-      {COLS.map((_, j) => (
-        <td key={j} className="py-4 px-5">
-          <div className="h-4 bg-[#1a1a1a] rounded animate-pulse" style={{ width: `${60 + (j * 13) % 35}%` }} />
-        </td>
-      ))}
+function LoadingRow() {
+  return (
+    <tr>
+      <td colSpan={COLS.length}>
+        <div className="flex flex-col items-center justify-center py-24 gap-3">
+          <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+          <p className="text-[#3a3a3a] text-[13px] m-0">Loading jobs…</p>
+        </div>
+      </td>
     </tr>
-  ));
+  );
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -238,7 +259,7 @@ export default function JobsPage() {
           { label: "Completed", count: counts.completed, cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" },
           { label: "Failed",    count: counts.failed,    cls: "bg-red-500/10 text-red-400 border-red-500/20" },
         ].map(({ label, count, cls }) => (
-          <div key={label} className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-[12px] font-medium ${cls}`}>
+          <div key={label} className={`flex items-center gap-2 px-3 py-1.5  text-[12px] font-medium ${cls}`}>
             <span>{label}</span>
             <span className="opacity-70">{loading ? "—" : count}</span>
           </div>
@@ -254,13 +275,13 @@ export default function JobsPage() {
       >
         {/* Search */}
         <div className="relative flex-1 min-w-[200px] max-w-[320px]">
-          <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#3a3a3a] pointer-events-none" />
+          <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6B6B6B] pointer-events-none" />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search patient, case, model…"
-            className="w-full bg-[#0C0C0C] border border-[#1E1E1E] text-white text-[13px] rounded-xl pl-8 pr-3 py-2 focus:outline-none focus:border-[#0694FB]/40 placeholder:text-[#3a3a3a]"
+            className="w-full bg-[#0C0C0C] border border-[#1E1E1E] text-white text-[13px] rounded-xl pl-8 pr-3 py-2 focus:outline-none focus:border-[#0694FB]/40 placeholder:text-[#6B6B6B]"
           />
         </div>
 
@@ -310,7 +331,7 @@ export default function JobsPage() {
           <thead>
             <tr>
               {COLS.map((h, i) => (
-                <th key={h} className={`text-[#0694FB] text-[11px] font-medium uppercase tracking-wide bg-[#161616] border-b border-[#111] px-5 py-4 ${i === COLS.length - 1 ? "text-right" : ""}`}>
+                <th key={h} className={`text-[#ffffff] text-[13px] font-bold uppercase border-b bg-[#161616] p-4 border-[#111] ${i === COLS.length - 1 ? "text-right" : ""}`}>
                   {h}
                 </th>
               ))}
@@ -318,10 +339,10 @@ export default function JobsPage() {
           </thead>
           <tbody>
             {loading ? (
-              <SkeletonRows />
+              <LoadingRow />
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={COLS.length} className="py-16 text-center text-[#2a2a2a] text-sm font-mono">
+                <td colSpan={COLS.length} className="py-16 text-center text-[#6B6B6B] text-sm ">
                   {jobs.length === 0 ? "No jobs found" : "No jobs match the current filters"}
                 </td>
               </tr>

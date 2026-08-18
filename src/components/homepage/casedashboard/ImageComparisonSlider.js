@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { authFetch } from "../../../lib/api";
 
 /**
  * Draggable before/after comparison slider.
@@ -35,10 +36,7 @@ function ImageComparisonSlider({ originalSrc, overlaySrc, overlayLabel = "AI Ove
 
     (async () => {
       try {
-        const token = localStorage.getItem("token");
-        const res = await fetch(originalSrc, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
+        const res = await authFetch(originalSrc);
         if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
         const blob = await res.blob();
 

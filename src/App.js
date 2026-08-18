@@ -23,6 +23,7 @@ import CalendarPage from "./components/homepage/calendar/CalendarPage";
 import PatientDetailsPage from "./components/homepage/patientdetails/PatientDetailsPage";
 import SettingsPage from "./components/homepage/settings/SettingsPage";
 import JobsPage from "./components/homepage/jobs/JobsPage";
+import ReportsPage from "./components/homepage/casedashboard/reports/ReportsPage";
 import Appbar from "./components/homepage/appbar/appbar";
 import Sidebar from "./components/homepage/sidebar/Sidebar";
 
@@ -334,6 +335,17 @@ function App() {
                 <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
                   <Sidebar activePage="Jobs" />
                   <JobsPage />
+                </div>
+              </div>
+            </div>
+          } />
+          <Route path="/patient-reports" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="Patient Reports" />
+                  <ReportsPage />
                 </div>
               </div>
             </div>

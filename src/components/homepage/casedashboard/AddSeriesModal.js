@@ -6,7 +6,7 @@ import { renderDicomThumbnail, isDicomImage } from "../../../lib/dicomUtils";
 import { uid } from "../../../lib/uid";
 
 const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
-const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
+const labelCls = "text-[#6B6B6B] text-[12px] mb-1.5 block";
 
 // Renders a thumbnail for any image — uses canvas for DICOM, <img> for others
 function ImageThumb({ img }) {
@@ -58,7 +58,7 @@ function SeriesCard({ s, index, total, onUpdate, onRemove }) {
     <div className="bg-[#111] border border-[#1E1E1E] rounded-xl p-4 flex flex-col gap-3">
       {/* Row header */}
       <div className="flex items-center justify-between">
-        <span className="text-[#3a3a3a] text-[10px] font-mono uppercase tracking-wide">
+        <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">
           Series {String(index + 1).padStart(2, "0")}
         </span>
         {total > 1 && (
@@ -135,7 +135,7 @@ function SeriesCard({ s, index, total, onUpdate, onRemove }) {
           }`}
         >
           <FiUploadCloud size={18} color={dragging ? "#0694FB" : "#3a3a3a"} />
-          <p className={`text-[11px] m-0 transition-colors ${dragging ? "text-[#0694FB]" : "text-[#4a4a4a]"}`}>
+          <p className={`text-[13px] m-0 transition-colors ${dragging ? "text-[#0694FB]" : "text-[#4a4a4a]"}`}>
             Drop images here or <span className="text-[#0694FB]">browse</span>
           </p>
           {s.images?.length > 0 && (

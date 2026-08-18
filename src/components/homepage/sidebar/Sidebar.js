@@ -1,12 +1,13 @@
 import React from "react";
-import { FiHome, FiSettings, FiUser, FiCpu } from "react-icons/fi";
+import { HiHome, HiUsers, HiCpuChip, HiCog6Tooth, HiDocumentText } from "react-icons/hi2";
 import { useNavigate } from "react-router-dom";
 
 const menuItems = [
-  { name: "Home",     icon: <FiHome size={20} />,     path: "/dashboard" },
-  { name: "Cases",    icon: <FiUser size={20} />,     path: "/cases" },
-  { name: "Jobs",     icon: <FiCpu size={20} />,      path: "/jobs" },
-  { name: "Settings", icon: <FiSettings size={20} />, path: "/settings" },
+  { name: "Home",     icon: <HiHome size={20} />,      path: "/dashboard" },
+  { name: "Cases",    icon: <HiUsers size={20} />,     path: "/cases" },
+  { name: "Jobs",     icon: <HiCpuChip size={20} />,   path: "/jobs" },
+  { name: "Settings", icon: <HiCog6Tooth size={20} />, path: "/settings" },
+   { name: "Patient Reports", icon: <HiDocumentText size={20} />, path: "/patient-reports" },
 ];
 
 function Sidebar({ activePage = "Home" }) {
@@ -15,7 +16,7 @@ function Sidebar({ activePage = "Home" }) {
   return (
     <div className="w-[200px] h-full bg-[#0C0C0C] rounded-xl px-3 py-6 box-border flex flex-col gap-1 border-r border-[#1E1E1E] shrink-0">
       <div className="px-3 pb-4 border-b border-[#1E1E1E] mb-4">
-        <h2 className="text-white m-0 text-base font-medium">Dashboard</h2>
+      
       </div>
 
       {menuItems.map((item) => (
@@ -36,7 +37,7 @@ function Sidebar({ activePage = "Home" }) {
       ))}
 
       <div className="mt-auto pt-4 px-3 border-t border-[#1E1E1E] text-[#A0A0A0] text-[13px]">
-        © 2025 intelliDiag
+        © 2026 intelliDiag
       </div>
     </div>
   );

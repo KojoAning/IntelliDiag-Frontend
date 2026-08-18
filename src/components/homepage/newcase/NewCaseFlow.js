@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { authFetch } from "../../../lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiUploadCloud, FiX, FiCheck } from "react-icons/fi";
 import { uid } from "../../../lib/uid";
@@ -49,7 +50,7 @@ function StepIndicator({ current }) {
 
 // ─── Shared styles ─────────────────────────────────────────────────────────────
 const inputCls =
-  "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
+  "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors [&::-webkit-calendar-picker-indicator]:invert [&::-webkit-calendar-picker-indicator]:opacity-70 [&::-webkit-calendar-picker-indicator]:cursor-pointer";
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
 
 // ─── Step 1: Patient Info ──────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ function StepPatientInfo({ data, onChange }) {
       </div>
       <div>
         <label className={labelCls}>Date of Birth</label>
-        <input type="date" value={data.dob || ""} onChange={(e) => onChange("dob", e.target.value)} className={inputCls} />
+        <input type="date" value={data.dob || ""} onChange={(e) => onChange("dob", e.target.value)} className={inputCls } />
       </div>
       <div>
         <label className={labelCls}>Gender</label>
@@ -272,11 +273,7 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
 
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const headers = {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
+      const jsonHeaders = { "Content-Type": "application/json" };
 
       // ── 1. Create patient ──────────────────────────────────────────────────
       const patientBody = { full_name: patientInfo.fullName, gender: patientInfo.gender };
@@ -284,9 +281,9 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
       if (patientInfo.phone) patientBody.phone = patientInfo.phone;
       if (patientInfo.email) patientBody.email = patientInfo.email;
 
-      const patientRes = await fetch(`${baseURL}/patients/`, {
+      const patientRes = await authFetch(`${baseURL}/patients/`, {
         method: "POST",
-        headers,
+        headers: jsonHeaders,
         body: JSON.stringify(patientBody),
       });
       console.log(patientBody)
@@ -311,9 +308,9 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
         caseBody.appointment_datetime = new Date(caseDetails.appointmentDate).toISOString();
       if (caseDetails.notes) caseBody.notes = caseDetails.notes;
 
-      const caseRes = await fetch(`${baseURL}/cases/`, {
+      const caseRes = await authFetch(`${baseURL}/cases/`, {
         method: "POST",
-        headers,
+        headers: jsonHeaders,
         body: JSON.stringify(caseBody),
       });
       if (!caseRes.ok) {

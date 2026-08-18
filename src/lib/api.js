@@ -18,8 +18,7 @@ async function tryRefreshToken() {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) {
-        localStorage.removeItem("token");
-        localStorage.removeItem("refresh_token");
+        ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k));
         window.location.href = "/login";
         return false;
       }
@@ -28,8 +27,7 @@ async function tryRefreshToken() {
       localStorage.setItem("refresh_token", data.refresh_token);
       return true;
     } catch {
-      localStorage.removeItem("token");
-      localStorage.removeItem("refresh_token");
+      ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k));
       window.location.href = "/login";
       return false;
     } finally {
@@ -73,6 +71,34 @@ async function request(method, path, body) {
 
   const text = await res.text();
   return text ? JSON.parse(text) : null;
+}
+
+/**
+ * Drop-in replacement for `fetch()` that:
+ *   1. Injects the Bearer token from localStorage
+ *   2. On 401, attempts a token refresh and retries the request once
+ *   3. On refresh failure, clears tokens and redirects to /login
+ *
+ * Usage (same signature as fetch):
+ *   const res = await authFetch(url, { method: "POST", body: ... });
+ */
+export async function authFetch(url, options = {}) {
+  const token = localStorage.getItem("token");
+  const headers = new Headers(options.headers ?? {});
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  let res = await fetch(url, { ...options, headers });
+
+  if (res.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      const newToken = localStorage.getItem("token");
+      headers.set("Authorization", `Bearer ${newToken}`);
+      res = await fetch(url, { ...options, headers });
+    }
+  }
+
+  return res;
 }
 
 // ── Generic resource fetchers ─────────────────────────────────────────────────

@@ -11,7 +11,7 @@ import {
   FiArrowLeft, FiDownload, FiMaximize2,
   FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud, FiTrash2,
 } from "react-icons/fi";
-import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById, deleteStudy } from "../../../lib/api";
+import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById, deleteStudy, authFetch } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -41,6 +41,7 @@ const urgencyStyles = {
 
 const modalityColors = {
   MRI: "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
+  MR: "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
   "X-Ray": "text-[#22C55E] bg-[rgba(34,197,94,0.15)]",
   CT: "text-[#F59E0B] bg-[rgba(245,158,11,0.15)]",
   Ultrasound: "text-[#A855F7] bg-[rgba(168,85,247,0.15)]",
@@ -242,7 +243,7 @@ function DocumentsSection({ patientId }) {
             onClick={() => fileInputRef.current?.click()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium border-none cursor-pointer transition-colors whitespace-nowrap"
           >
-            <FiUploadCloud size={13} /> Upload
+          Upload
           </button>
           <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
         </div>
@@ -291,7 +292,7 @@ function DocumentsSection({ patientId }) {
       {/* Column headers */}
       <div className="grid grid-cols-[1fr_60px_130px_100px_32px] gap-3 px-3 pb-2 border-b border-[#1E1E1E]">
         {["Document", "Type", "Uploaded by", "Date", ""].map((h) => (
-          <p key={h} className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0">{h}</p>
+          <p key={h} className="text-[#ffffff] text-[13px] font-semibold uppercase  m-0">{h}</p>
         ))}
       </div>
 
@@ -317,7 +318,7 @@ function DocumentsSection({ patientId }) {
                 {doc.type}
               </div>
               <div className="min-w-0">
-                <p className="text-white text-[14px] m-0 truncate">{doc.name}</p>
+                <p className="text-white text-[15px] m-0 truncate">{doc.name}</p>
                 <div className="flex items-center gap-2 mt-0.5">
                   <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${categoryColors[doc.category] || "text-white bg-[#1a1a1a]"}`}>
                     {doc.category}
@@ -326,9 +327,9 @@ function DocumentsSection({ patientId }) {
                 </div>
               </div>
             </div>
-            <p className="text-[#6B6B6B] text-[12px] m-0">{doc.type}</p>
-            <p className="text-[#6B6B6B] text-[12px] m-0 truncate">{doc.uploadedBy}</p>
-            <p className="text-[#6B6B6B] text-[12px] m-0">{doc.date}</p>
+            <p className="text-[#6B6B6B] text-[15px]  m-0">{doc.type}</p>
+            <p className="text-[#6B6B6B] text-[15px] m-0 truncate   ">{doc.uploadedBy}</p>
+            <p className="text-[#6B6B6B] text-[15px] m-0   ">{doc.date}</p>
             <button
               onClick={async () => {
                 try {
@@ -343,7 +344,7 @@ function DocumentsSection({ patientId }) {
               }}
               className="opacity-0 group-hover:opacity-100 w-7 h-7 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent hover:bg-[#1a1a1a] cursor-pointer transition-all"
             >
-              <FiDownload size={12} color="#6B6B6B" />
+              <FiDownload size={12} color="#22C55E" />
             </button>
           </div>
         ))}
@@ -515,6 +516,7 @@ function PatientDetailsPage() {
       .finally(() => setPatientLoading(false));
   }, [id, state?.patient]);
 
+  const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, label }
   const [activeStudy, setActiveStudy] = useState(null);
   const [addStudyOpen, setAddStudyOpen] = useState(false);
   const [importStudyOpen, setImportStudyOpen] = useState(false);
@@ -532,10 +534,7 @@ function PatientDetailsPage() {
     setStudiesLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${baseURL}/imaging-studies/?limit=100`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authFetch(`${baseURL}/imaging-studies/?limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       console.log(data)
@@ -564,10 +563,7 @@ function PatientDetailsPage() {
     setReportsLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${baseURL}/reports/case/${caseId}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authFetch(`${baseURL}/reports/case/${caseId}`);
       if (!res.ok) return;
       setReports(await res.json());
     } catch (_) {}
@@ -579,11 +575,7 @@ function PatientDetailsPage() {
   const deleteReport = async (reportId) => {
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      await fetch(`${baseURL}/reports/${reportId}`, {
-        method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      await authFetch(`${baseURL}/reports/${reportId}`, { method: "DELETE" });
       setReports((prev) => prev.filter((r) => r.id !== reportId));
     } catch (_) {}
   };
@@ -683,10 +675,10 @@ function PatientDetailsPage() {
                       </button>
                       <button
                         onClick={() => setImportStudyOpen(true)}
-                        className="flex items-center gap-1.5 border border-[#0694FB] text-[#0694FB] hover:bg-[rgba(6,148,251,0.08)] text-[13px] px-4 py-[8px] rounded-full bg-transparent cursor-pointer transition-colors duration-200 whitespace-nowrap"
-                        title="Import a study from DICOM files — studies and series are detected automatically"
+                       className="bg-[#06fb74] hover:bg-[#00ce6e] text-black text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap"
+                      title="Import a study from DICOM files — studies and series are detected automatically"
                       >
-                        <FiUploadCloud size={14} /> Import DICOM
+                       Import DICOM
                       </button>
                       <button
                         onClick={() => setAddStudyOpen(true)}
@@ -717,18 +709,15 @@ function PatientDetailsPage() {
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            if (!window.confirm(`Delete study "${scan.label}"? This cannot be undone.`)) return;
-                            deleteStudy(scan.id)
-                              .then(() => setStudies(prev => prev.filter(s => s.id !== scan.id)))
-                              .catch(err => alert(`Failed to delete: ${err.message}`));
+                            setDeleteConfirm({ id: scan.id, label: scan.label });
                           }}
                           title="Delete study"
                           className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg border-none cursor-pointer text-[#555] hover:text-[#FF4A4A] hover:bg-[rgba(255,74,74,0.1)] transition-all duration-200"
                           style={{ background: "rgba(255,255,255,0.07)" }}
                         >
-                          <FiTrash2 size={13} />
+                          <FiTrash2 size={16} />
                         </button>
-                        <img src="/folder.png" alt="folder" className="w-20 h-20 object-contain self-start group-hover:scale-105 transition-transform duration-200" />
+                        <img src="/folder.png" alt="folder" className="w-16 h-16 object-contain self-start group-hover:scale-105 transition-transform duration-200" />
                         <div className="w-full">
                           <div className="flex gap-1.5 flex-wrap">
                             <span className={`text-[12px] font-normal px-1.5 py-0.5 rounded ${modalityColors[scan.modality]}`}>{scan.modality}</span>
@@ -806,6 +795,68 @@ function PatientDetailsPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Delete study confirmation ── */}
+      <AnimatePresence>
+        {deleteConfirm && (
+          <motion.div
+            className="fixed inset-0 z-[1000] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setDeleteConfirm(null)}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border gap-5 border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between px-7 pt-7">
+                <div>
+                  <div className="flex flex-row gap-2">
+                    <FiTrash2 size={20} className="text-red-400 shrink-0 mt-0.5" />
+                    <h2 className="text-white text-[17px] font-medium m-0">Delete Study?</h2>
+                  </div>
+                  
+                </div>
+                <button onClick={() => setDeleteConfirm(null)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                  <FiX size={18} />
+                </button>
+              </div>
+              <p className="px-7 text-[#6B6B6B] text-[14px] m-0 mt-0">
+                    <span className="text-white">"{deleteConfirm.label}"</span> will be permanently deleted. This cannot be undone.
+                  </p>
+              {/* Footer */}
+              <div className="px-7 pb-6 flex flex-row gap-2">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 py-2.5 rounded-full bg-transparent hover:bg-[#1E1E1E] text-[#6B6B6B] text-[13px] font-medium   cursor-pointer transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const { id } = deleteConfirm;
+                    setDeleteConfirm(null);
+                    deleteStudy(id)
+                      .then(() => setStudies(prev => prev.filter(s => s.id !== id)))
+                      .catch(err => alert(`Failed to delete: ${err.message}`));
+                  }}
+                  className="flex-1 py-2.5 rounded-full bg-red-500/20 hover:bg-red-500/30 text-red-400 text-[13px] font-medium bordercursor-pointer transition-colors"
+                >
+                  Delete Study
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AddStudyModal isOpen={addStudyOpen} onClose={() => setAddStudyOpen(false)} caseId={caseId} onCreated={fetchStudies} />
       <ImportStudyModal isOpen={importStudyOpen} onClose={() => setImportStudyOpen(false)} caseId={caseId} onCreated={fetchStudies} />

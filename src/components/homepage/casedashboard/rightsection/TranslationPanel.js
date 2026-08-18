@@ -42,14 +42,14 @@ function TranslationPanel({ onTranslate }) {
               }}
               className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all duration-150 bg-transparent ${
                 isSelected
-                  ? "border-[#1E1E1E] bg-[rgba(59,130,246,0.08)]"
-                  : "border-[#1E1E1E] hover:border-[#2a2a2a]"
+                  ? "border-none bg-[#A855F7]/10"
+                  : "border-none hover:border-[#2a2a2a]"
               }`}
             >
               {/* Checkbox */}
-              <span className={`flex-shrink-0 w-4 h-4 rounded border-2 flex items-center justify-center transition-all duration-150 ${
+              <span className={`flex-shrink-0 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all duration-150 ${
                 isSelected
-                  ? "border-[#1E1E1E] bg-[#3B82F6]"
+                  ? "border-[#1E1E1E] bg-[#A855F7]"
                   : "border-[#3a3a3a] bg-transparent"
               }`}>
                 {isSelected && (
@@ -58,11 +58,11 @@ function TranslationPanel({ onTranslate }) {
                   </svg>
                 )}
               </span>
-              <span className={`text-[13px] font-semibold font-mono ${isSelected ? "text-[#3B82F6]" : "text-white/70"}`}>
+              <span className={`text-[13px] font-semibold ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>
                 {pair.from}
               </span>
-              <FiArrowRight size={13} className={isSelected ? "text-[#3B82F6]" : "text-[#3a3a3a]"} />
-              <span className={`text-[13px] font-semibold font-mono ${isSelected ? "text-[#3B82F6]" : "text-white/70"}`}>
+              <FiArrowRight size={13} className={isSelected ? "text-[#A855F7]" : "text-[#3a3a3a]"} />
+              <span className={`text-[13px] font-semibold  ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>
                 {pair.to}
               </span>
             </button>

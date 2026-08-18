@@ -60,7 +60,7 @@ let instanceCounter = 0;
  *   getProperties() → object
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, onIndexChange, onArrowTextRequest },
+  { imageIds = [], activeTool = null, onIndexChange, onArrowTextRequest, onCameraChanged },
   ref
 ) {
   const divRef = useRef(null);
@@ -68,6 +68,8 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
   arrowTextCbRef.current = onArrowTextRequest;
   const onIndexChangeCbRef = useRef(onIndexChange);
   onIndexChangeCbRef.current = onIndexChange;
+  const onCameraChangedCbRef = useRef(onCameraChanged);
+  onCameraChangedCbRef.current = onCameraChanged;
 
   // Everything stateful about this viewport lives here so we can access it
   // from imperative handles and effects without stale closures.
@@ -259,14 +261,45 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
 
       ctx.current.ready = true;
 
-      // Fire onIndexChange whenever Cornerstone finishes rendering a frame —
-      // this covers StackScrollTool (mouse wheel) which never calls back into React.
+      // Fire onIndexChange + onCameraChanged whenever Cornerstone finishes rendering a frame
       let lastIndex = -1;
       const onRendered = () => {
-        const idx = ctx.current.viewport?.getCurrentImageIdIndex?.() ?? -1;
+        const vp = ctx.current.viewport;
+        if (!vp) return;
+
+        const idx = vp.getCurrentImageIdIndex?.() ?? -1;
         if (idx !== lastIndex && idx >= 0) {
           lastIndex = idx;
           onIndexChangeCbRef.current?.(idx);
+        }
+
+        // Compute the mask transform so the overlay stays aligned with the DICOM image
+        if (onCameraChangedCbRef.current) {
+          try {
+            const cam = vp.getCamera();
+            const zoom = ctx.current.baseScale / (cam.parallelScale ?? ctx.current.baseScale);
+            const { rotation = 0, invert: _i } = vp.getProperties();
+            const el = divRef.current;
+            const cw = el?.clientWidth ?? 1;
+            const ch = el?.clientHeight ?? 1;
+
+            let panX = 0, panY = 0;
+            const imgCenter = ctx.current.imageCenterWorld;
+            if (imgCenter) {
+              const ic = vp.worldToCanvas(imgCenter);
+              panX = ic[0] - cw / 2;
+              panY = ic[1] - ch / 2;
+            }
+
+            onCameraChangedCbRef.current({
+              zoom,
+              panX,
+              panY,
+              rotation,
+              flipH: cam.flipHorizontal ?? false,
+              flipV: cam.flipVertical   ?? false,
+            });
+          } catch (_) {}
         }
       };
       divRef.current?.addEventListener(Enums.Events.IMAGE_RENDERED, onRendered);
@@ -278,8 +311,10 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         // this, 16-bit signed pixels map to black until the user drags W/L.
         try { viewport.resetProperties(); } catch (_) {}
         viewport.render();
-        // Store base parallelScale for zoom calculation
-        ctx.current.baseScale = viewport.getCamera().parallelScale ?? 1;
+        // Store base parallelScale for zoom calculation and image center for mask alignment
+        const initCam = viewport.getCamera();
+        ctx.current.baseScale = initCam.parallelScale ?? 1;
+        ctx.current.imageCenterWorld = initCam.focalPoint ? [...initCam.focalPoint] : null;
         // Now safe to enable scroll
         toolGroup.setToolActive(StackScrollTool.toolName, {
           bindings: [{ mouseButton: MouseBindings.Wheel }],
@@ -307,11 +342,17 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
 
     const ro = new ResizeObserver(() => {
       const engine = ctx.current.engine;
-      if (!engine) return;
+      const vp = ctx.current.viewport;
+      if (!engine || !vp) return;
       try {
-        // resize(immediate, resetPanZoom) — false keeps current pan/zoom/rotation
         engine.resize(true, false);
-        ctx.current.viewport?.render();
+        // Re-fit the image to the new container size so the mask stays aligned.
+        // This resets user pan/zoom on resize, which is acceptable for split-screen transitions.
+        vp.resetCamera();
+        vp.render();
+        const cam = vp.getCamera();
+        ctx.current.baseScale = cam.parallelScale ?? 1;
+        ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
       } catch (_) {}
     });
 
@@ -327,7 +368,9 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       .then(() => {
         try { vp.resetProperties(); } catch (_) {}
         vp.render();
-        ctx.current.baseScale = vp.getCamera().parallelScale ?? 1;
+        const updatedCam = vp.getCamera();
+        ctx.current.baseScale = updatedCam.parallelScale ?? 1;
+        ctx.current.imageCenterWorld = updatedCam.focalPoint ? [...updatedCam.focalPoint] : null;
         // Enable stack scroll now that the stack is populated
         const tg = ctx.current.toolGroup;
         if (tg) {

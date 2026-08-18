@@ -81,7 +81,8 @@ function WorkspaceViewer() {
       try {
         const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
         if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-        const results = await res.json();
+        const { url } = await res.json();
+        const results = await fetch(url).then(r => r.json());
         if (cancelled) return;
         updateCtx(pollModelId, { inferenceResult: results, aiResponse: buildSummary(results), jobStatus: "completed" });
       } catch {
@@ -860,7 +861,7 @@ function WorkspaceViewer() {
                     </button>
                   </div>
                 </div>
-                
+
 
               </div>
               <div className="flex flex-col flex-1 overflow-y-auto px-7 pb-4" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>

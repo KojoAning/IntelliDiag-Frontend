@@ -1,22 +1,44 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  FiUsers, FiBriefcase, FiLayers, FiAlertTriangle,
-  FiClock, FiUploadCloud, FiFileText, FiCalendar,
-  FiUserPlus, FiPlusCircle, FiChevronRight,
+  FiClock, FiChevronRight, FiCheck, FiLoader, FiAlertTriangle,
 } from "react-icons/fi";
-import { getPatients, getCases, getStudies, getDicomImages, getReports } from "../../../lib/api";
+import { HiUsers, HiBriefcase, HiClock, HiExclamationTriangle } from "react-icons/hi2";
+import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs } from "../../../lib/api";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtDuration(ms) {
+  if (ms <= 0) return "—";
+  const mins = Math.floor(ms / 60000);
+  const hours = Math.floor(ms / 3600000);
+  const days = Math.floor(ms / 86400000);
+  if (days > 0) return `${days}d ${hours % 24}h`;
+  if (hours > 0) return `${hours}h ${mins % 60}m`;
+  return `${mins}m`;
+}
+
+function calcTAT(startStr, endStr) {
+  if (!startStr || !endStr) return "—";
+  const diffMs = new Date(endStr).getTime() - new Date(startStr).getTime();
+  return fmtDuration(diffMs);
+}
+
+function calcTimeLeft(endStr) {
+  if (!endStr) return "—";
+  const diffMs = new Date(endStr).getTime() - Date.now();
+  if (diffMs <= 0) return "overdue";
+  return `${fmtDuration(diffMs)} left`;
+}
 
 function timeAgo(dateStr) {
   if (!dateStr) return "";
   const diff = Date.now() - new Date(dateStr).getTime();
-  const mins  = Math.floor(diff / 60000);
+  const mins = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
-  const days  = Math.floor(diff / 86400000);
-  if (mins  < 60)  return `${mins}m ago`;
-  if (hours < 24)  return `${hours}h ago`;
+  const days = Math.floor(diff / 86400000);
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
   return `${days}d ago`;
 }
 
@@ -36,15 +58,15 @@ const todayDate = new Date().toLocaleDateString("en-US", {
 
 function StatCard({ icon, label, value, color, loading }) {
   return (
-    <div className="flex-1 bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-3 min-w-0">
+    <div className="flex-1 bg-[#161616] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-3 min-w-0">
       <div className="flex items-center justify-between">
-        <span className="text-[#3a3a3a] text-xs font-medium uppercase tracking-wide">{label}</span>
-        <div className={`w-8 h-8 rounded-xl flex items-center justify-center`} style={{ background: `${color}18` }}>
-          {React.cloneElement(icon, { size: 15, color })}
+        <span className="py-1  rounded-full text-[15px] font-semibold  tracking-wide" style={{  color:"#FFFFFF" }}>{label}</span>
+        <div className={`w-8 h-8 rounded-xl flex items-center justify-center`} >
+          {React.cloneElement(icon, { size: 20, color })}
         </div>
       </div>
-      <p className="m-0 text-white text-[28px] font-semibold leading-none">
-        {loading ? <span className="text-[#2a2a2a]">—</span> : value}
+      <p className="m-0 text-white text-[40px] font-normal leading-none">
+        {loading ? <span className="text-[#ffffff]">—</span> : value}
       </p>
     </div>
   );
@@ -63,18 +85,117 @@ function EmptyRow({ text }) {
   return <p className="text-[#2a2a2a] text-xs font-mono py-2 m-0">{text}</p>;
 }
 
-function ActivityRow({ primary, secondary, time, onClick }) {
+function ActivityTable({ headers, children }) {
   return (
-    <button
+    <table className="w-full border-collapse text-left">
+      <thead>
+        <tr>
+          {headers.map((h, i) => (
+            <th key={i} className={`text-[#ffffff] text-[13px] font-bold uppercase   border-b bg-[#161616] p-4 border-[#111] ${i === headers.length - 1 ? "text-right" : ""}`}>
+              {h}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>{children}</tbody>
+    </table>
+  );
+}
+
+const SEVERITY_STYLES = {
+  high:   "bg-[#32161E] text-red-400 border border-red-500/20",
+  medium: "bg-[#312A17] text-amber-400 border border-amber-500/20",
+  low:    "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+};
+
+const STATUS_STYLES = {
+  running:   "bg-[#0694FB]/10 text-[#0694FB] border border-[#0694FB]/20",
+  pending:   "bg-amber-500/10 text-amber-400 border border-amber-500/20",
+  queued:    "bg-amber-500/10 text-amber-400 border border-amber-500/20",
+  completed: "bg-[#192E21] text-emerald-400 border border-emerald-500/20",
+  failed:    "bg-[#32161E] text-red-400 border border-red-500/20",
+  closed:    "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
+  archived:  "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
+  cancelled: "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
+};
+
+const STATUS_ICONS = {
+  running:   <FiLoader size={11} className="animate-spin" />,
+  pending:   <FiClock size={11} />,
+  queued:    <FiClock size={11} />,
+  completed: <FiCheck size={11} />,
+  failed:    <FiAlertTriangle size={11} />,
+};
+
+function Badge({ label, styleMap }) {
+  if (!label) return <span className="text-[#2a2a2a] text-[11px] font-mono">—</span>;
+  const key = label.toLowerCase();
+  const cls = styleMap?.[key] ?? "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]";
+  const icon = STATUS_ICONS[key];
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-full capitalize ${cls}`}>
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+function ActivityRow({ primary, age, gender, details, modelName, modelType, modality, severity, status, tat, onClick }) {
+  return (
+    <tr
       onClick={onClick}
-      className="w-full flex items-center justify-between py-2.5 px-0 bg-transparent border-none cursor-pointer group border-b border-[#111] last:border-0"
+      className="group px-0 cursor-pointer border-b border-[#111] last:border-0 hover:bg-white/[0.02] transition-colors"
     >
-      <div className="flex flex-col items-start gap-0.5 min-w-0">
-        <span className="text-white/80 text-[13px] truncate max-w-[260px] group-hover:text-white transition-colors">{primary}</span>
-        {secondary && <span className="text-[#3a3a3a] text-[11px] font-mono">{secondary}</span>}
-      </div>
-      <span className="text-[#3a3a3a] text-[11px] font-mono shrink-0 ml-3">{time}</span>
-    </button>
+      {/* Patient */}
+      <td className="py-5 px-4 max-w-0 w-[20%]">
+        <span className="text-white text-[14px] group-hover:text-white transition-colors block truncate">
+          {primary}
+          {(age || gender) && (
+            <span className="ml-2 text-white/40">[{[age, gender].filter(Boolean).join("/")}]</span>
+          )}
+        </span>
+        {details && <span className="text-[#3a3a3a] text-[11px] block truncate mt-0.5">{details}</span>}
+      </td>
+
+      {/* Details */}
+      <td className="py-5 px-4 max-w-0 w-[22%]">
+        <span className="text-white/80 text-[14px] block truncate">{details || "—"}</span>
+        {modelType && <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{modelType}</span>}
+      </td>
+
+      {/* Model */}
+      <td className="py-5 px-4 max-w-0 w-[18%]">
+        {modelName
+          ? <span className="text-white/80 text-[13px] block truncate">{modelName}</span>
+          : <span className="text-[#2a2a2a] text-[13px]">—</span>
+        }
+      </td>
+
+      {/* Modality */}
+      <td className="py-5 px-4 whitespace-nowrap">
+        {modality
+          ? <span className="text-white/80 text-[14px] uppercase">{modality}</span>
+          : <span className="text-[#2a2a2a] text-[14px]">—</span>
+        }
+      </td>
+
+      {/* Severity */}
+      <td className="py-5 px-4 whitespace-nowrap">
+        <Badge label={severity} styleMap={SEVERITY_STYLES} />
+      </td>
+
+      {/* Status */}
+      <td className="py-5 px-4 whitespace-nowrap">
+        <Badge label={status} styleMap={STATUS_STYLES} />
+      </td>
+
+      {/* TAT */}
+      <td className="py-5 pr-6 text-right whitespace-nowrap px-3">
+        <span className={`text-[12px] ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
+          <div className="flex flex-row gap-2 items-center justify-end"><HiClock size={14} />{tat || "—"}</div>
+        </span>
+      </td>
+    </tr>
   );
 }
 
@@ -101,11 +222,10 @@ function QuickAction({ icon, label, onClick, primary }) {
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-medium border cursor-pointer transition-all duration-200 ${
-        primary
-          ? "bg-[#0694FB] border-[#0694FB] text-white hover:bg-[#0578d1]"
-          : "bg-transparent border-[#1E1E1E] text-[#6B6B6B] hover:border-[#2a2a2a] hover:text-white"
-      }`}
+      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-medium border cursor-pointer transition-all duration-200 ${primary
+        ? "bg-[#0694FB] border-[#0694FB] text-white hover:bg-[#0578d1]"
+        : "bg-transparent border-[#1E1E1E] text-[#6B6B6B] hover:border-[#2a2a2a] hover:text-white"
+        }`}
     >
       {icon}
       {label}
@@ -120,12 +240,14 @@ function Display() {
   const name = localStorage.getItem("name") || "Doctor";
 
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ patients: 0, openCases: 0, studies: 0, flagged: 0 });
-  const [recentCases, setRecentCases]   = useState([]);
+  const [stats, setStats] = useState({ patients: 0, openCases: 0, tat: 0, flagged: 0 });
+  const [recentJobs, setRecentJobs] = useState([]);
+  const [modalityFilter, setModalityFilter] = useState("All");
+  const [severityFilter, setSeverityFilter] = useState("All");
   const [recentStudies, setRecentStudies] = useState([]);
   const [upcomingAppts, setUpcomingAppts] = useState([]);
   const [pendingDicoms, setPendingDicoms] = useState([]);
-  const [draftReports, setDraftReports]   = useState([]);
+  const [draftReports, setDraftReports] = useState([]);
 
   useEffect(() => {
     Promise.allSettled([
@@ -134,37 +256,40 @@ function Display() {
       getStudies("?limit=100"),
       getDicomImages("?status=pending&limit=10"),
       getReports("?status=draft&limit=10"),
-    ]).then(([pRes, cRes, sRes, dRes, rRes]) => {
+      getRecentJobs(),
+    ]).then(([pRes, cRes, sRes, dRes, rRes, jRes]) => {
       const patients = pRes.status === "fulfilled" ? (pRes.value ?? []) : [];
-      const cases    = cRes.status === "fulfilled" ? (cRes.value ?? []) : [];
-      const studies  = sRes.status === "fulfilled" ? (sRes.value ?? []) : [];
-      const dicoms   = dRes.status === "fulfilled" ? (dRes.value ?? []) : [];
-      const reports  = rRes.status === "fulfilled" ? (rRes.value ?? []) : [];
+      const cases = cRes.status === "fulfilled" ? (cRes.value ?? []) : [];
+      const studies = sRes.status === "fulfilled" ? (sRes.value ?? []) : [];
+      const dicoms = dRes.status === "fulfilled" ? (dRes.value ?? []) : [];
+      const reports = rRes.status === "fulfilled" ? (rRes.value ?? []) : [];
+      const jobs = jRes.status === "fulfilled" ? (jRes.value ?? []) : [];
 
       const openCases = cases.filter(c =>
-        !["closed","completed","archived"].includes((c.status || "").toLowerCase())
+        !["closed", "completed", "archived"].includes((c.status || "").toLowerCase())
       );
 
+      const completedWithTAT = jobs.filter(j =>
+        (j.status || "").toLowerCase() === "completed" && j.created_at && j.estimated_completion
+      );
+      const avgTatMs = completedWithTAT.length
+        ? completedWithTAT.reduce((sum, j) =>
+            sum + (new Date(j.estimated_completion).getTime() - new Date(j.created_at).getTime()), 0
+          ) / completedWithTAT.length
+        : 0;
+
       setStats({
-        patients:  patients.length,
+        patients: patients.length,
         openCases: openCases.length,
-        studies:   studies.length,
-        flagged:   studies.filter(s => s.flagged).length,
+        tat: avgTatMs > 0 ? fmtDuration(avgTatMs) : "—",
+        flagged: studies.filter(s => s.flagged).length,
       });
 
-      const now = new Date();
-      const sorted = [...cases].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-      setRecentCases(sorted.slice(0, 8));
+      setRecentJobs(jobs);
 
       const sortedStudies = [...studies].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
       setRecentStudies(sortedStudies.slice(0, 4));
 
-      setUpcomingAppts(
-        cases
-          .filter(c => c.appointment_datetime && new Date(c.appointment_datetime) > now)
-          .sort((a, b) => new Date(a.appointment_datetime) - new Date(b.appointment_datetime))
-          .slice(0, 4)
-      );
       setPendingDicoms(dicoms.slice(0, 4));
       setDraftReports(reports.slice(0, 3));
       setLoading(false);
@@ -179,159 +304,155 @@ function Display() {
       {/* ── Top: Greeting + Quick Actions ── */}
       <div className="flex items-start justify-between shrink-0">
         <div>
-          <p className="m-0 text-[#3a3a3a] text-sm">{todayDate}</p>
-          <h1 className="m-0 text-white text-[32px] font-medium leading-tight mt-1">
+         
+          <h1 className="m-0 text-white text-[39px] font-medium leading-tight mt-1">
             Hello, <span className="text-[#0694FB]">{name}</span>
           </h1>
-          <p className="m-0 text-[#3a3a3a] text-sm mt-1">Here's what's happening today.</p>
+          <p className="m-0 text-[#a1a0a0] text-[17px] mt-1">Here's what's happening today.</p>
+          <p className="m-0 text-white text-[17px">{todayDate}</p>
         </div>
 
-        <div className="flex items-center gap-2 mt-1">
-          <QuickAction
-            icon={<FiUserPlus size={13} />}
-            label="New Patient"
-            onClick={() => navigate("/patients/new")}
-          />
-          <QuickAction
-            icon={<FiPlusCircle size={13} />}
-            label="Create Case"
-            onClick={() => navigate("/new-case")}
-            primary
-          />
-          <QuickAction
-            icon={<FiUploadCloud size={13} />}
-            label="Upload Study"
-            onClick={() => navigate("/cases")}
-          />
-        </div>
+        
       </div>
 
       {/* ── Stat Cards ── */}
-      <div className="flex gap-4 shrink-0">
-        <StatCard icon={<FiUsers />}         label="Total Patients"   value={stats.patients}  color="#0694FB" loading={loading} />
-        <StatCard icon={<FiBriefcase />}     label="Open Cases"       value={stats.openCases} color="#F59E0B" loading={loading} />
-        <StatCard icon={<FiLayers />}        label="Imaging Studies"  value={stats.studies}   color="#A855F7" loading={loading} />
-        <StatCard icon={<FiAlertTriangle />} label="Flagged Studies"  value={stats.flagged}   color="#FF6B35" loading={loading} />
+      <div className="flex gap-4 shrink-0 mb-4">
+        <StatCard icon={<HiUsers />} label="Total Patients" value={stats.patients} color="#0694FB" loading={loading} />
+        <StatCard icon={<HiBriefcase />} label="Open Cases" value={stats.openCases} color="#F59E0B" loading={loading} />
+        <StatCard icon={<HiClock />} label="Average TAT" value={stats.tat} color="#A855F7" loading={loading} />
+        <StatCard icon={<HiExclamationTriangle />} label="Flagged Studies" value={stats.flagged} color="#FF6B35" loading={loading} />
       </div>
 
-      {/* ── Bottom: Activity + Pending ── */}
-      <div className="flex gap-4 flex-1 min-h-0">
-
-        {/* Recent Activity */}
-        <div className="flex-[3] bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col min-h-0 overflow-hidden">
-          <SectionLabel>Recent Cases</SectionLabel>
-          <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
-            {loading
-              ? Array.from({ length: 5 }).map((_, i) => (
-                  <div key={i} className="h-10 bg-[#111] rounded-lg mb-2 animate-pulse" />
-                ))
-              : recentCases.length === 0
-                ? <EmptyRow text="No cases yet" />
-                : recentCases.map(c => (
-                    <ActivityRow
-                      key={c.id}
-                      primary={c.patient?.full_name || "Unknown Patient"}
-                      secondary={[c.urgency, c.reason].filter(Boolean).join(" · ")}
-                      time={timeAgo(c.created_at)}
-                      onClick={() => navigate("/cases")}
-                    />
-                  ))
-            }
-
-            {!loading && recentStudies.length > 0 && (
-              <>
-                <SectionLabel>Recent Studies</SectionLabel>
-                {recentStudies.map(s => (
-                  <ActivityRow
-                    key={s.id}
-                    primary={s.name || s.description || "Unnamed Study"}
-                    secondary={s.modality || ""}
-                    time={timeAgo(s.created_at)}
-                    onClick={() => navigate("/cases")}
-                  />
-                ))}
-              </>
-            )}
-          </div>
-
-          <button
-            onClick={() => navigate("/cases")}
-            className="mt-3 flex items-center gap-1 text-[#0694FB] text-[12px] bg-transparent border-none cursor-pointer hover:underline p-0 self-start"
-          >
-            View all cases <FiChevronRight size={12} />
-          </button>
-        </div>
-
-        {/* Pending Items */}
-        <div className="flex-[2] bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 min-h-0 overflow-y-auto"
-          style={{ scrollbarWidth: "none" }}
-        >
-          {/* Upcoming Appointments */}
+      {/* ── Recent Jobs ── */}
+      <div className="flex flex-col gap-2 shrink-0 mb-4">
+        <div className="flex items-center justify-between">
           <div>
-            <SectionLabel>Upcoming Appointments</SectionLabel>
-            {loading
-              ? <div className="h-8 bg-[#111] rounded-lg animate-pulse" />
-              : upcomingAppts.length === 0
-                ? <EmptyRow text="No upcoming appointments" />
-                : upcomingAppts.map(c => (
-                    <PendingRow
-                      key={c.id}
-                      icon={<FiCalendar size={12} color="#0694FB" />}
-                      primary={c.patient?.full_name || "Unknown"}
-                      secondary={fmtAppt(c.appointment_datetime)}
-                      tag={c.urgency}
-                      tagColor={
-                        c.urgency === "Emergency" ? "text-[#FF4A4A] bg-[rgba(255,74,74,0.1)]" :
-                        c.urgency === "Immediate" ? "text-[#FF6B35] bg-[rgba(255,107,53,0.1)]" :
-                        "text-[#3a3a3a] bg-[#111]"
+            <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">Recent Jobs</h2>
+            <p className="m-0 text-[#999999] text-[14px] mt-0">Latest AI inference jobs across all series</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Modality filter */}
+            <div className="relative">
+              <select
+                value={modalityFilter}
+                onChange={e => setModalityFilter(e.target.value)}
+                className="appearance-none bg-[#0C0C0C] border border-[#1E1E1E] text-[#FFFFFF] text-[14px] rounded-lg pl-3 pr-7 py-1.5 cursor-pointer focus:outline-none"
+              >
+                <option style={{ background: "#111", color: "#fff" }} value="All">All Modality</option>
+                <option style={{ background: "#111", color: "#fff" }} value="CT">CT</option>
+                <option style={{ background: "#111", color: "#fff" }} value="MRI">MRI</option>
+                <option style={{ background: "#111", color: "#fff" }} value="PET">PET</option>
+                <option style={{ background: "#111", color: "#fff" }} value="XRAY">X-Ray</option>
+                <option style={{ background: "#111", color: "#fff" }} value="US">Ultrasound</option>
+              </select>
+              <FiChevronRight size={11} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#FFFFFF] pointer-events-none rotate-90" />
+            </div>
+
+            {/* Severity filter */}
+            <div className="relative">
+              <select
+                value={severityFilter}
+                onChange={e => setSeverityFilter(e.target.value)}
+                className="appearance-none  bg-[#0C0C0C] border border-[#1E1E1E] text-[#FFFFFF] text-[14px] rounded-lg pl-3 pr-7 py-1.5 cursor-pointer focus:outline-none"
+              >
+                <option style={{ background: "#111", color: "#fff" }} value="All">All Severity</option>
+                <option style={{ background: "#111", color: "#fff" }} value="high">High</option>
+                <option style={{ background: "#111", color: "#fff" }} value="medium">Medium</option>
+                <option style={{ background: "#111", color: "#fff" }} value="low">Low</option>
+              </select>
+              <FiChevronRight size={11} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#FFFFFF] pointer-events-none rotate-90" />
+            </div>
+
+            <button
+              onClick={() => navigate("/jobs")}
+              className="flex items-center gap-1 text-[#0694FB] text-[12px] bg-transparent border-none cursor-pointer hover:underline p-0 ml-2"
+            >
+              View all <FiChevronRight size={12} />
+            </button>
+          </div>
+        </div>
+        <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl overflow-hidden">
+          {loading
+            ? (
+              <div className="flex flex-col items-center justify-center py-24 gap-3">
+                <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+                <p className="text-[#3a3a3a] text-[13px] m-0">Loading jobs…</p>
+              </div>
+            )
+            : recentJobs.length === 0
+              ? <div className="p-5"><EmptyRow text="No jobs yet" /></div>
+              : (() => {
+                  const filtered = recentJobs.filter(j => {
+                    const mod = (j.modality || "").toUpperCase();
+                    const sev = (j.severity || "").toLowerCase();
+                    if (modalityFilter !== "All" && mod !== modalityFilter) return false;
+                    if (severityFilter !== "All" && sev !== severityFilter) return false;
+                    return true;
+                  });
+                  return (
+                    <ActivityTable headers={["Patient Name", "Details", "Model", "Modality", "Severity", "Status", "TAT"]}>
+                      {filtered.length === 0
+                        ? (
+                          <tr>
+                            <td colSpan={7} className="py-10 text-center text-[#5e5e5e] text-[14px]">
+                              No jobs found for this search
+                            </td>
+                          </tr>
+                        )
+                        : filtered.map(j => (
+                          <ActivityRow
+                            key={j.job_id}
+                            primary={j.patient_name || "Unknown"}
+                            age={j.patient_age}
+                            gender={j.patient_gender}
+                            details={j.case_title || ""}
+                            modelName={j.model_name || ""}
+                            modelType={j.model_type || ""}
+                            modality={j.modality || ""}
+                            severity={j.severity || j.case_urgency || ""}
+                            status={j.status || ""}
+                            tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
+                            onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study" }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
+                          />
+                        ))
                       }
-                    />
-                  ))
-            }
-          </div>
+                    </ActivityTable>
+                  );
+                })()
+          }
+        </div>
+      </div>
 
-          {/* Pending DICOM uploads */}
-          <div>
-            <SectionLabel>Pending Uploads</SectionLabel>
-            {loading
-              ? <div className="h-8 bg-[#111] rounded-lg animate-pulse" />
-              : pendingDicoms.length === 0
-                ? <EmptyRow text="No pending uploads" />
-                : pendingDicoms.map(d => (
-                    <PendingRow
-                      key={d.id}
-                      icon={<FiUploadCloud size={12} color="#F59E0B" />}
-                      primary={d.filename || d.name || "Unknown file"}
-                      secondary={d.series?.name || ""}
-                      tag="pending"
-                      tagColor="text-[#F59E0B] bg-[rgba(245,158,11,0.1)]"
-                    />
-                  ))
-            }
+      {/* ── Recent Studies ── */}
+      {/* {!loading && recentStudies.length > 0 && (
+        <div className="flex flex-col gap-2 shrink-0">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="m-0 text-white font-medium text-[16px]">Recent Studies</h2>
+              <p className="m-0 text-[#3a3a3a] text-[11px] mt-0.5">Imaging studies uploaded across all cases</p>
+            </div>
+            <button
+              onClick={() => navigate("/cases")}
+              className="flex items-center gap-1 text-[#0694FB] text-[12px] bg-transparent border-none cursor-pointer hover:underline p-0"
+            >
+              View all <FiChevronRight size={12} />
+            </button>
           </div>
-
-          {/* Draft Reports */}
-          <div>
-            <SectionLabel>Draft Reports</SectionLabel>
-            {loading
-              ? <div className="h-8 bg-[#111] rounded-lg animate-pulse" />
-              : draftReports.length === 0
-                ? <EmptyRow text="No draft reports" />
-                : draftReports.map(r => (
-                    <PendingRow
-                      key={r.id}
-                      icon={<FiFileText size={12} color="#A855F7" />}
-                      primary={r.title || r.case?.id || "Untitled report"}
-                      secondary={timeAgo(r.created_at)}
-                      tag="draft"
-                      tagColor="text-[#A855F7] bg-[rgba(168,85,247,0.1)]"
-                    />
-                  ))
-            }
+          <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl overflow-hidden">
+            <ActivityTable headers={["Study", "Modality", "Time"]}>
+              {recentStudies.map(s => (
+                <ActivityRow
+                  key={s.id}
+                  primary={s.name || s.description || "Unnamed Study"}
+                  secondary={s.modality || ""}
+                  time={timeAgo(s.created_at)}
+                  onClick={() => navigate("/cases")}
+                />
+              ))}
+            </ActivityTable>
           </div>
         </div>
-
-      </div>
+      )} */}
     </div>
   );
 }

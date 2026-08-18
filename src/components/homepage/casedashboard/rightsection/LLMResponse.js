@@ -1,3 +1,4 @@
+import { ExpandIcon } from "lucide-react";
 import React, { useState } from "react";
 import { FiCpu } from "react-icons/fi";
 
@@ -68,27 +69,28 @@ function renderInline(text) {
   });
 }
 
-function LLMResponse({ response, loading }) {
+function LLMResponse({ response, loading ,expandReport}) {
   const [impression, setImpression] = useState("");
 
   return (
     <div
-      className="flex flex-col gap-4 bg-[#161616] rounded-[15px] p-[18px] box-border flex-1 overflow-y-auto"
-      style={{ scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}
+      className="flex flex-col gap-4 bg-[#161616] rounded-[15px] p-[18px] box-border flex-1 min-h-0"
     >
       {/* Header */}
       <div className="flex items-center justify-between shrink-0">
         <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
           <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Report</p>
         </div>
+        {response && <button onClick={()=>expandReport()}><ExpandIcon size={20}  className="text-[#0694FB]"/></button>}
+        
       </div>
 
       {/* Response area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}>
         {!loading && !response ? (
           <div className="flex flex-col items-center justify-center py-8 gap-2">
-            <FiCpu size={24} className="text-[#2a2a2a]" />
-            <p className="text-[#3a3a3a] text-[11px] m-0 text-center">
+            <FiCpu size={24} className="text-[#6B6B6B]" />
+            <p className="text-[#6B6B6B] text-[13px] m-0 text-center">
               Hit "Run AI Analysis" to generate a report
             </p>
           </div>
@@ -119,7 +121,10 @@ function LLMResponse({ response, loading }) {
           rows={3}
           className="w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none"
         />
-        <button className="w-full py-[10px] bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium rounded-full border-none cursor-pointer transition-colors">
+        <button
+          disabled={!response && !impression.trim()}
+          className="w-full py-[10px] text-white text-[12px] font-medium rounded-full border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#0694FB] hover:bg-[#0578d1] enabled:cursor-pointer"
+        >
           Save & Generate Report
         </button>
       </div>

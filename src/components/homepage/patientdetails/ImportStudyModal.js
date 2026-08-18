@@ -170,9 +170,9 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
             {/* Header */}
             <div className="flex items-start justify-between px-7 pt-7 pb-5 shrink-0">
               <div>
-                <h2 className="text-white text-lg font-medium m-0">Import DICOM Study</h2>
-                <p className="text-[#6B6B6B] text-xs m-0 mt-0.5">
-                  Drop a study's .dcm files — studies &amp; series are detected automatically
+                <h2 className="text-white text-[16px] font-medium m-0">Import DICOM Study</h2>
+                <p className="text-[#6B6B6B] text-[14px] m-0 mt-0.5">
+                  Drop a study's .dcm files. Studies &amp; series are detected automatically
                 </p>
               </div>
               <button
@@ -199,14 +199,14 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
                 }`}
               >
                 <FiUploadCloud size={22} color={dragging ? "#0694FB" : "#3a3a3a"} />
-                <p className={`text-[12px] m-0 transition-colors ${dragging ? "text-[#0694FB]" : "text-[#4a4a4a]"}`}>
+                <p className={`text-[13px] m-0 transition-colors ${dragging ? "text-[#0694FB]" : "text-[#4a4a4a]"}`}>
                   Drop .dcm files here or <span className="text-[#0694FB]">browse</span>
                 </p>
                 <button
                   onClick={e => { e.stopPropagation(); folderInputRef.current?.click(); }}
-                  className="flex items-center gap-1.5 text-[#6B6B6B] hover:text-white text-[11px] bg-transparent border-none cursor-pointer transition-colors mt-0.5"
+                  className="flex items-center gap-1.5 text-[#6B6B6B] hover:text-white text-[13px] bg-transparent border-none cursor-pointer transition-colors mt-0.5"
                 >
-                  <FiFolder size={12} /> Select a folder instead
+                  <FiFolder size={14} /> Select a folder instead
                 </button>
               </div>
 
@@ -334,7 +334,7 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
                 }`}
               >
                 {uploading && <FiLoader size={13} className="animate-spin" />}
-                {uploading ? "Importing…" : `Import ${totalImages || ""} image${totalImages !== 1 ? "s" : ""}`}
+                {uploading ? "Importing…" : `Import`}
               </button>
             </div>
           </motion.div>

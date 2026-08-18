@@ -21,6 +21,11 @@ import CasesPage from "./components/homepage/casespage/CasesPage";
 import NewCaseFlow from "./components/homepage/newcase/NewCaseFlow";
 import CalendarPage from "./components/homepage/calendar/CalendarPage";
 import PatientDetailsPage from "./components/homepage/patientdetails/PatientDetailsPage";
+import SettingsPage from "./components/homepage/settings/SettingsPage";
+import JobsPage from "./components/homepage/jobs/JobsPage";
+import ReportsPage from "./components/homepage/casedashboard/reports/ReportsPage";
+import Appbar from "./components/homepage/appbar/appbar";
+import Sidebar from "./components/homepage/sidebar/Sidebar";
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -323,6 +328,39 @@ function App() {
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/cases/:id" element={<PatientDetailsPage />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
+          <Route path="/jobs" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="Jobs" />
+                  <JobsPage />
+                </div>
+              </div>
+            </div>
+          } />
+          <Route path="/patient-reports" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="Patient Reports" />
+                  <ReportsPage />
+                </div>
+              </div>
+            </div>
+          } />
+          <Route path="/settings" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="Settings" />
+                  <SettingsPage />
+                </div>
+              </div>
+            </div>
+          } />
         </Routes>
       </Router>
     </div>

@@ -144,12 +144,12 @@ function SeriesGrid({ study, onOpenSeries, onDeleteSeries, loading }) {
         }
 
         {/* Add series placeholder */}
-        <div className="bg-[#0D0D0D] border border-dashed border-[#1E1E1E] rounded-2xl p-5 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-[#0694FB]/50 hover:bg-[rgba(6,148,251,0.02)] transition-all duration-200 min-h-[200px]">
+        {/* <div className="bg-[#0D0D0D] border border-dashed border-[#1E1E1E] rounded-2xl p-5 flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-[#0694FB]/50 hover:bg-[rgba(6,148,251,0.02)] transition-all duration-200 min-h-[200px]">
           <div className="w-10 h-10 rounded-xl bg-[#111] border border-[#1E1E1E] flex items-center justify-center">
             <span className="text-[#3a3a3a] text-xl leading-none">+</span>
           </div>
-          <p className="text-[#3a3a3a] text-[12px] m-0 text-center">Add Series</p>
-        </div>
+          <p className="text-[#6B6B6B] text-[14px] m-0 text-center">Add New Series</p>
+        </div> */}
       </div>
       )}
     </div>

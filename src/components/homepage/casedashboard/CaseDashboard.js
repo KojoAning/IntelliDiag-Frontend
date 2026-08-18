@@ -110,32 +110,32 @@ function CaseDashboard() {
                 <div className="flex items-center gap-2 flex-wrap">
                   {activeStudy.region && (
                     <div className="flex items-center gap-1.5 bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1">
-                      <span className="text-[#3a3a3a] text-[10px]">Region</span>
-                      <span className="text-[#CCCCCC] text-[11px] font-medium">{activeStudy.region}</span>
+                      <span className="text-[#6d6d6d] text-[12px]">Region</span>
+                      <span className="text-[#CCCCCC] text-[13px] font-medium">{activeStudy.region}</span>
                     </div>
                   )}
                   {activeStudy.date && (
                     <div className="flex items-center gap-1.5 bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1">
-                      <span className="text-[#3a3a3a] text-[10px]">Date</span>
-                      <span className="text-[#CCCCCC] text-[11px] font-medium">{activeStudy.date}</span>
+                      <span className="text-[#6d6d6d] text-[12px]">Date</span>
+                      <span className="text-[#CCCCCC] text-[13px] font-medium">{activeStudy.date}</span>
                     </div>
                   )}
                   {activeStudy.accNumber && (
                     <div className="flex items-center gap-1.5 bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1">
-                      <span className="text-[#3a3a3a] text-[10px]">Acc</span>
-                      <span className="text-[#CCCCCC] text-[11px] font-mono">{activeStudy.accNumber}</span>
+                      <span className="text-[#6d6d6d] text-[12px]">Acc</span>
+                      <span className="text-[#CCCCCC] text-[13px] font-medium font-mono">{activeStudy.accNumber}</span>
                     </div>
                   )}
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
+                {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
                   <FiShare2 size={13} /> Share
                 </button>
                 <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full border border-[#1E1E1E] text-[#6B6B6B] text-[13px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
                   <FiFileText size={13} /> Generate Summary
-                </button>
+                </button> */}
                 <button
                   onClick={() => setAddSeriesOpen(true)}
                   className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"

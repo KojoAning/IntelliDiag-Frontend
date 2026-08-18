@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiX } from "react-icons/fi";
+import { authFetch } from "../../../lib/api";
 
 const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
@@ -34,7 +35,6 @@ function AddStudyModal({ isOpen, onClose, caseId, onCreated }) {
     setError("");
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
       const body = {
         study_name: studyInfo.name,
         modality: studyInfo.modality,
@@ -46,12 +46,9 @@ function AddStudyModal({ isOpen, onClose, caseId, onCreated }) {
         case_id: caseId,
       };
       console.log(body)
-      const res = await fetch(`${baseURL}/imaging-studies/`, {
+      const res = await authFetch(`${baseURL}/imaging-studies/`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) {

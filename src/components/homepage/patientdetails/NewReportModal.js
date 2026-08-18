@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiX, FiFileText } from "react-icons/fi";
+import { authFetch } from "../../../lib/api";
 
 const inputCls =
   "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
@@ -36,13 +37,9 @@ function NewReportModal({ isOpen, onClose, caseId, onCreated }) {
     setError("");
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${baseURL}/reports/`, {
+      const res = await authFetch(`${baseURL}/reports/`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: form.title,
           radiologist: form.radiologist,
@@ -88,9 +85,7 @@ function NewReportModal({ isOpen, onClose, caseId, onCreated }) {
             {/* Header */}
             <div className="flex items-start justify-between px-7 pt-7 pb-5">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-[rgba(6,148,251,0.12)] flex items-center justify-center shrink-0">
-                  <FiFileText size={15} color="#0694FB" />
-                </div>
+               
                 <div>
                   <h2 className="text-white text-[17px] font-medium m-0">New Report</h2>
                   <p className="text-[#6B6B6B] text-xs m-0 mt-0.5">Create a new radiology report for this patient</p>

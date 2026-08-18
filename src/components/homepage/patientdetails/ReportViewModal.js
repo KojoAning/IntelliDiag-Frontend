@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiX, FiEdit2, FiCheck } from "react-icons/fi";
+import { authFetch } from "../../../lib/api";
 
 const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
@@ -48,13 +49,9 @@ function ReportViewModal({ isOpen, onClose, report, onUpdated }) {
     setError("");
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${baseURL}/reports/${report.id}`, {
+      const res = await authFetch(`${baseURL}/reports/${report.id}`, {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
       if (!res.ok) {

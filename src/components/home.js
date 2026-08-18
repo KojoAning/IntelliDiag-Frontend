@@ -718,6 +718,7 @@ function ImmersiveOverlay({ close, size }) {
       localStorage.setItem("name", name);
       localStorage.setItem("role", role);
       localStorage.setItem("sub", sub);
+      localStorage.setItem("email", signInEmail);
 
       navigate("/dashboard");
     } catch (err) {

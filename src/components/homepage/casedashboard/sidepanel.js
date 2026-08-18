@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { FiUploadCloud } from "react-icons/fi";
+import { authFetch } from "../../../lib/api";
 
 const API_BASE = (process.env.REACT_APP_API_BASE || "").trim().replace(/\/$/, "");
 
@@ -8,11 +9,8 @@ const API_BASE = (process.env.REACT_APP_API_BASE || "").trim().replace(/\/$/, ""
 export const thumbCache = new Map();
 
 async function fetchAuthenticatedThumb(url) {
-  const token = localStorage.getItem("token");
   try {
-    const resp = await fetch(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const resp = await authFetch(url);
     if (!resp.ok) return null;
     const blob = await resp.blob();
     return URL.createObjectURL(blob);

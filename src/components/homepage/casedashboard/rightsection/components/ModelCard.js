@@ -5,9 +5,9 @@ function ModelCard({ model, selected, onSelect, onRemove }) {
   return (
     <div
       onClick={onSelect}
-      className={`flex items-center gap-3 rounded-[20px] p-2.5 border cursor-pointer transition-all duration-150 group ${
+      className={`flex items-center gap-3 rounded-[20px] p-2.5  cursor-pointer transition-all duration-150 group ${
         selected
-          ? "bg-[rgba(6,148,251,0.08)] border-[#0694FB] ring-1 ring-[#0694FB]/40"
+          ? "bg-[rgba(6,148,251,0.08)] "
           : "bg-[#242424] border-[#1a1a1a] hover:border-[#2a2a2a]"
       }`}
     >
@@ -15,14 +15,24 @@ function ModelCard({ model, selected, onSelect, onRemove }) {
         <div className="w-6 h-5 rounded bg-[#1a1a1a]" />
       </div>
       <div className="flex flex-col gap-1 flex-1 min-w-0">
-        <p className={`text-[12px] font-medium m-0 truncate transition-colors ${selected ? "text-[#0694FB]" : "text-white"}`}>
+        <p className={`text-[13px] font-medium m-0 truncate transition-colors ${selected ? "text-[#0694FB]" : "text-white"}`}>
           {model.name}
         </p>
-        <p className="text-[#6B6B6B] text-[10px] m-0">{model.version}</p>
-        <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full w-fit ${model.tagColor}`}>
+  
+        <span className={`text-[11px] font-medium  text-white/70`}>
           {model.tag}
         </span>
       </div>
+      {/* Radio selector */}
+      <span className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-150 ${
+        selected ? "border-[#0694FB] bg-[#0694FB]" : "border-[#3a3a3a] bg-transparent"
+      }`}>
+        {selected && (
+          <svg width="8" height="6" viewBox="0 0 9 7" fill="none">
+            <path d="M1 3.5L3.5 6L8 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </span>
       <button
         onClick={e => { e.stopPropagation(); onRemove(); }}
         title="Remove model"

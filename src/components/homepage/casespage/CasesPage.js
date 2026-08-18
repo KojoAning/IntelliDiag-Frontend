@@ -5,6 +5,7 @@ import Appbar from "../appbar/appbar";
 import Sidebar from "../sidebar/Sidebar";
 import CaseCard from "./CaseCard";
 import NewCaseModal from "../newcase/NewCaseFlow";
+import { authFetch } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
@@ -45,10 +46,7 @@ function CasesPage() {
     setLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const token = localStorage.getItem("token");
-      const res = await fetch(`${baseURL}/cases/?limit=100`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await authFetch(`${baseURL}/cases/?limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       setPatients(
@@ -70,6 +68,8 @@ function CasesPage() {
             gender: c.patient?.gender || "",
             mrn: c.patient?.mrn || "",
             urgency: normalizeUrgency(c.urgency),
+            created_at: c.patient?.created_at,
+            updated_at: c.patient?.updated_at,
             reason: c.reason || "",
             appointmentTime: c.appointment_datetime
               ? new Date(c.appointment_datetime).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
@@ -124,7 +124,7 @@ function CasesPage() {
               variants={fadeUp} initial="hidden" animate="show" custom={0}
             >
               <div>
-                <p className="m-0 text-white text-sm leading-[1.4] text-normal  opacity-80">{date}</p>
+
                 <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-1">Your Cases</h1>
                 <div className="bg-[rgba(6,148,251,0.17)] inline-flex rounded-[11px] px-[9px] py-[4px] mt-1">
                   <p className="m-0 text-[13px] text-[#0694FB]"> {filtered.length} patient{filtered.length !== 1 ? "s" : ""}</p>

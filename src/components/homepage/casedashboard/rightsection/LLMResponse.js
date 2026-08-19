@@ -1,6 +1,7 @@
 import { ExpandIcon } from "lucide-react";
 import React, { useState } from "react";
 import { FiCpu } from "react-icons/fi";
+import AILoadingState from "./AILoadingState";
 
 /**
  * Parse markdown-ish text into styled React elements:
@@ -94,13 +95,17 @@ function LLMResponse({ response, loading ,expandReport}) {
               Hit "Run AI Analysis" to generate a report
             </p>
           </div>
+        ) : loading && !response ? (
+          /* Initial load — pixel-grid loader before streaming begins */
+          <div className="flex items-center justify-center py-8">
+            <AILoadingState label="Generating" variant="Drive" />
+          </div>
         ) : (
           <div className="bg-[#111] rounded-xl p-4 border border-[#1a1a1a] flex flex-col gap-2">
-            {/* Show spinner in corner while still streaming */}
+            {/* Streaming indicator while report is still being written */}
             {loading && (
-              <div className="flex items-center gap-2 shrink-0">
-                <div className="w-3 h-3 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
-                <span className="text-[#0694FB] text-[11px]">Generating…</span>
+              <div className="shrink-0">
+                <AILoadingState label="Generating" variant="Dots" />
               </div>
             )}
             <div className="flex flex-col">

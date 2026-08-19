@@ -186,6 +186,35 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Mask overlay opacity (0–1) — controlled by the user slider
   const [maskOpacity, setMaskOpacity] = useState(0.5);
 
+  // Overlay card position — null means default (top-right corner)
+  const [overlayPos, setOverlayPos] = useState(null);
+  const overlayDragOffset = useRef({ x: 0, y: 0 });
+  const handleOverlayDragStart = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = viewportWrapRef.current.getBoundingClientRect();
+    const card = e.currentTarget.parentElement;
+    const cardRect = card.getBoundingClientRect();
+    overlayDragOffset.current = {
+      x: e.clientX - (cardRect.left - rect.left),
+      y: e.clientY - (cardRect.top - rect.top),
+    };
+    const onMove = (mv) => {
+      const r = viewportWrapRef.current.getBoundingClientRect();
+      setOverlayPos({
+        x: Math.max(0, mv.clientX - r.left - overlayDragOffset.current.x),
+        y: Math.max(0, mv.clientY - r.top - overlayDragOffset.current.y),
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
+
   // Camera transform synced from Cornerstone — keeps mask aligned with the DICOM image
   const [maskTransform, setMaskTransform] = useState({ zoom: 1, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false });
   const handleCameraChanged = useCallback((t) => setMaskTransform(t), []);
@@ -432,11 +461,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   <div className="flex-1 h-1.5 bg-black/20 rounded-full overflow-hidden">
 
                     <div
-                      className="h-full bg-black rounded-full transition-all duration-300"
+                      className="h-full bg-white rounded-full transition-all duration-300"
                       style={{ width: `${inferenceProgress}%` }}
                     />
                   </div>
-                  <span className="text-[12px] font-mono shrink-0">{inferenceProgress}%</span>
+                  <span className="text-[12px] shrink-0">{inferenceProgress}%</span>
                 </div>
               ) : (
                 <>
@@ -450,12 +479,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
             className={`flex items-center gap-2.5 px-4 py-[8px] rounded-full text-[13px] cursor-pointer transition-all border-none ${translationActive
                 ? "bg-[#A855F7] text-white"
-                : "bg-[#303030] text-[#6B6B6B] hover:text-white hover:bg-[#222]"
+                : "bg-[#303030] text-[#a1a1a1] hover:text-white hover:bg-[#222]"
               }`}
           >
             Translate Image
             {/* Toggle pill */}
-            <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-200 shrink-0 ${translationActive ? "bg-white/30" : "bg-[#333]"}`}>
+            <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-200 shrink-0 ${translationActive ? "bg-white/80" : "bg-[#6e6e6e]"}`}>
               <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-200 ${translationActive ? "left-[18px]" : "left-0.5"}`} />
             </span>
           </button>
@@ -639,7 +668,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               >
                 −
               </button>
-              <span className="text-[#6B6B6B] text-[10px] font-mono w-[32px] text-center shrink-0">{fps} fps</span>
+              <span className="text-[#6B6B6B] text-[13px] w-[32px] text-center shrink-0">{fps} fps</span>
               <button
                 onClick={() => setFps(f => Math.min(30, f + 2))}
                 title="Faster"
@@ -653,28 +682,32 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── Segmentation mask overlay ── */}
           {inferenceResult && (() => {
             const sliceData = inferenceResult.slices?.[currentIndex];
-            const overlay = sliceData?.mask ?? sliceData?.heatmap ?? sliceData?.cam ?? inferenceResult.heatmap ?? inferenceResult.mask;
+            const overlay = sliceData?.mask;
             if (!overlay) return null;
             const isBase64 = !overlay.startsWith("http") && !overlay.startsWith("data:");
             const overlaySrc = isBase64 ? `data:image/png;base64,${overlay}` : overlay;
 
-            // Determine badge label based on result type
-            const isGradCam = !inferenceResult.slices && inferenceResult.heatmap != null;
-            let badgeText, badgeColor, overlayLabel;
+            // GradCAM: predicted_class / scores are non-null; segmentation: both null
+            const isGradCam = sliceData?.predicted_class != null;
+            const conf = sliceData?.confidence ?? 0;
+            const coverage = sliceData?.coverage_pct;
+            const detected = sliceData?.detected;
+
+            let badgeSentence, badgeColor, overlayLabel;
             if (isGradCam) {
-              const cls = inferenceResult.predicted_class ?? "—";
-              const conf = inferenceResult.confidence != null ? ` · ${(inferenceResult.confidence * 100).toFixed(0)}%` : "";
-              badgeText = `Class ${cls}${conf}`;
+              const confStr = `${(conf * 100).toFixed(0)}%`;
+              const topScore = sliceData.scores ? ` with a top score of ${(Math.max(...sliceData.scores) * 100).toFixed(0)}%` : "";
+              badgeSentence = `Predicted class ${sliceData.predicted_class} at ${confStr} confidence${topScore}.`;
               badgeColor = "text-[#0694FB]";
               overlayLabel = "GradCAM";
             } else {
-              const hasTumor = sliceData?.has_tumor;
-              const conf = sliceData?.confidence;
-              badgeText = hasTumor
-                ? `Tumor · ${conf != null ? (conf * 100).toFixed(0) + "%" : ""}`
-                : "No tumor";
-              badgeColor = hasTumor ? "text-red-400" : "text-[#6B6B6B]";
-              overlayLabel = "Mask";
+              const confStr = `${(conf * 100).toFixed(0)}%`;
+              const covStr = coverage != null ? `, covering ${coverage.toFixed(1)}% of the slice` : "";
+              badgeSentence = detected
+                ? `A finding was detected at ${confStr} confidence${covStr}.`
+                : `No finding detected in this slice at ${confStr} confidence.`;
+              badgeColor = detected ? "text-red-400" : "text-[#949494]";
+              overlayLabel = "Segmentation";
             }
 
             return (
@@ -700,31 +733,85 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   className="absolute inset-0 w-full h-full object-contain z-20 pointer-events-none"
                 />
 
-                {/* Overlay controls — opacity slider + dismiss */}
-                <div className="absolute top-3 right-3 z-30 flex flex-col items-end gap-1.5">
-                  <div className="flex items-center gap-2 bg-[#0d0d0d]/90 border border-[#1E1E1E] rounded-xl px-3 py-2 backdrop-blur-sm">
-                    <span className={`text-[10px] font-mono ${badgeColor}`}>{badgeText}</span>
-                    <div className="w-px h-3 bg-[#2a2a2a]" />
-                    <span className="text-[#6B6B6B] text-[10px]">{overlayLabel}</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={maskOpacity}
-                      onChange={e => setMaskOpacity(Number(e.target.value))}
-                      className="w-[80px] h-1 accent-[#0694FB] cursor-pointer"
-                    />
-                    <span className="text-[#6B6B6B] text-[10px] w-[28px] text-right">
-                      {Math.round(maskOpacity * 100)}%
-                    </span>
-                    <button
-                      onClick={() => onInferenceResult(null)}
-                      className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors ml-1"
-                      title="Close overlay"
-                    >✕</button>
-                  </div>
-                </div>
+                {/* Overlay controls — recommendation-card style */}
+                {(() => {
+                  // Signal bars driven by confidence from unified slice shape
+                  const signal = conf >= 0.75 ? 3 : conf >= 0.4 ? 2 : conf > 0 ? 1 : 0;
+                  const signalTone = isGradCam ? "#0694FB" : detected ? "#f87171" : "#6B6B6B";
+                  const signalLabel = conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
+
+                  return (
+                    <div
+                      className="absolute z-30 w-[300px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg"
+                      style={overlayPos ? { left: overlayPos.x, top: overlayPos.y } : { top: 12, right: 12 }}
+                    >
+                      {/* Drag handle */}
+                      <div
+                        onMouseDown={handleOverlayDragStart}
+                        className="flex items-center justify-center gap-1 py-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-[#1E1E1E] transition-colors"
+                      >
+                        {[0,1,2,3,4].map(i => (
+                          <span key={i} style={{ width: 3, height: 3, borderRadius: "50%", background: "#3a3a3a", display: "inline-block" }} />
+                        ))}
+                      </div>
+
+                      {/* Body */}
+                      <div className="px-3 pb-2.5">
+                        <span className="text-[13px] font-semibold text-white">
+                          {`Slice ${currentIndex + 1} of ${inferenceResult.slices?.length ?? "—"}`}
+                        </span>
+                        <p className={`mt-1.5 text-[12px] leading-relaxed m-0 ${badgeColor}`}>
+                          {badgeSentence}
+                        </p>
+                        <span className="mt-2 flex items-center gap-2 shrink-0">
+                          <span className="flex items-end gap-0.5">
+                            {[0, 1, 2,3].map(bar => (
+                              <span
+                                key={bar}
+                                style={{
+                                  display: "inline-block",
+                                  width: 4,
+                                  height: 16,
+                                  borderRadius: 2,
+                                  background: bar < signal ? signalTone : "#2a2a2a",
+                                  transition: "background 0.3s",
+                                }}
+                              />
+                            ))}
+                          </span>
+                          <span className="text-[13px] font-medium text-[#949494]">{signalLabel}</span>
+                        </span>
+                      </div>
+                      
+
+                      {/* Footer — signal meter left, slider + close right */}
+                      <div className="border-t border-[#1E1E1E] bg-[#111]/60 px-3 py-2 flex items-center ">
+                       
+
+                        {/* Opacity slider + close */}
+                        <span className="flex items-center gap-2 flex-1 min-w-0">
+                          <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={maskOpacity}
+                            onChange={e => setMaskOpacity(Number(e.target.value))}
+                            className="flex-1 min-w-0 h-1 accent-[#0694FB] cursor-pointer"
+                          />
+                          <span className="text-[#FFFFFF] text-[12px]  w-[26px] text-right shrink-0">
+                            {Math.round(maskOpacity * 100)}%
+                          </span>
+                          <button
+                            onClick={() => { onInferenceResult(null); setOverlayPos(null); }}
+                            className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0 ml-0.5"
+                            title="Close overlay"
+                          >✕</button>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </>
             );
           })()}

@@ -63,7 +63,7 @@ function HDivider() { return <div className="w-6 h-px bg-[#1E1E1E]" />; }
 function MetaLine({ label, value, bright }) {
   if (!value && value !== 0) return null;
   return (
-    <p className={`m-0 font-mono leading-tight ${bright ? "text-white/70 text-[13px]" : "text-white/35 text-[12px]"}`}>
+    <p className={`m-0 leading-tight ${bright ? "text-white/70 text-[11px]" : "text-white/35 text-[11px]"}`}>
       {label ? <span className="text-white/20">{label} </span> : null}{value}
     </p>
   );
@@ -359,7 +359,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     <div className="flex flex-col gap-2 flex-1 min-w-0 h-full overflow-hidden">
 
       {/* ── Top toolbar ── */}
-      <div className="bg-[#0C0C0C] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
+      <div className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
         <div className="flex items-center">
           <ViewBtn icon={<FiChevronLeft size={16} />} label="Prev slice" disabled={currentIndex <= 0} onClick={() => goTo(currentIndex - 1)} />
           <span className="text-[#6B6B6B] text-[13px] font-mono w-[60px] text-center shrink-0">
@@ -450,7 +450,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
             className={`flex items-center gap-2.5 px-4 py-[8px] rounded-full text-[13px] cursor-pointer transition-all border-none ${translationActive
                 ? "bg-[#A855F7] text-white"
-                : "bg-[#1a1a1a] text-[#6B6B6B] hover:text-white hover:bg-[#222]"
+                : "bg-[#303030] text-[#6B6B6B] hover:text-white hover:bg-[#222]"
               }`}
           >
             Translate Image

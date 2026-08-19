@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import ModelCard from "./components/ModelCard.js";
 import AddModelModal from "./AddModelModal.js";
+import { Plus } from "lucide-react";
 
 const DEFAULT_MODELS = [
  ];
@@ -68,9 +69,9 @@ function ModelPanel({ onModelSelect, selectedModel: externalModel }) {
           </div>
           <button
             onClick={() => setModalOpen(true)}
-            className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium px-3 py-[8px] rounded-full border-none cursor-pointer transition-colors whitespace-nowrap"
+            className="bg-[rgba(6,148,251,0.17)] hover:bg-[#0578d1] text-[#0694FB] text-[9px] font-medium p-1 rounded-full border-none cursor-pointer transition-colors whitespace-nowrap"
           >
-            Add Inference Model
+           <Plus size={18}/>
           </button>
         </div>
 

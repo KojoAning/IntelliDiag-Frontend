@@ -60,7 +60,7 @@ let instanceCounter = 0;
  *   getProperties() → object
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, onIndexChange, onArrowTextRequest, onCameraChanged },
+  { imageIds = [], activeTool = null, windowLevel = false, onIndexChange, onArrowTextRequest, onCameraChanged },
   ref
 ) {
   const divRef = useRef(null);
@@ -411,6 +411,23 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       bindings: [{ mouseButton: MouseBindings.Primary }],
     });
   }, [activeTool]);
+
+  // ── Window/Level toggle ───────────────────────────────────────────────────
+  useEffect(() => {
+    const { toolGroup } = ctx.current;
+    if (!toolGroup) return;
+    if (windowLevel) {
+      try { toolGroup.setToolEnabled(PanTool.toolName); } catch (_) {}
+      toolGroup.setToolActive(WindowLevelTool.toolName, {
+        bindings: [{ mouseButton: MouseBindings.Primary }],
+      });
+    } else {
+      try { toolGroup.setToolEnabled(WindowLevelTool.toolName); } catch (_) {}
+      toolGroup.setToolActive(PanTool.toolName, {
+        bindings: [{ mouseButton: MouseBindings.Primary }],
+      });
+    }
+  }, [windowLevel]);
 
   return (
     <div

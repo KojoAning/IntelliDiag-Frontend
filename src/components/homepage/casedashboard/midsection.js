@@ -512,6 +512,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               ref={vpRef}
               imageIds={imageIds}
               activeTool={activeTool}
+              windowLevel={wlActive}
               onIndexChange={(idx) => {
                 setCurrentIndex(idx);
                 // Keep selectedImage in sync so thumbnail highlight and mask overlay follow scroll

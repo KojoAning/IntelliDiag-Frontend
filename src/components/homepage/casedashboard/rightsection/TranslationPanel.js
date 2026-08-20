@@ -39,7 +39,7 @@ function TranslationPanel({ onTranslate }) {
                 onTranslate?.(next);
               }}
               className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all duration-150 bg-transparent text-left ${isSelected
-                  ? "border-none bg-[#A855F7]/10"
+                  ? "border-none bg-[#A855F7]/20"
                   : "border-none hover:border-[#2a2a2a]"
                 }`}
             >
@@ -54,6 +54,7 @@ function TranslationPanel({ onTranslate }) {
                   </svg>
                 )}
               </span>
+        
               <div className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-2">
                   <span className={`text-[13px] font-semibold ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>

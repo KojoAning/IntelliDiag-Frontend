@@ -667,11 +667,15 @@ function WorkspaceViewer() {
       if (!results) throw new Error("No results received from inference job");
       updateCtx(capturedModelId, { inferenceResult: results });
 
-      // Step 4: Stream the report (segmentation path only — GradCAM/classification use buildSummary)
-      if (Array.isArray(results.slices)) {
-        const tumorSlices = results.slices.filter(s => s.has_tumor);
-        const firstTumor = results.slices.findIndex(s => s.has_tumor);
-        const lastTumor = results.slices.findLastIndex(s => s.has_tumor);
+      // Step 4: Stream the report for all result types
+      {
+        const slices = Array.isArray(results.slices) ? results.slices : [];
+        const isGradCam = slices.some(s => s.predicted_class != null);
+        const detectedSlices = slices.filter(s => s.detected);
+        const firstDetected = slices.findIndex(s => s.detected);
+        const lastDetected = slices.findLastIndex(s => s.detected);
+        const meanConf = slices.length ? slices.reduce((a, s) => a + (s.confidence ?? 0), 0) / slices.length : 0;
+        const meanCoverage = slices.length ? slices.reduce((a, s) => a + (s.coverage_pct ?? 0), 0) / slices.length : 0;
 
         const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
           method: "POST",
@@ -694,13 +698,18 @@ function WorkspaceViewer() {
               dicomMetadata.institution && `Institution: ${dicomMetadata.institution}`,
               dicomMetadata.modality && `Modality: ${dicomMetadata.modality}`,
             ].filter(Boolean).join(". ") || null : null,
-            has_tumor: tumorSlices.length > 0,
-            tumor_coverage_pct: results.slices.reduce((a, s) => a + s.tumor_size, 0) / results.slice_count,
-            mean_confidence: results.slices.reduce((a, s) => a + s.confidence, 0) / results.slice_count,
-            total_slices: results.slice_count,
-            slices_with_tumor: tumorSlices.length,
-            max_slice_coverage_pct: Math.max(...results.slices.map(s => s.tumor_size)),
-            tumor_location: firstTumor !== -1 ? `slices ${firstTumor + 1}-${lastTumor + 1} of ${results.slice_count}` : null,
+            model_type: isGradCam ? "gradcam" : "segmentation",
+            detected: detectedSlices.length > 0,
+            predicted_class: isGradCam ? (slices[0]?.predicted_class ?? null) : null,
+            scores: isGradCam ? (slices[0]?.scores ?? null) : null,
+            mean_confidence: meanConf,
+            mean_coverage_pct: meanCoverage,
+            total_slices: results.slice_count ?? slices.length,
+            slices_with_detection: detectedSlices.length,
+            max_coverage_pct: slices.length ? Math.max(...slices.map(s => s.coverage_pct ?? 0)) : 0,
+            detection_location: firstDetected !== -1
+              ? `slices ${firstDetected + 1}–${lastDetected + 1} of ${results.slice_count ?? slices.length}`
+              : null,
           }),
         });
 
@@ -719,9 +728,6 @@ function WorkspaceViewer() {
         } else {
           updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
         }
-      } else {
-        // GradCAM / classification / binary detection — use local summary
-        updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
       }
 
 

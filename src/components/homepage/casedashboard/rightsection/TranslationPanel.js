@@ -4,10 +4,8 @@ import { FiArrowRight } from "react-icons/fi";
 const MODALITIES = ["CT", "MRI",];
 
 const PAIRS = [
-  { from: "CT",  to: "MRI" },
-  { from: "MRI", to: "CT"  },
-  // { from: "CT",  to: "PET" },
-  // { from: "PET", to: "CT"  },
+  { from: "CT", to: "MRI", description: "Synthesize MRI contrast from CT scan" },
+  { from: "MRI", to: "CT", description: "Generate CT equivalent from MRI scan" },
 ];
 
 function TranslationPanel({ onTranslate }) {
@@ -40,37 +38,40 @@ function TranslationPanel({ onTranslate }) {
                 setSelected(next);
                 onTranslate?.(next);
               }}
-              className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all duration-150 bg-transparent ${
-                isSelected
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all duration-150 bg-transparent text-left ${isSelected
                   ? "border-none bg-[#A855F7]/10"
                   : "border-none hover:border-[#2a2a2a]"
-              }`}
+                }`}
             >
               {/* Checkbox */}
-              <span className={`flex-shrink-0 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all duration-150 ${
-                isSelected
+              <span className={`flex-shrink-0 w-7 h-7 rounded-full border-2 flex items-center justify-center transition-all duration-150 ${isSelected
                   ? "border-[#1E1E1E] bg-[#A855F7]"
                   : "border-[#3a3a3a] bg-transparent"
-              }`}>
+                }`}>
                 {isSelected && (
                   <svg width="9" height="7" viewBox="0 0 9 7" fill="none">
                     <path d="M1 3.5L3.5 6L8 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 )}
               </span>
-              <span className={`text-[13px] font-semibold ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>
-                {pair.from}
-              </span>
-              <FiArrowRight size={13} className={isSelected ? "text-[#A855F7]" : "text-[#3a3a3a]"} />
-              <span className={`text-[13px] font-semibold  ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>
-                {pair.to}
-              </span>
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[13px] font-semibold ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>
+                    {pair.from}
+                  </span>
+                  <FiArrowRight size={13} className={isSelected ? "text-[#A855F7]" : "text-[#3a3a3a]"} />
+                  <span className={`text-[13px] font-semibold ${isSelected ? "text-[#A855F7]" : "text-white/70"}`}>
+                    {pair.to}
+                  </span>
+                </div>
+                <p className={`${isSelected ? "text-[#A855F7]" : "text-white/70"} text-[12px] m-0`}>{pair.description}</p>
+              </div>
             </button>
           );
         })}
       </div>
 
-      
+
     </div>
   );
 }

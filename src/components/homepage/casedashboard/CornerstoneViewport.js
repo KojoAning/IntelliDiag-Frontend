@@ -246,11 +246,11 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         try { toolGroup.setToolEnabled(name); } catch (_) {}
       });
 
-      // Defaults: W/L on left, Pan on middle, Zoom on right
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
+      // Defaults: Pan on left, W/L on middle, Zoom on right
+      toolGroup.setToolActive(PanTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Primary }],
       });
-      toolGroup.setToolActive(PanTool.toolName, {
+      toolGroup.setToolActive(WindowLevelTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Auxiliary }],
       });
       toolGroup.setToolActive(ZoomTool.toolName, {
@@ -390,19 +390,19 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     if (!toolGroup) return;
 
     if (!activeTool || !TOOL_MAP[activeTool]) {
-      // No annotation tool active — restore default W/L on left button
+      // No annotation tool active — restore default Pan on left button
       ALL_ANNOTATION_TOOLS.forEach(name => {
         try { toolGroup.setToolEnabled(name); } catch (_) {}
       });
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
+      toolGroup.setToolActive(PanTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Primary }],
       });
       return;
     }
 
-    // Release W/L from primary button, bring all annotation tools to Enabled,
+    // Release Pan from primary button, bring all annotation tools to Enabled,
     // then activate the chosen one
-    try { toolGroup.setToolEnabled(WindowLevelTool.toolName); } catch (_) {}
+    try { toolGroup.setToolEnabled(PanTool.toolName); } catch (_) {}
     ALL_ANNOTATION_TOOLS.forEach(name => {
       try { toolGroup.setToolEnabled(name); } catch (_) {}
     });

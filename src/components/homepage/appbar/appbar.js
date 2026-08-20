@@ -158,7 +158,7 @@ function Appbar() {
   }, []);
 
   return (
-    <div className="bg-[#0D0D0D] px-[27px] py-[10px] w-full flex flex-row items-center justify-between box-border rounded-[15px] relative z-50">
+    <div className="bg-[#161616] px-[27px] py-[10px] w-full flex flex-row items-center justify-between box-border rounded-[15px] relative z-50">
       <div className="flex items-center gap-3">
         <img src="/intellidiag.png" alt="IntelliDiag Logo" className="h-[23px] w-auto" />
 

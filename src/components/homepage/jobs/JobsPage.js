@@ -7,6 +7,7 @@ import {
 } from "react-icons/fi";
 import { HiClock } from "react-icons/hi2";
 import { getRecentJobs } from "../../../lib/api";
+import { CiStopwatch } from "react-icons/ci";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -119,8 +120,8 @@ function JobRow({ j, onClick }) {
       {/* Model */}
       <td className="py-5 px-4 max-w-0 w-[18%]">
         {j.model_name
-          ? <span className="text-white/80 text-[13px] block truncate">{j.model_name}</span>
-          : <span className="text-[#2a2a2a] text-[13px]">—</span>
+          ? <span className="text-white/80 text-[14px] block truncate">{j.model_name}</span>
+          : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
       {/* Modality */}
@@ -140,10 +141,10 @@ function JobRow({ j, onClick }) {
       </td>
       {/* TAT */}
       <td className="py-5 pr-6 text-right whitespace-nowrap px-3">
-        <span className={`text-[12px] ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
+        <span className={`text-[14px] ${tat === "overdue" ? "text-red-400" : "text-white"}`}>
           <div className="flex flex-row gap-2 items-center justify-end">
-            <HiClock size={14} />
-            {tat || "—"}
+            <CiStopwatch size={20} />
+            {tat ? (status === "completed" ? `Done (${tat})` : `${tat} remaining`) : "—"}
           </div>
         </span>
       </td>

@@ -39,7 +39,7 @@ function TranslationPanel({ onTranslate }) {
                 onTranslate?.(next);
               }}
               className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all duration-150 bg-transparent text-left ${isSelected
-                  ? "border-none bg-[#A855F7]/20"
+                  ? "border-none bg-[#241a2e]"
                   : "border-none hover:border-[#2a2a2a]"
                 }`}
             >

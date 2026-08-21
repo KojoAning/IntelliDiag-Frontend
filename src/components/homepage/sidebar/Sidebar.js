@@ -1,13 +1,14 @@
 import React from "react";
-import { HiHome, HiUsers, HiCpuChip, HiCog6Tooth, HiDocumentText } from "react-icons/hi2";
+import { HiHome, HiUsers, HiCpuChip, HiCog6Tooth, HiDocumentText, HiBeaker } from "react-icons/hi2";
 import { useNavigate } from "react-router-dom";
 
 const menuItems = [
-  { name: "Home",     icon: <HiHome size={20} />,      path: "/dashboard" },
-  { name: "Cases",    icon: <HiUsers size={20} />,     path: "/cases" },
-  { name: "Jobs",     icon: <HiCpuChip size={20} />,   path: "/jobs" },
-  { name: "Settings", icon: <HiCog6Tooth size={20} />, path: "/settings" },
-   { name: "Patient Reports", icon: <HiDocumentText size={20} />, path: "/patient-reports" },
+  { name: "Home",            icon: <HiHome size={20} />,         path: "/dashboard" },
+  { name: "Cases",           icon: <HiUsers size={20} />,        path: "/cases" },
+  { name: "Jobs",            icon: <HiCpuChip size={20} />,      path: "/jobs" },
+  { name: "Models",          icon: <HiBeaker size={20} />,       path: "/models" },
+  { name: "Patient Reports", icon: <HiDocumentText size={20} />, path: "/patient-reports" },
+  { name: "Settings",        icon: <HiCog6Tooth size={20} />,    path: "/settings" },
 ];
 
 function Sidebar({ activePage = "Home" }) {

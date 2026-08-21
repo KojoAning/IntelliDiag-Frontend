@@ -91,7 +91,52 @@ function WorkspaceViewer() {
           results = await fetch(url).then(r => r.json());
         }
         if (cancelled) return;
-        updateCtx(pollModelId, { inferenceResult: results, aiResponse: buildSummary(results), jobStatus: "completed" });
+        updateCtx(pollModelId, { inferenceResult: results, jobStatus: "completed" });
+
+        // Stream the report
+        const slices = Array.isArray(results.slices) ? results.slices : [];
+        const isGradCam = slices.some(s => s.predicted_class != null);
+        const detectedSlices = slices.filter(s => s.detected);
+        const meanConf = slices.length ? slices.reduce((a, s) => a + (s.confidence ?? 0), 0) / slices.length : 0;
+        const meanCoverage = slices.length ? slices.reduce((a, s) => a + (s.coverage_pct ?? 0), 0) / slices.length : 0;
+        const vol = results.volume_analysis ?? {};
+
+        const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: null,
+            patient_context: null,
+            model_type: isGradCam ? "gradcam" : "segmentation",
+            detected: detectedSlices.length > 0,
+            predicted_class: isGradCam ? (slices[0]?.predicted_class ?? null) : null,
+            scores: isGradCam ? (slices[0]?.scores ?? null) : null,
+            mean_confidence: meanConf,
+            mean_coverage_pct: meanCoverage,
+            total_slices: results.slice_count ?? slices.length,
+            slices_with_detection: detectedSlices.length,
+            max_coverage_pct: slices.length ? Math.max(...slices.map(s => s.coverage_pct ?? 0)) : 0,
+            lesion_count: vol.lesion_count ?? null,
+            total_volume_cm3: vol.total_volume_cm3 ?? null,
+            largest_lesion_volume_cm3: vol.largest_lesion_volume_cm3 ?? null,
+            largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
+            detection_location: vol.detection_location ?? null,
+          }),
+        });
+
+        if (reportRes.ok && reportRes.body) {
+          const reader = reportRes.body.getReader();
+          const decoder = new TextDecoder();
+          let text = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done || cancelled) break;
+            text += decoder.decode(value, { stream: true });
+            updateCtx(pollModelId, { aiResponse: text });
+          }
+          text += decoder.decode();
+          if (!cancelled) updateCtx(pollModelId, { aiResponse: text });
+        }
       } catch {
         if (!cancelled) updateCtx(pollModelId, { jobStatus: "failed" });
       } finally {
@@ -672,23 +717,23 @@ function WorkspaceViewer() {
         const slices = Array.isArray(results.slices) ? results.slices : [];
         const isGradCam = slices.some(s => s.predicted_class != null);
         const detectedSlices = slices.filter(s => s.detected);
-        const firstDetected = slices.findIndex(s => s.detected);
-        const lastDetected = slices.findLastIndex(s => s.detected);
         const meanConf = slices.length ? slices.reduce((a, s) => a + (s.confidence ?? 0), 0) / slices.length : 0;
         const meanCoverage = slices.length ? slices.reduce((a, s) => a + (s.coverage_pct ?? 0), 0) / slices.length : 0;
+        const vol = results.volume_analysis ?? {};
+        const meta = results.dicom_metadata ?? null;
 
         const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            metadata: dicomMetadata ? {
+            metadata: meta ?? (dicomMetadata ? {
               modality: dicomMetadata.modality ?? null,
               series_description: dicomMetadata.seriesDescription ?? null,
               slice_thickness_mm: dicomMetadata.sliceThickness ?? null,
               pixel_spacing_mm: dicomMetadata.pixelSpacing ?? null,
               rows: dicomMetadata.rows ?? null,
               columns: dicomMetadata.columns ?? null,
-            } : null,
+            } : null),
             patient_context: dicomMetadata ? [
               dicomMetadata.patientName && `Patient: ${dicomMetadata.patientName}`,
               dicomMetadata.patientDob && `DOB: ${dicomMetadata.patientDob}`,
@@ -707,9 +752,11 @@ function WorkspaceViewer() {
             total_slices: results.slice_count ?? slices.length,
             slices_with_detection: detectedSlices.length,
             max_coverage_pct: slices.length ? Math.max(...slices.map(s => s.coverage_pct ?? 0)) : 0,
-            detection_location: firstDetected !== -1
-              ? `slices ${firstDetected + 1}–${lastDetected + 1} of ${results.slice_count ?? slices.length}`
-              : null,
+            lesion_count: vol.lesion_count ?? null,
+            total_volume_cm3: vol.total_volume_cm3 ?? null,
+            largest_lesion_volume_cm3: vol.largest_lesion_volume_cm3 ?? null,
+            largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
+            detection_location: vol.detection_location ?? null,
           }),
         });
 
@@ -724,8 +771,11 @@ function WorkspaceViewer() {
             updateCtx(capturedModelId, { aiResponse: reportText });
           }
           reportText += reportDecoder.decode();
+          console.log('kljnljksdfnkljdfnjkldfn')
+          console.log(reportText)
           updateCtx(capturedModelId, { aiResponse: reportText || buildSummary(results) });
         } else {
+          console.log(reportRes)
           updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
         }
       }

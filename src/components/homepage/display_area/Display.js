@@ -5,6 +5,7 @@ import {
 } from "react-icons/fi";
 import { HiUsers, HiBriefcase, HiClock, HiExclamationTriangle } from "react-icons/hi2";
 import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs } from "../../../lib/api";
+import { CiStopwatch } from "react-icons/ci";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ function StatCard({ icon, label, value, color, loading }) {
   return (
     <div className="flex-1 bg-[#161616] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-3 min-w-0">
       <div className="flex items-center justify-between">
-        <span className="py-1  rounded-full text-[15px] font-semibold  tracking-wide" style={{  color:"#FFFFFF" }}>{label}</span>
+        <span className="py-1  rounded-full text-[15px] font-semibold  tracking-wide" style={{ color: "#FFFFFF" }}>{label}</span>
         <div className={`w-8 h-8 rounded-xl flex items-center justify-center`} >
           {React.cloneElement(icon, { size: 20, color })}
         </div>
@@ -103,28 +104,28 @@ function ActivityTable({ headers, children }) {
 }
 
 const SEVERITY_STYLES = {
-  high:   "bg-[#32161E] text-red-400 border border-red-500/20",
+  high: "bg-[#32161E] text-red-400 border border-red-500/20",
   medium: "bg-[#312A17] text-amber-400 border border-amber-500/20",
-  low:    "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  low: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
 };
 
 const STATUS_STYLES = {
-  running:   "bg-[#0694FB]/10 text-[#0694FB] border border-[#0694FB]/20",
-  pending:   "bg-amber-500/10 text-amber-400 border border-amber-500/20",
-  queued:    "bg-amber-500/10 text-amber-400 border border-amber-500/20",
+  running: "bg-[#0694FB]/10 text-[#0694FB] border border-[#0694FB]/20",
+  pending: "bg-amber-500/10 text-amber-400 border border-amber-500/20",
+  queued: "bg-amber-500/10 text-amber-400 border border-amber-500/20",
   completed: "bg-[#192E21] text-emerald-400 border border-emerald-500/20",
-  failed:    "bg-[#32161E] text-red-400 border border-red-500/20",
-  closed:    "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
-  archived:  "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
+  failed: "bg-[#32161E] text-red-400 border border-red-500/20",
+  closed: "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
+  archived: "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
   cancelled: "bg-[#1E1E1E] text-[#3a3a3a] border border-[#2a2a2a]",
 };
 
 const STATUS_ICONS = {
-  running:   <FiLoader size={11} className="animate-spin" />,
-  pending:   <FiClock size={11} />,
-  queued:    <FiClock size={11} />,
+  running: <FiLoader size={11} className="animate-spin" />,
+  pending: <FiClock size={11} />,
+  queued: <FiClock size={11} />,
   completed: <FiCheck size={11} />,
-  failed:    <FiAlertTriangle size={11} />,
+  failed: <FiAlertTriangle size={11} />,
 };
 
 function Badge({ label, styleMap }) {
@@ -191,8 +192,11 @@ function ActivityRow({ primary, age, gender, details, modelName, modelType, moda
 
       {/* TAT */}
       <td className="py-5 pr-6 text-right whitespace-nowrap px-3">
-        <span className={`text-[12px] ${tat === "overdue" ? "text-red-400" : "text-white/50"}`}>
-          <div className="flex flex-row gap-2 items-center justify-end"><HiClock size={14} />{tat || "—"}</div>
+        <span className={`text-[14px] ${tat === "overdue" ? "text-red-400" : "text-white"}`}>
+          <div className="flex flex-row gap-2 items-center justify-end">
+            <CiStopwatch size={20} />
+            {tat ? (status === "completed" ? `Done (${tat})` : `${tat} remaining`) : "—"}
+          </div>
         </span>
       </td>
     </tr>
@@ -274,8 +278,8 @@ function Display() {
       );
       const avgTatMs = completedWithTAT.length
         ? completedWithTAT.reduce((sum, j) =>
-            sum + (new Date(j.estimated_completion).getTime() - new Date(j.created_at).getTime()), 0
-          ) / completedWithTAT.length
+          sum + (new Date(j.estimated_completion).getTime() - new Date(j.created_at).getTime()), 0
+        ) / completedWithTAT.length
         : 0;
 
       setStats({
@@ -304,7 +308,7 @@ function Display() {
       {/* ── Top: Greeting + Quick Actions ── */}
       <div className="flex items-start justify-between shrink-0">
         <div>
-         
+
           <h1 className="m-0 text-white text-[39px] font-medium leading-tight mt-1">
             Hello, <span className="text-[#0694FB]">{name}</span>
           </h1>
@@ -312,7 +316,7 @@ function Display() {
           <p className="m-0 text-white text-[17px">{todayDate}</p>
         </div>
 
-        
+
       </div>
 
       {/* ── Stat Cards ── */}
@@ -382,43 +386,43 @@ function Display() {
             : recentJobs.length === 0
               ? <div className="p-5"><EmptyRow text="No jobs yet" /></div>
               : (() => {
-                  const filtered = recentJobs.filter(j => {
-                    const mod = (j.modality || "").toUpperCase();
-                    const sev = (j.severity || "").toLowerCase();
-                    if (modalityFilter !== "All" && mod !== modalityFilter) return false;
-                    if (severityFilter !== "All" && sev !== severityFilter) return false;
-                    return true;
-                  });
-                  return (
-                    <ActivityTable headers={["Patient Name", "Details", "Model", "Modality", "Severity", "Status", "TAT"]}>
-                      {filtered.length === 0
-                        ? (
-                          <tr>
-                            <td colSpan={7} className="py-10 text-center text-[#5e5e5e] text-[14px]">
-                              No jobs found for this search
-                            </td>
-                          </tr>
-                        )
-                        : filtered.map(j => (
-                          <ActivityRow
-                            key={j.job_id}
-                            primary={j.patient_name || "Unknown"}
-                            age={j.patient_age}
-                            gender={j.patient_gender}
-                            details={j.case_title || ""}
-                            modelName={j.model_name || ""}
-                            modelType={j.model_type || ""}
-                            modality={j.modality || ""}
-                            severity={j.severity || j.case_urgency || ""}
-                            status={j.status || ""}
-                            tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
-                            onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study" }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
-                          />
-                        ))
-                      }
-                    </ActivityTable>
-                  );
-                })()
+                const filtered = recentJobs.filter(j => {
+                  const mod = (j.modality || "").toUpperCase();
+                  const sev = (j.severity || "").toLowerCase();
+                  if (modalityFilter !== "All" && mod !== modalityFilter) return false;
+                  if (severityFilter !== "All" && sev !== severityFilter) return false;
+                  return true;
+                });
+                return (
+                  <ActivityTable headers={["Patient Name", "Details", "Model", "Modality", "Severity", "Status", "TAT"]}>
+                    {filtered.length === 0
+                      ? (
+                        <tr>
+                          <td colSpan={7} className="py-10 text-center text-[#5e5e5e] text-[14px]">
+                            No jobs found for this search
+                          </td>
+                        </tr>
+                      )
+                      : filtered.map(j => (
+                        <ActivityRow
+                          key={j.job_id}
+                          primary={j.patient_name || "Unknown"}
+                          age={j.patient_age}
+                          gender={j.patient_gender}
+                          details={j.case_title || ""}
+                          modelName={j.model_name || ""}
+                          modelType={j.model_type || ""}
+                          modality={j.modality || ""}
+                          severity={j.severity || j.case_urgency || ""}
+                          status={j.status || ""}
+                          tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
+                          onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study" }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
+                        />
+                      ))
+                    }
+                  </ActivityTable>
+                );
+              })()
           }
         </div>
       </div>

@@ -77,6 +77,7 @@ function getBreadcrumbs(pathname) {
     "/jobs":             [{ label: "Inference Jobs",  path: null }],
     "/settings":        [{ label: "Settings",        path: null }],
     "/patient-reports": [{ label: "Patient Reports", path: null }],
+    "/models":          [{ label: "Models",          path: null }],
   };
   return MAP[pathname] ?? [];
 }

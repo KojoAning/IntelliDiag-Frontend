@@ -112,9 +112,10 @@ export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
 export const getReports     = (qs = "")  => request("GET", `/reports/${qs}`);
 export const getRecentJobs  = ()         => request("GET", `/jobs/recent`);
 export const getSettings              = ()     => request("GET",   `/settings`);
-export const patchProfileSettings     = (body) => request("PATCH", `/settings/profile`,       body);
-export const patchNotificationSettings= (body) => request("PATCH", `/settings/notifications`, body);
-export const patchSecuritySettings    = (body) => request("PATCH", `/settings/security`,      body);
+export const patchProfileSettings      = (body) => request("PATCH", `/settings/profile`,        body);
+export const patchNotificationSettings = (body) => request("PATCH", `/settings/notifications`,  body);
+export const patchSecuritySettings     = (body) => request("PATCH", `/settings/security`,       body);
+export const patchDataRetentionSettings= (body) => request("PATCH", `/settings/data-retention`, body);
 export const getImagesForStudy  = (seriesId) => request("GET", `/dicom/series/${seriesId}`);
 // Backend returns a relative stream path (e.g. "/dicom/{id}/stream"); prepend
 // our API base so Cornerstone fetches it from the backend (and the JWT hook,

@@ -73,7 +73,7 @@ function ModelCard({ model }) {
         <div className="bg-[#1e1e1e] px-[15px] py-[10px]">
           <p className="text-[#6B6B6B] text-[11px] uppercase  m-0">Inference</p>
           <p className="text-white text-[14px] font-semibold m-0 mt-0.5">
-            {model.inference_time != null ? `${model.inference_time}s` : "—"}
+            {model.avg_inference_time != null ? `${model.avg_inference_time} ms` : "—"}
           </p>
         </div>
       </div>

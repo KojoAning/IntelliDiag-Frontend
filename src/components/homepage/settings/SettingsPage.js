@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { FiCheck, FiX } from "react-icons/fi";
 import { motion } from "framer-motion";
-import { getSettings, patchProfileSettings, patchNotificationSettings, patchSecuritySettings } from "../../../lib/api";
+import { getSettings, patchProfileSettings, patchNotificationSettings, patchSecuritySettings, patchDataRetentionSettings } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
@@ -282,16 +282,9 @@ function NotificationsTab({ s, onUpdate }) {
 
 
 function DataTab({ s, onUpdate }) {
-  const [saving, setSaving] = useState({});
-
-  const toggle = async (key, val) => {
-    setSaving(p => ({ ...p, [key]: true }));
-    // build full notifications payload (API expects all fields)
-    const payload = {};
-    NOTIF_KEYS.forEach(k => { payload[k] = k === key ? val : s[k]; });
-    await patchNotificationSettings(payload);
+  const save = async (key, val) => {
+    await patchDataRetentionSettings({ [key]: val });
     onUpdate(key, val);
-    setSaving(p => ({ ...p, [key]: false }));
   };
 
   return (
@@ -300,17 +293,14 @@ function DataTab({ s, onUpdate }) {
         <SliderRow
           label="Inference data retention"
           description="How long we keep your AI inference results on our servers before automatic deletion."
-          value={s.inference_retention_days ?? 30}
+          value={s.data_retention_days ?? 30}
           min={1}
           max={30}
           unit="days"
-          fieldKey="inference_retention_days"
-          onSave={async (key, val) => {
-            await onUpdate(key, val);
-          }}
+          fieldKey="data_retention_days"
+          onSave={save}
         />
       </SectionCard>
-
     </div>
   );
 }

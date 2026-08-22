@@ -545,12 +545,21 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           )}
 
           {/* ── Job failed banner ── */}
-          {jobStatus === "failed" && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-[#1a0a0a] border border-red-500/30 rounded-lg px-4 py-2 pointer-events-none">
-              <FiX size={12} className="text-red-400 shrink-0" />
-              <p className="text-red-400 text-[12px] font-mono m-0">Inference job failed</p>
-            </div>
-          )}
+          <AnimatePresence>
+            {jobStatus === "failed" && (
+              <motion.div
+                className="absolute top-3 left-1/2 z-30 flex items-center gap-2 bg-red-600 border border-red-500/30 rounded-full px-4 py-2 pointer-events-none"
+                style={{ x: "-50%" }}
+                initial={{ y: -60, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: -60, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 420, damping: 22, mass: 0.8 }}
+              >
+                <FiX size={22} className="text-white shrink-0 bg-red-700 p-[4px] rounded-full" />
+                <p className="text-white text-[13px] m-0">Inference job failed</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* ── Draggable annotation toolbar ── */}
           <div

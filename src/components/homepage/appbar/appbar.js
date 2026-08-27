@@ -53,7 +53,7 @@ function getBreadcrumbs(pathname) {
   if (pathname.startsWith("/cases/")) {
     return [
       { label: "Cases",           path: "/cases" },
-      { label: "Patient Details", path: null },
+      { label: "Patient Case Details", path: null },
     ];
   }
   if (pathname === "/case-workspace/viewer") {
@@ -67,6 +67,18 @@ function getBreadcrumbs(pathname) {
     return [
       { label: "Cases",  path: "/cases" },
       { label: "Series", path: null },
+    ];
+  }
+  if (pathname.startsWith("/patient-reports/")) {
+    return [
+      { label: "Patient Reports", path: "/patient-reports" },
+      { label: "Report Viewer",   path: null },
+    ];
+  }
+  if (pathname.startsWith("/report-templates")) {
+    return [
+      { label: "Patient Reports", path: "/patient-reports" },
+      { label: "Report Templates", path: null },
     ];
   }
   const MAP = {

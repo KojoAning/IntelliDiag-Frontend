@@ -40,7 +40,7 @@ function SeriesCard({ series, modality, index, onOpen, onDelete }) {
   return (
     <div
       onClick={() => onOpen(series)}
-      className="group bg-[#0D0D0D] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 hover:border-[#0694FB]/40 hover:bg-[rgba(6,148,251,0.02)] transition-all duration-200 cursor-pointer relative"
+      className="group bg-[#0D0D0D] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 hover:border-[#0694FB]/20 transition-colors duration-200 cursor-pointer relative"
     >
       {/* Ellipsis + dropdown */}
       <div ref={menuRef} className="absolute top-4 right-4" onClick={e => e.stopPropagation()}>
@@ -87,15 +87,15 @@ function SeriesCard({ series, modality, index, onOpen, onDelete }) {
             <span className="text-[#3a3a3a] text-[10px]">#{index + 1}</span>
           </div>
           <p className="text-white text-[16px] font-medium m-0 truncate">{series.name}</p>
-          <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5 font-mono">{series.description}</p>
+          <p className="text-[#a3a3a3] text-[12px] m-0 mt-0.5 ">{series.description}</p>
         </div>
       </div>
 
       {/* Image count + open */}
       <div className="flex items-center justify-between text-[11px]">
-        <div>
-          <p className="text-[#3a3a3a] m-0">Images</p>
-          <p className="text-[#CCCCCC] m-0 mt-0.5 font-medium">{series.image_count}</p>
+        <div className="flex flex-row items-center gap-2">
+          <p className="text-[#ffffff] m-0 text-[13px] ">Slice Count: </p>
+          <p className="text-[#CCCCCC] m-0 text-[13px]">     {series.image_count}</p>
         </div>
         <div className="flex items-center gap-1.5 text-[#0694FB] opacity-0 group-hover:opacity-100 transition-opacity duration-200">
           <FiMaximize2 size={12} />

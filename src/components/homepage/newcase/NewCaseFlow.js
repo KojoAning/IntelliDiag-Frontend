@@ -280,6 +280,7 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
       if (patientInfo.mrn) patientBody.mrn = patientInfo.mrn;
       if (patientInfo.phone) patientBody.phone = patientInfo.phone;
       if (patientInfo.email) patientBody.email = patientInfo.email;
+      if (patientInfo.dob) patientBody.date_of_birth = patientInfo.dob;
 
       const patientRes = await authFetch(`${baseURL}/patients/`, {
         method: "POST",

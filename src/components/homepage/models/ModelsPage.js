@@ -150,7 +150,7 @@ export default function ModelsPage() {
     >
       {/* Header */}
       <motion.div className="shrink-0 mb-6" variants={fadeUp} initial="hidden" animate="show" custom={0}>
-        <h1 className="m-0 text-white text-[35px] font-medium">AI Models</h1>
+        <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-0 mb-0">AI Models</h1>
         <p className="m-0 text-[#999898] text-[13px] mt-0">
           {models.length} model{models.length !== 1 ? "s" : ""} available on intelliDiag.
         </p>

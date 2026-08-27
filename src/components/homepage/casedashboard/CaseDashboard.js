@@ -62,7 +62,7 @@ function CaseDashboard() {
   }, [navState?.studyId, activeStudy?.id]);
 
   const openSeries = (series) => {
-    navigate("/case-workspace/viewer", { state: { study: activeStudy, series } });
+    navigate("/case-workspace/viewer", { state: { study: activeStudy, series, case_id: navState?.case_id } });
   };
 
 
@@ -108,12 +108,7 @@ function CaseDashboard() {
 
                 {/* Meta chips */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  {activeStudy.region && (
-                    <div className="flex items-center gap-1.5 bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1">
-                      <span className="text-[#6d6d6d] text-[12px]">Region</span>
-                      <span className="text-[#CCCCCC] text-[13px] font-medium">{activeStudy.region}</span>
-                    </div>
-                  )}
+                  
                   {activeStudy.date && (
                     <div className="flex items-center gap-1.5 bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1">
                       <span className="text-[#6d6d6d] text-[12px]">Date</span>

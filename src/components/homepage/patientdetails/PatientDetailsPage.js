@@ -8,7 +8,7 @@ import ImportStudyModal from "./ImportStudyModal";
 import NewReportModal from "./NewReportModal";
 import ReportViewModal from "./ReportViewModal";
 import {
-  FiArrowLeft, FiDownload, FiMaximize2,
+  FiArrowLeft, FiDownload, FiMaximize2, FiSearch,
   FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud, FiTrash2,
 } from "react-icons/fi";
 import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById, deleteStudy, authFetch } from "../../../lib/api";
@@ -130,7 +130,7 @@ function FindingCard({ finding }) {
 
 const DOCUMENT_TYPES = ["Consent", "Referral", "Insurance", "History", "Lab", "Other"];
 
-function DocumentsSection({ patientId }) {
+function DocumentsSection({ patientId, caseId }) {
   const [docs, setDocs]         = useState([]);
   const [docsLoading, setDocsLoading] = useState(true);
   const [search, setSearch]     = useState("");
@@ -186,16 +186,24 @@ function DocumentsSection({ patientId }) {
     setUploadErr(null);
     try {
       // Step 1 — request a signed GCS upload URL
-      const { document_id, upload_url } = await requestDocumentUpload({
+      const uploadPayload = {
         patient_id:    patientId,
         file_name:     pendingFile.name,
         document_type: docType,
-      });
+      };
+      if (caseId) uploadPayload.case_id = caseId;
+
+      console.log(caseId)
+
+      const { document_id, upload_url } = await requestDocumentUpload(uploadPayload);
+
+
 
       // Step 2 — PUT directly to GCS
       try {
         await uploadToSignedUrl(upload_url, pendingFile, setUploadPct);
       } catch (uploadErr) {
+        console.log(uploadErr)
         await confirmDocumentUpload(document_id, "failed");
         throw uploadErr;
       }
@@ -425,10 +433,18 @@ function NoteSection({ patient }) {
 
 // ─── Studies expanded modal ───────────────────────────────────────────────────
 function StudiesModal({ isOpen, onClose, scans, onOpen }) {
+  const [studySearch, setStudySearch] = useState("");
   useEffect(() => {
     document.body.style.overflow = isOpen ? "hidden" : "";
+    if (!isOpen) setStudySearch("");
     return () => { document.body.style.overflow = ""; };
   }, [isOpen]);
+
+  const filteredScans = scans.filter(s => {
+    if (!studySearch) return true;
+    const q = studySearch.toLowerCase();
+    return [s.label, s.modality, s.region, s.accNumber, s.date].join(" ").toLowerCase().includes(q);
+  });
 
   return (
     <AnimatePresence>
@@ -454,11 +470,25 @@ function StudiesModal({ isOpen, onClose, scans, onOpen }) {
             <div className="flex items-center justify-between px-7 py-5 border-b border-[#1E1E1E] shrink-0">
               <div>
                 <h2 className="text-white text-[17px] font-medium m-0">Imaging Studies</h2>
-                <p className="text-[#6B6B6B] text-xs m-0 mt-0.5">{scans.length} {scans.length === 1 ? "study" : "studies"} associated with this patient</p>
+                <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">{scans.length} {scans.length === 1 ? "study" : "studies"} associated with this patient</p>
               </div>
               <button onClick={onClose} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1">
                 <FiX size={18} />
               </button>
+            </div>
+
+            {/* Search */}
+            <div className="px-7 pt-4 pb-0 shrink-0">
+              <div className="relative">
+                <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6B6B6B] pointer-events-none" />
+                <input
+                  type="text"
+                  value={studySearch}
+                  onChange={e => setStudySearch(e.target.value)}
+                  placeholder="Search by name, modality, accession…"
+                  className="w-full bg-[#0C0C0C] border border-[#1E1E1E] text-white text-[14px] rounded-[10px] pl-8 pr-3 py-[10px] focus:outline-none placeholder:text-[#6B6B6B]"
+                />
+              </div>
             </div>
 
             {/* Grid */}
@@ -467,7 +497,7 @@ function StudiesModal({ isOpen, onClose, scans, onOpen }) {
               style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
             >
               <div className="grid grid-cols-3 gap-4">
-                {scans.map((scan) => (
+                {filteredScans.map((scan) => (
                   <div
                     key={scan.id}
                     onClick={() => onOpen(scan)}
@@ -480,8 +510,8 @@ function StudiesModal({ isOpen, onClose, scans, onOpen }) {
                         {scan.flagged && <span className="text-[11px] font-normal px-1.5 py-0.5 rounded text-[#FF6B35] bg-[rgba(255,107,53,0.15)]">AI Flagged</span>}
                       </div>
                       <p className="text-white text-[15px] font-normal m-0 truncate">{scan.label}</p>
-                      {scan.region && <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5 truncate">{scan.region}</p>}
-                      <p className="text-[#3a3a3a] text-[11px] m-0 mt-0.5 font-mono">{scan.date}{scan.accNumber ? ` · ${scan.accNumber}` : ""}</p>
+                      {scan.accNumber && <p className="text-[#d8d6d6] text-[12px] m-0 mt-0.5 truncate">ACC: {scan.accNumber}</p>}
+                      <p className="text-[#838383] text-[12px] m-0 mt-0.5 ">{scan.date}</p>
                     </div>
                   </div>
                 ))}
@@ -501,7 +531,7 @@ function PatientDetailsPage() {
   const { state } = useLocation();
   const [patient, setPatient] = useState(state?.patient ?? null);
   const [patientLoading, setPatientLoading] = useState(!state?.patient);
-  const caseId = state?.caseId || patient?.case_id;
+  const [caseId, setCaseId] = useState(state?.case_id || state?.caseId || state?.patient?.case_id || null);
 
   useEffect(() => {
     if (state?.patient) {
@@ -515,6 +545,19 @@ function PatientDetailsPage() {
       .catch((err) => { console.error("patient fetch error:", err); setPatient(null); })
       .finally(() => setPatientLoading(false));
   }, [id, state?.patient]);
+
+  // Fetch case_id if not available from navigation state
+  useEffect(() => {
+    if (caseId || !id) return;
+    const baseURL = process.env.REACT_APP_API_URL || "";
+    authFetch(`${baseURL}/cases/?limit=100`)
+      .then(res => res.ok ? res.json() : [])
+      .then(cases => {
+        const match = cases.find(c => (c.patient?.id || c.patient_id) === id);
+        if (match) setCaseId(match.id);
+      })
+      .catch(() => {});
+  }, [id, caseId]);
 
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, label }
   const [activeStudy, setActiveStudy] = useState(null);
@@ -549,6 +592,7 @@ function PatientDetailsPage() {
             accNumber:  s.acc_number ?? "",
             date:       s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
             studyId:    s.id,
+            case_id:    s.case_id,
             flagged:    s.flagged,
           }))
       );
@@ -563,7 +607,7 @@ function PatientDetailsPage() {
     setReportsLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const res = await authFetch(`${baseURL}/reports/case/${caseId}`);
+      const res = await authFetch(`${baseURL}/reports/?case_id=${caseId}`);
       if (!res.ok) return;
       setReports(await res.json());
     } catch (_) {}
@@ -621,7 +665,7 @@ function PatientDetailsPage() {
                   {/* Edit Profile — top right corner */}
                   <div>
                     <button className="absolute right-4 bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap">
-                      Edit Profile
+                      Edit Patient Profile
                     </button>
                     {/* Avatar + identity */}
                     <div className="flex flex-col items-start gap-3 shrink-0 mr-[90px]">
@@ -678,7 +722,7 @@ function PatientDetailsPage() {
                        className="bg-[#06fb74] hover:bg-[#00ce6e] text-black text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap"
                       title="Import a study from DICOM files — studies and series are detected automatically"
                       >
-                       Import DICOM
+                       Upload DICOM Study
                       </button>
                       <button
                         onClick={() => setAddStudyOpen(true)}
@@ -690,10 +734,9 @@ function PatientDetailsPage() {
 
                   </div>
                   {studiesLoading ? (
-                    <div className="grid grid-cols-4 gap-3">
-                      {Array.from({ length: 4 }).map((_, i) => (
-                        <div key={i} className="h-[160px] rounded-2xl bg-[#111] border border-[#1E1E1E] animate-pulse" />
-                      ))}
+                    <div className="flex flex-col items-center justify-center py-12 gap-3">
+                      <div className="w-7 h-7 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+                      <p className="text-[#3a3a3a] text-[13px] m-0">Loading studies…</p>
                     </div>
                   ) : studies.length === 0 ? (
                     <p className="text-[#3a3a3a] text-sm text-center py-8 m-0">No imaging studies found</p>
@@ -702,8 +745,8 @@ function PatientDetailsPage() {
                     {studies.map((scan) => (
                       <div
                         key={scan.id}
-                        onClick={() => navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan } })}
-                        className="group relative flex flex-col items-start gap-3 bg-[#111] border border-[#1E1E1E] rounded-2xl p-5 cursor-pointer hover:border-[#0694FB] hover:bg-[rgba(6,148,251,0.04)] transition-all duration-200"
+                        onClick={() => navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan, case_id: caseId } })}
+                        className="group relative flex flex-col items-start gap-3 bg-[#111] border border-[#1E1E1E] rounded-2xl p-5 cursor-pointer hover:border-[#0694FB]/20 transition-colors duration-200"
                       >
                         {/* Delete */}
                         <button
@@ -724,8 +767,8 @@ function PatientDetailsPage() {
                             {scan.flagged && <span className="text-[12px] font-normal px-1.5 py-0.5 rounded text-[#FF6B35] bg-[rgba(255,107,53,0.15)]">AI Flagged</span>}
                           </div>
                           <p className="text-white text-[15px] font-normal m-0 mt-1.5 truncate">{scan.label}</p>
-                          {scan.region && <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5 truncate">{scan.region}</p>}
-                          <p className="text-[#3a3a3a] text-[11px] m-0 mt-0.5 font-mono">{scan.date}{scan.accNumber ? ` · ${scan.accNumber}` : ""}</p>
+                          {scan.accNumber && <p className="text-[#ffffff] text-[12px] m-0 mt-0.5 truncate">ACC: {scan.accNumber}</p>}
+                          <p className="text-[#a8a6a6] text-[12px] m-0 mt-0.5 ">{scan.date}</p>
                         </div>
                       </div>
                     ))}
@@ -783,7 +826,7 @@ function PatientDetailsPage() {
 
                 {/* Documents */}
                 <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4}>
-                  <DocumentsSection patientId={patient.id} />
+                  <DocumentsSection patientId={patient.id} caseId={caseId} />
                 </motion.div>
 
                 {/* Notes */}
@@ -871,7 +914,7 @@ function PatientDetailsPage() {
         isOpen={studiesOpen}
         onClose={() => setStudiesOpen(false)}
         scans={studies}
-        onOpen={(scan) => { setStudiesOpen(false); navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan } }); }}
+        onOpen={(scan) => { setStudiesOpen(false); navigate("/case-workspace", { state: { studyId: scan.studyId, study: scan, case_id: caseId } }); }}
       />
     </div>
   );

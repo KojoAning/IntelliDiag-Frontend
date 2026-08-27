@@ -39,6 +39,29 @@ function WorkspaceViewer() {
   const [translationActive, setTranslationActive] = useState(false);
   const [jobFailedDialog, setJobFailedDialog] = useState(false);
   const [impression, setImpression] = useState("");
+  const [caseId, setCaseId] = useState(activeStudy.case_id ?? null);
+  // activeStudy.studyId comes from PatientDetailsPage, activeStudy.id may be a study or series ID
+  const [studyId, setStudyId] = useState(activeStudy.study_id ?? activeStudy.studyId ?? (from_jobs ? null : activeStudy.id) ?? null);
+
+  // Resolve case_id and study_id from the series record when not available from navigation
+  useEffect(() => {
+    if (caseId && studyId) return;
+    const seriesId = activeSeries?.id;
+    if (!seriesId) return;
+    authFetch(`${API_BASE}/series/${seriesId}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!caseId) {
+          const resolvedCase = data?.case_id ?? data?.study?.case_id;
+          if (resolvedCase) setCaseId(resolvedCase);
+        }
+        if (!studyId) {
+          const resolvedStudy = data?.study_id ?? data?.study?.id;
+          if (resolvedStudy) setStudyId(resolvedStudy);
+        }
+      })
+      .catch(() => {});
+  }, [activeSeries?.id, caseId, studyId]);
 
   const fileInputRef = useRef(null);
 
@@ -802,6 +825,81 @@ function WorkspaceViewer() {
     setTranslationActive(true);
   }
 
+  const [reportSaving, setReportSaving] = useState(false);
+  const [overrideDialog, setOverrideDialog] = useState(null); // stores payload when 409
+
+  const buildReportPayload = () => {
+    const payload = {
+      title: activeStudy.name || "Radiology Report",
+      radiologist: localStorage.getItem("name") || undefined,
+      modality: activeSeries?.modality || dicomMetadata?.modality || "Unknown",
+      case_id: caseId || undefined,
+      study_id: studyId || undefined,
+      series_id: activeSeries?.id || undefined,
+      job_id: jobId || undefined,
+      ai_report: aiResponse || undefined,
+      model_name: selectedModel?.name || undefined,
+      severity: undefined,
+      tat: undefined,
+    };
+    Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+    return payload;
+  };
+
+  const submitReport = async (payload, override = false) => {
+    const url = override ? `${API_BASE}/reports/?override=true` : `${API_BASE}/reports/`;
+    const res = await authFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res;
+  };
+
+  const handleSaveReport = async (impressionText) => {
+    if (reportSaving) return;
+    setReportSaving(true);
+    try {
+      const payload = buildReportPayload();
+      const res = await submitReport(payload);
+
+      if (res.status === 409) {
+        setOverrideDialog(payload);
+        return;
+      }
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Save report failed: ${res.status} — ${errText.slice(0, 200)}`);
+      }
+      const data = await res.json();
+      navigate(`/patient-reports/${data.case_id || caseId}`);
+    } catch (err) {
+      console.error("Failed to save report:", err);
+    } finally {
+      setReportSaving(false);
+    }
+  };
+
+  const handleOverrideConfirm = async () => {
+    const payload = overrideDialog;
+    setOverrideDialog(null);
+    setReportSaving(true);
+    try {
+      const res = await submitReport(payload, true);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`Override report failed: ${res.status} — ${errText.slice(0, 200)}`);
+      }
+      const data = await res.json();
+      navigate(`/patient-reports/${data.case_id || caseId}`);
+    } catch (err) {
+      console.error("Failed to override report:", err);
+    } finally {
+      setReportSaving(false);
+    }
+  };
+
   const expandAiReport = async () => {
     if (!showExpandedAiReport) {
       setshowExpandedAiReport(true);
@@ -908,6 +1006,67 @@ function WorkspaceViewer() {
           </motion.div>
         )}
 
+        {overrideDialog && (
+          <motion.div
+            className="fixed inset-0 z-[999] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setOverrideDialog(null)}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between px-7 pt-7 pb-5">
+                <div>
+                  <div className="flex flex-row gap-2">
+                    <Info size={20} className="text-[#F59E0B]" />
+                    <h2 className="text-white text-[17px] font-medium m-0">Report already exists</h2>
+                  </div>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
+                    A report for this series already exists. Do you want to override the existing report? This action cannot be undone.
+                  </p>
+                </div>
+                <button onClick={() => setOverrideDialog(null)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                  <FiX size={18} />
+                </button>
+              </div>
+              {/* Footer */}
+              <div className="px-7 pb-6 flex gap-3">
+                <button
+                  onClick={() => setOverrideDialog(null)}
+                  className="flex-1 py-2.5 rounded-full bg-transparent border border-[#2a2a2a] text-[#6B6B6B] hover:text-white hover:border-[#3a3a3a] text-[13px] font-medium cursor-pointer transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleOverrideConfirm}
+                  disabled={reportSaving}
+                  className="flex-1 py-2.5 rounded-full bg-[#F59E0B] hover:bg-[#d97706] text-black text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {reportSaving ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Overriding…
+                    </span>
+                  ) : "Override"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
         {showExpandedAiReport && (
           <motion.div
             className="fixed inset-0 z-[999] flex items-center justify-center"
@@ -958,15 +1117,23 @@ function WorkspaceViewer() {
               </div>
 
               {/* Footer */}
-              <div className="px-7 pb-6 shrink-0">
+              {/* <div className="px-7 pb-6 shrink-0">
                 <button
-                  onClick={() => setshowExpandedAiReport(false)}
-                  disabled={!aiResponse && !impression.trim()}
+                  onClick={() => handleSaveReport(impression)}
+                  disabled={reportSaving || (!aiResponse && !impression.trim())}
                   className="w-full py-2.5 rounded-full text-[13px] font-medium border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#0694FB] hover:bg-[#0578d1] enabled:cursor-pointer text-white"
                 >
-                  Save & Generate Report
+                  {reportSaving ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Saving…
+                    </span>
+                  ) : "Save & Generate Report"}
                 </button>
-              </div>
+              </div> */}
             </motion.div>
           </motion.div>
         )}
@@ -1078,7 +1245,7 @@ function WorkspaceViewer() {
                 jobStatus={jobStatus}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} />
               </div>
             </div>
 

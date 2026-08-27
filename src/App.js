@@ -25,6 +25,8 @@ import SettingsPage from "./components/homepage/settings/SettingsPage";
 import JobsPage from "./components/homepage/jobs/JobsPage";
 import ReportsPage from "./components/homepage/casedashboard/reports/ReportsPage";
 import ModelsPage from "./components/homepage/models/ModelsPage";
+import ReportTemplateEditor from "./components/homepage/reporttemplates/ReportTemplateEditor";
+import ReportViewer from "./components/homepage/casedashboard/reports/ReportViewer";
 import Appbar from "./components/homepage/appbar/appbar";
 import Sidebar from "./components/homepage/sidebar/Sidebar";
 
@@ -325,7 +327,17 @@ function App() {
           <Route path="/new-case" element={<NewCaseFlow />} />
           <Route path="/case-workspace" element={<CaseDashboard />} />
           <Route path="/case-workspace/viewer" element={<WorkspaceViewer />} />
-          <Route path="/cases" element={<CasesPage />} />
+          <Route path="/cases" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="Cases" />
+                  <CasesPage />
+                </div>
+              </div>
+            </div>
+          } />
           <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/cases/:id" element={<PatientDetailsPage />} />
           <Route path="/privacy" element={<PrivacyPolicy />} />
@@ -351,6 +363,16 @@ function App() {
               </div>
             </div>
           } />
+          <Route path="/patient-reports/:id" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row box-border mt-[15px] flex-1 min-h-0">
+                  <ReportViewer />
+                </div>
+              </div>
+            </div>
+          } />
           <Route path="/models" element={
             <div className="m-0 p-0 h-screen bg-black w-screen">
               <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
@@ -369,6 +391,17 @@ function App() {
                 <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
                   <Sidebar activePage="Settings" />
                   <SettingsPage />
+                </div>
+              </div>
+            </div>
+          } />
+          <Route path="/report-templates" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="Report Templates" />
+                  <ReportTemplateEditor />
                 </div>
               </div>
             </div>

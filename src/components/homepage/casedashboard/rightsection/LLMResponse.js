@@ -73,7 +73,7 @@ function renderInline(text) {
 // Height below which we collapse to the compact "View Report" button
 const COLLAPSE_THRESHOLD = 260;
 
-function LLMResponse({ response, loading, expandReport }) {
+function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving }) {
   const [impression, setImpression] = useState("");
   const [collapsed, setCollapsed] = useState(false);
   const observerRef = useRef(null);
@@ -107,6 +107,7 @@ function LLMResponse({ response, loading, expandReport }) {
         <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1 flex items-center gap-1.5 mb-1">
           <p className="text-[#0694FB] text-[11px] font-medium m-0">AI Generated Report</p>
         </div>
+         {loading && !response ? "" : "Click the View Report button to open the AI Generated Report"}
         <button
           onClick={() => expandReport?.()}
           disabled={!response}
@@ -174,10 +175,19 @@ function LLMResponse({ response, loading, expandReport }) {
           className="w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none"
         />
         <button
-          disabled={!response && !impression.trim()}
+          disabled={reportSaving || (!response && !impression.trim())}
+          onClick={() => onSaveReport?.(impression)}
           className="w-full py-[10px] text-white text-[12px] font-medium rounded-full border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#0694FB] hover:bg-[#0578d1] enabled:cursor-pointer"
         >
-          Save & Generate Report
+          {reportSaving ? (
+            <span className="flex items-center justify-center gap-2">
+              <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Saving…
+            </span>
+          ) : "Save & Generate Report"}
         </button>
       </div>
     </div>

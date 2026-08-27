@@ -533,7 +533,7 @@ function SettingsPage() {
     >
       {/* Header */}
       <motion.div className="shrink-0 mb-6" variants={fadeUp} initial="hidden" animate="show" custom={0}>
-        <h1 className="m-0 text-white text-[35px] font-medium">Settings</h1>
+        <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-0 mb-0">Settings</h1>
         <p className="m-0 text-[#999898] text-[13px] mt-0">Manage your account, preferences, and integrations.</p>
       </motion.div>
 

@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import {
-  FiChevronRight, FiSearch, FiRefreshCw, FiCheck, FiEdit3,
+  FiChevronRight, FiChevronLeft, FiSearch, FiRefreshCw, FiCheck, FiEdit3, FiLayout,
 } from "react-icons/fi";
+import { useNavigate } from "react-router-dom";
 import { HiClock } from "react-icons/hi2";
 import { authFetch } from "../../../../lib/api";
+import useDynamicPageSize from "../../../../hooks/useDynamicPageSize";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -39,14 +41,6 @@ const STATUS_ICONS = {
   signed: <FiCheck size={11} />,
 };
 
-const MODALITY_COLORS = {
-  mri:        "text-[#0694FB]",
-  ct:         "text-amber-400",
-  "x-ray":    "text-emerald-400",
-  ultrasound: "text-purple-400",
-  pet:        "text-pink-400",
-};
-
 function StatusBadge({ status }) {
   if (!status) return <span className="text-[#2a2a2a] text-[11px] font-mono">—</span>;
   const key = status.toLowerCase();
@@ -62,19 +56,28 @@ function StatusBadge({ status }) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-const COLS = ["Patient / Case", "Report Title", "Radiologist", "Modality", "Status", "Created"];
+const COLS = ["Patient / Case", "Report Title", "Chief Complaint", "Radiologist", "Status", "Created"];
 
-function ReportRow({ r }) {
+function ReportRow({ r, onClick }) {
   return (
-    <tr className="group border-b border-[#111] last:border-0 hover:bg-white/[0.02] transition-colors">
+    <tr onClick={onClick} className="group border-b border-[#111] last:border-0 hover:bg-white/[0.02] transition-colors cursor-pointer">
       {/* Patient / Case */}
       <td className="py-5 px-4 max-w-0 w-[22%]">
-        <span className="text-white text-[14px] block truncate">
-          {r.patient_name || r.case_title || "—"}
-        </span>
-        {r.case_title && r.patient_name && (
-          <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{r.case_title}</span>
-        )}
+        <div className="flex items-center gap-3">
+          <img
+            src={`https://api.dicebear.com/9.x/initials/jpg?seed=${encodeURIComponent(r.patient_name || "U")}&scale=70&backgroundColor=5876dd`}
+            alt=""
+            className="w-10 h-10 rounded-full shrink-0"
+          />
+          <div className="min-w-0">
+            <span className="text-white text-[14px] block truncate">
+              {r.patient_name || r.case_title || "—"}
+            </span>
+            {r.case_title && r.patient_name && (
+              <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{r.case_title}</span>
+            )}
+          </div>
+        </div>
       </td>
       {/* Report Title */}
       <td className="py-5 px-4 max-w-0 w-[28%]">
@@ -85,20 +88,15 @@ function ReportRow({ r }) {
           </span>
         )}
       </td>
+      {/* Chief Complaint */}
+      <td className="py-5 px-4 max-w-0 w-[18%]">
+        <span className="text-white/80 text-[14px] block truncate">{r.chief_complaint || "—"}</span>
+      </td>
       {/* Radiologist */}
       <td className="py-5 px-4 whitespace-nowrap">
         <span className="text-white/80 text-[14px]">{r.radiologist || "—"}</span>
       </td>
-      {/* Modality */}
-      <td className="py-5 px-4 whitespace-nowrap">
-        {r.modality ? (
-          <span className={`text-[14px] font-medium uppercase ${MODALITY_COLORS[r.modality.toLowerCase()] ?? "text-white/80"}`}>
-            {r.modality}
-          </span>
-        ) : (
-          <span className="text-[#2a2a2a] text-[14px]">—</span>
-        )}
-      </td>
+
       {/* Status */}
       <td className="py-5 px-4 whitespace-nowrap">
         <StatusBadge status={r.status} />
@@ -142,6 +140,9 @@ export default function ReportsPage() {
   const [search, setSearch] = useState("");
   const [modality, setModality] = useState("All");
   const [status, setStatus] = useState("All");
+  const [page, setPage] = useState(1);
+  const { pageSize, tableRef } = useDynamicPageSize();
+  const navigate = useNavigate();
 
   const load = async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -151,6 +152,7 @@ export default function ReportsPage() {
       const res = await authFetch(`${baseURL}/reports/`);
       if (res.ok) {
         const data = await res.json();
+        console.log(data)
         setReports(Array.isArray(data) ? data : []);
       }
     } catch { /* silently ignore */ } finally {
@@ -171,6 +173,14 @@ export default function ReportsPage() {
     }
     return true;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
+
+  useEffect(() => { setPage(1); }, [search, modality, status, pageSize]);
 
   const counts = {
     total:  reports.length,
@@ -194,17 +204,26 @@ export default function ReportsPage() {
       >
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="m-0 text-white text-[35px] font-medium">Patient Reports</h1>
+            <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-0 mb-0">Patient Reports</h1>
             <p className="m-0 text-[#999898] text-[13px] mt-0.5">All radiology reports across every case</p>
           </div>
-          <button
-            onClick={() => load(true)}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-transparent border border-[#1E1E1E] text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] text-[13px] cursor-pointer transition-all disabled:opacity-50"
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => load(true)}
+              disabled={refreshing}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-transparent text-[#f3f3f3] hover:text-white text-[13px] cursor-pointer transition-all disabled:opacity-50"
+            >
+              <FiRefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
+              Refresh
+            </button>
+            <button
+              onClick={() => navigate("/report-templates")}
+              className="bg-[#0694FB] hover:bg-[#0578d1] text-white text-sm px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap"
           >
-            <FiRefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
-            Refresh
-          </button>
+           
+              Edit Report Template
+            </button>
+          </div>
         </div>
       </motion.div>
 
@@ -281,6 +300,7 @@ export default function ReportsPage() {
 
       {/* Table */}
       <motion.div
+        ref={tableRef}
         className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl overflow-hidden shrink-0"
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -311,11 +331,63 @@ export default function ReportsPage() {
                 </td>
               </tr>
             ) : (
-              filtered.map(r => <ReportRow key={r.id} r={r} />)
+              paginated.map(r => <ReportRow key={r.id} r={r} onClick={() => navigate(`/patient-reports/${r.case_id}`)} />)
             )}
           </tbody>
         </table>
       </motion.div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-1 py-3 shrink-0">
+          <p className="text-[#6B6B6B] text-[12px] m-0">
+            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} of {filtered.length}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all"
+            >
+              <FiChevronLeft size={14} />
+            </button>
+
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+              .reduce((acc, p, i, arr) => {
+                if (i > 0 && p - arr[i - 1] > 1) acc.push("...");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((n, i) =>
+                n === "..." ? (
+                  <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-[#6B6B6B] text-[12px]">…</span>
+                ) : (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className="w-8 h-8 flex items-center justify-center rounded-lg text-[12px] font-medium border cursor-pointer transition-all duration-150"
+                    style={{
+                      background: n === page ? "#0694FB" : "transparent",
+                      borderColor: n === page ? "#0694FB" : "#1E1E1E",
+                      color: n === page ? "white" : "#6B6B6B",
+                    }}
+                  >
+                    {n}
+                  </button>
+                )
+              )}
+
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all"
+            >
+              <FiChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

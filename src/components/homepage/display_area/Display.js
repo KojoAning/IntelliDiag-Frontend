@@ -416,7 +416,7 @@ function Display() {
                           severity={j.severity || j.case_urgency || ""}
                           status={j.status || ""}
                           tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
-                          onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study" }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
+                          onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study", case_id: j.case_id }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
                         />
                       ))
                     }

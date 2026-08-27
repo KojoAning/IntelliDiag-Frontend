@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  FiChevronRight, FiAlertTriangle, FiLoader, FiCheck,
+  FiChevronRight, FiChevronLeft, FiAlertTriangle, FiLoader, FiCheck,
   FiClock, FiSearch, FiRefreshCw,
 } from "react-icons/fi";
-import { HiClock } from "react-icons/hi2";
 import { getRecentJobs } from "../../../lib/api";
 import { CiStopwatch } from "react-icons/ci";
+import useDynamicPageSize from "../../../hooks/useDynamicPageSize";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -183,6 +183,8 @@ export default function JobsPage() {
   const [modality, setModality] = useState("All");
   const [status, setStatus] = useState("All");
   const [severity, setSeverity] = useState("All");
+  const [page, setPage] = useState(1);
+  const { pageSize, tableRef } = useDynamicPageSize();
 
   const load = async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -213,6 +215,14 @@ export default function JobsPage() {
     return true;
   });
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginated = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filtered.slice(start, start + pageSize);
+  }, [filtered, page, pageSize]);
+
+  useEffect(() => { setPage(1); }, [search, modality, status, severity, pageSize]);
+
   const counts = {
     running:   jobs.filter(j => (j.status || "").toLowerCase() === "running").length,
     pending:   jobs.filter(j => ["pending", "queued"].includes((j.status || "").toLowerCase())).length,
@@ -233,13 +243,13 @@ export default function JobsPage() {
       >
         <div className="flex items-start justify-between">
           <div>
-            <h1 className="m-0 text-white text-[35px] font-medium">Inference Jobs</h1>
+            <h1 className="m-0 text-white font-medium text-[40px] md:text-[32px] leading-[1.2] mt-0 mb-0">Inference Jobs</h1>
             <p className="m-0 text-[#999898] text-[13px] mt-0.5">All AI inference jobs across every series</p>
           </div>
           <button
             onClick={() => load(true)}
             disabled={refreshing}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-transparent border border-[#1E1E1E] text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] text-[13px] cursor-pointer transition-all disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-transparent  text-[#f3f3f3] hover:text-white hover:border-[#2a2a2a] text-[13px] cursor-pointer transition-all disabled:opacity-50"
           >
             <FiRefreshCw size={13} className={refreshing ? "animate-spin" : ""} />
             Refresh
@@ -323,6 +333,7 @@ export default function JobsPage() {
 
       {/* Table */}
       <motion.div
+        ref={tableRef}
         className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl overflow-hidden shrink-0"
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
@@ -348,7 +359,7 @@ export default function JobsPage() {
                 </td>
               </tr>
             ) : (
-              filtered.map(j => (
+              paginated.map(j => (
                 <JobRow
                   key={j.job_id ?? j.id}
                   j={j}
@@ -356,7 +367,7 @@ export default function JobsPage() {
                     if (j.series_id) {
                       navigate("/case-workspace/viewer", {
                         state: {
-                          study: { id: j.series_id, name: j.case_title || "Study" },
+                          study: { id: j.series_id, name: j.case_title || "Study", case_id: j.case_id },
                           series: { id: j.series_id, name: "Series 1" },
                           from_jobs: true,
                           job_id: j.job_id ?? j.id,
@@ -372,6 +383,58 @@ export default function JobsPage() {
           </tbody>
         </table>
       </motion.div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between px-1 py-3 shrink-0">
+          <p className="text-[#6B6B6B] text-[12px] m-0">
+            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, filtered.length)} of {filtered.length}
+          </p>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all"
+            >
+              <FiChevronLeft size={14} />
+            </button>
+
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+              .reduce((acc, p, i, arr) => {
+                if (i > 0 && p - arr[i - 1] > 1) acc.push("...");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((n, i) =>
+                n === "..." ? (
+                  <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-[#6B6B6B] text-[12px]">…</span>
+                ) : (
+                  <button
+                    key={n}
+                    onClick={() => setPage(n)}
+                    className="w-8 h-8 flex items-center justify-center rounded-lg text-[12px] font-medium border cursor-pointer transition-all duration-150"
+                    style={{
+                      background: n === page ? "#0694FB" : "transparent",
+                      borderColor: n === page ? "#0694FB" : "#1E1E1E",
+                      color: n === page ? "white" : "#6B6B6B",
+                    }}
+                  >
+                    {n}
+                  </button>
+                )
+              )}
+
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all"
+            >
+              <FiChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

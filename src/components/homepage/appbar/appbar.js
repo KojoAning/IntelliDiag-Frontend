@@ -258,7 +258,7 @@ function Appbar() {
         <div ref={ref} className="relative">
           <button
             onClick={() => setOpen((v) => !v)}
-            className="relative flex items-center gap-2 border-none cursor-pointer overflow-hidden transition-all duration-300"
+            className="relative flex items-center gap-2 border-none cursor-pointer transition-all duration-300"
             style={{
               background: open ? "#0694FB" : "transparent",
               borderRadius: "999px",

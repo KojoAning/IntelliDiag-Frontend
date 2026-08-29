@@ -104,18 +104,18 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
         ref={attachRef}
         className="flex flex-col gap-2 bg-[#161616] rounded-[15px] p-[14px] box-border flex-1 min-h-0 items-center justify-center"
       >
-        <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1 flex items-center gap-1.5 mb-1">
-          <p className="text-[#0694FB] text-[11px] font-medium m-0">AI Generated Report</p>
-        </div>
-         {loading && !response ? "" : "Click the View Report button to open the AI Generated Report"}
-        <button
-          onClick={() => expandReport?.()}
-          disabled={!response}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0694FB] hover:bg-[#0578d1] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[12px] font-medium border-none cursor-pointer transition-colors"
-        >
-          <FiFileText size={14} />
-          {loading && !response ? "Generating report…" : "View Report"}
-        </button>
+        {loading && !response ? (
+          <AILoadingState label="Generating" variant="Drive" />
+        ) : (
+          <button
+            onClick={() => expandReport?.()}
+            disabled={!response}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0694FB] hover:bg-[#0578d1] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[12px] font-medium border-none cursor-pointer transition-colors"
+          >
+            <FiFileText size={14} />
+            View Report
+          </button>
+        )}
       </div>
     );
   }

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { FiChevronLeft, FiChevronRight, FiSearch, FiAlertTriangle } from "react-icons/fi";
+import { FiChevronLeft, FiChevronRight, FiSearch, FiAlertTriangle, FiAlertCircle } from "react-icons/fi";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import NewCaseModal from "../newcase/NewCaseFlow";
@@ -296,8 +296,8 @@ function CasesPage() {
                         </td>
                         {/* Urgency */}
                         <td className="py-5 px-4 whitespace-nowrap">
-                          <span className={`inline-flex items-center gap-1.5 text-[14px] font-normal px-2.5 py-1 rounded-full capitalize ${urgencyStyles[p.urgency] || urgencyStyles["Routine"]}`}>
-                            {p.urgency === "Emergency" && <FiAlertTriangle size={11} />}
+                          <span className={`inline-flex items-center gap-1 text-[14px] font-normal px-2.5 py-1 rounded-full capitalize ${urgencyStyles[p.urgency] || urgencyStyles["Routine"]}`}>
+                            {p.urgency === "Emergency" && <FiAlertCircle size={13} />}
                             {p.urgency}
                           </span>
                         </td>

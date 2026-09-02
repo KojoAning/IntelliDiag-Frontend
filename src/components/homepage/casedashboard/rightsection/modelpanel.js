@@ -17,7 +17,8 @@ function ModelPanel({ onModelSelect, selectedModel: externalModel, modality }) {
     if (!externalModel) return;
     setModels(prev => {
       const exists = prev.find(m => String(m.id) === String(externalModel.id));
-      return exists ? prev : [...prev, { ...externalModel, tag: externalModel.type, tagColor: externalModel.typeColor }];
+      const tag = externalModel.type ?? externalModel.model_type ?? "";
+      return exists ? prev : [...prev, { ...externalModel, tag, tagColor: externalModel.typeColor }];
     });
     setSelectedId(externalModel.id);
     onModelSelect?.(externalModel);

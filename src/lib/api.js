@@ -314,6 +314,16 @@ export const markAllNotificationsRead = () => request("PATCH", "/notifications/r
  * GET /models/
  * Returns all AI models available for inference.
  */
+/**
+ * GET /analytics/usage
+ * Returns monthly usage data for the current (or specified) year.
+ * @param {number} [year]
+ */
+export function getUsageAnalytics(year) {
+  const qs = year ? `?year=${year}` : "";
+  return request("GET", `/analytics/usage${qs}`);
+}
+
 export function getModels(modality) {
   const qs = modality ? `?modality=${encodeURIComponent(modality)}` : "";
   return request("GET", `/models/${qs}`);

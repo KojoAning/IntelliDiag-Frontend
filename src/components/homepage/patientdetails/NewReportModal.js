@@ -7,7 +7,7 @@ const inputCls =
   "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py-2.5 text-white text-sm outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors";
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
 
-const modalityOptions = ["MRI", "CT", "X-Ray", "Ultrasound", "PET"];
+const modalityOptions = ["MR", "CT", "X-Ray", "Ultrasound", "PET"];
 const statusOptions = [
   { value: "Draft",  color: "text-[#F59E0B] bg-[rgba(245,158,11,0.1)] border-[rgba(245,158,11,0.3)]" },
   { value: "Signed", color: "text-[#22C55E] bg-[rgba(34,197,94,0.1)] border-[rgba(34,197,94,0.3)]" },

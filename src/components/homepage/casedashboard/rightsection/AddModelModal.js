@@ -3,10 +3,10 @@ import { FiX, FiSearch, FiCheck, FiCpu } from "react-icons/fi";
 import { getModels } from "../../../../lib/api";
 
 const TYPE_COLORS = {
-  Detection:      "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
-  Segmentation:   "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
-  Classification: "text-[#06FBBE] bg-[rgba(6,148,251,0.12)]",
-  Quantification: "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
+  Detection:      "text-[#FF6B35]",
+  Segmentation:   "text-[#A855F7]",
+  Classification: "text-[#06FBBE]",
+  Quantification: "text-[#22C55E] ",
 };
 
 function parseModalities(raw) {
@@ -34,7 +34,7 @@ function mapModel(m) {
   };
 }
 
-const MODALITY_FILTERS = ["All", "MRI", "CT", "X-Ray", "Ultrasound", "OCT", "Mammography"];
+const MODALITY_FILTERS = ["All", "MR", "CT", "X-Ray", "Ultrasound", "OCT", "Mammography"];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 

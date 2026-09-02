@@ -4,7 +4,7 @@ import {
   FiClock, FiChevronRight, FiCheck, FiLoader, FiAlertTriangle,
 } from "react-icons/fi";
 import { HiUsers, HiBriefcase, HiClock, HiExclamationTriangle } from "react-icons/hi2";
-import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs, getModels } from "../../../lib/api";
+import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs, getModels, getUsageAnalytics } from "../../../lib/api";
 import { CiStopwatch } from "react-icons/ci";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -56,22 +56,6 @@ const todayDate = new Date().toLocaleDateString("en-US", {
   weekday: "long", month: "long", day: "numeric",
 });
 
-// ── Dummy chart data ─────────────────────────────────────────────────────────
-
-const USAGE_CHART_DATA = [
-  { month: "JAN", inferences: 1420, studies: 980,  flagged: 320  },
-  { month: "FEB", inferences: 1680, studies: 1100, flagged: 410  },
-  { month: "MAR", inferences: 2840, studies: 1450, flagged: 580  },
-  { month: "APR", inferences: 2100, studies: 1300, flagged: 490  },
-  { month: "MAY", inferences: 1560, studies: 870,  flagged: 350  },
-  { month: "JUN", inferences: 1320, studies: 760,  flagged: 280  },
-  { month: "JUL", inferences: 1750, studies: 920,  flagged: 410  },
-  { month: "AUG", inferences: 1480, studies: 840,  flagged: 370  },
-  { month: "SEP", inferences: 1100, studies: 650,  flagged: 240  },
-  { month: "OCT", inferences: 1380, studies: 810,  flagged: 310  },
-  { month: "NOV", inferences: 2200, studies: 1250, flagged: 520  },
-  { month: "DEC", inferences: 1900, studies: 1080, flagged: 450  },
-];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -272,6 +256,7 @@ function Display() {
   const [draftReports, setDraftReports] = useState([]);
   const [models, setModels] = useState([]);
   const [modelPerf, setModelPerf] = useState([]);
+  const [usageData, setUsageData] = useState([]);
 
   useEffect(() => {
     Promise.allSettled([
@@ -282,7 +267,8 @@ function Display() {
       getReports("?status=draft&limit=10"),
       getRecentJobs(),
       getModels(),
-    ]).then(([pRes, cRes, sRes, dRes, rRes, jRes, mRes]) => {
+      getUsageAnalytics(),
+    ]).then(([pRes, cRes, sRes, dRes, rRes, jRes, mRes, uRes]) => {
       const patients = pRes.status === "fulfilled" ? (pRes.value ?? []) : [];
       const cases = cRes.status === "fulfilled" ? (cRes.value ?? []) : [];
       const studies = sRes.status === "fulfilled" ? (sRes.value ?? []) : [];
@@ -347,6 +333,7 @@ function Display() {
         };
       });
       setModelPerf(perfData);
+      setUsageData(uRes.status === "fulfilled" ? (uRes.value ?? []) : []);
 
       setLoading(false);
     });
@@ -396,7 +383,7 @@ function Display() {
               >
                 <option style={{ background: "#111", color: "#fff" }} value="All">All Modality</option>
                 <option style={{ background: "#111", color: "#fff" }} value="CT">CT</option>
-                <option style={{ background: "#111", color: "#fff" }} value="MRI">MRI</option>
+                <option style={{ background: "#111", color: "#fff" }} value="MR">MR</option>
                 <option style={{ background: "#111", color: "#fff" }} value="PET">PET</option>
                 <option style={{ background: "#111", color: "#fff" }} value="XRAY">X-Ray</option>
                 <option style={{ background: "#111", color: "#fff" }} value="US">Ultrasound</option>
@@ -438,7 +425,7 @@ function Display() {
             : recentJobs.length === 0
               ? <div className="p-5"><EmptyRow text="No jobs yet" /></div>
               : (() => {
-                const filtered = recentJobs.filter(j => {
+                const filtered = recentJobs.slice(0, 2).filter(j => {
                   const mod = (j.modality || "").toUpperCase();
                   const sev = (j.severity || "").toLowerCase();
                   if (modalityFilter !== "All" && mod !== modalityFilter) return false;
@@ -489,18 +476,18 @@ function Display() {
             </div>
             <div className="flex items-center gap-5">
               <span className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#0694FB" }} /> Inferences
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#0694FB" }} /> Jobs
               </span>
               <span className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#C4F441" }} /> Studies Processed
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#C4F441" }} /> Studies
               </span>
               <span className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#A78BFA" }} /> AI Flagged
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#A78BFA" }} /> Cases
               </span>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={USAGE_CHART_DATA} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+            <AreaChart data={usageData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="gradInferences" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#0694FB" stopOpacity={0.3} />
@@ -524,151 +511,16 @@ function Display() {
                 labelStyle={{ color: "#6B6B6B", marginBottom: 4 }}
                 cursor={{ stroke: "#2a2a2a" }}
               />
-              <Area type="monotone" dataKey="inferences" stroke="#0694FB" strokeWidth={2.5} fill="url(#gradInferences)" dot={false} />
+              <Area type="monotone" dataKey="jobs" stroke="#0694FB" strokeWidth={2.5} fill="url(#gradInferences)" dot={false} />
               <Area type="monotone" dataKey="studies" stroke="#C4F441" strokeWidth={2.5} fill="url(#gradStudies)" dot={false} />
-              <Area type="monotone" dataKey="flagged" stroke="#A78BFA" strokeWidth={2.5} fill="url(#gradFlagged)" dot={false} />
+              <Area type="monotone" dataKey="cases" stroke="#A78BFA" strokeWidth={2.5} fill="url(#gradFlagged)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* ── Model Performance Overview ── */}
-      <div className="flex flex-col gap-2 shrink-0 mb-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">Model Performance</h2>
-            <p className="m-0 text-[#999999] text-[14px] mt-0">Inference success rates and accuracy across AI models</p>
-          </div>
-          <button
-            onClick={() => navigate("/models")}
-            className="flex items-center gap-1 text-[#0694FB] text-[12px] bg-transparent border-none cursor-pointer hover:underline p-0 ml-2"
-          >
-            View all models <FiChevronRight size={12} />
-          </button>
-        </div>
-
-        {loading ? (
-          <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl flex items-center justify-center py-16">
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
-              <p className="text-[#3a3a3a] text-[13px] m-0">Loading models…</p>
-            </div>
-          </div>
-        ) : modelPerf.length === 0 ? (
-          <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5">
-            <EmptyRow text="No models available" />
-          </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-4">
-            {modelPerf.slice(0, 3).map(m => (
-              <div
-                key={m.id}
-                onClick={() => navigate("/models")}
-                className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 cursor-pointer hover:border-[#2a2a2a] transition-colors"
-              >
-                {/* Model header */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-white text-[14px] font-medium truncate">{m.name}</span>
-                    {m.modality && (
-                      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-[#0694FB] bg-[rgba(6,148,251,0.12)] shrink-0 uppercase">
-                        {m.modality}
-                      </span>
-                    )}
-                  </div>
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full capitalize ${
-                    m.status === "active" ? "text-emerald-400 bg-emerald-500/10" :
-                    m.status === "deprecated" ? "text-red-400 bg-red-500/10" :
-                    "text-[#6B6B6B] bg-[#1E1E1E]"
-                  }`}>
-                    {m.status}
-                  </span>
-                </div>
-
-                {/* Metrics grid */}
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Accuracy */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Accuracy</span>
-                    <span className="text-white text-[20px] font-medium leading-none">
-                      {m.accuracy != null ? `${m.accuracy.toFixed(1)}%` : "—"}
-                    </span>
-                  </div>
-
-                  {/* Success Rate */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Success Rate</span>
-                    <span className={`text-[20px] font-medium leading-none ${
-                      m.successRate == null ? "text-[#3a3a3a]" :
-                      m.successRate >= 90 ? "text-emerald-400" :
-                      m.successRate >= 70 ? "text-amber-400" :
-                      "text-red-400"
-                    }`}>
-                      {m.successRate != null ? `${m.successRate.toFixed(1)}%` : "—"}
-                    </span>
-                  </div>
-
-                  {/* Avg Inference Time */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Avg Inference</span>
-                    <span className="text-white text-[20px] font-medium leading-none">
-                      {m.avgInferenceTime != null ? `${m.avgInferenceTime}ms` : "—"}
-                    </span>
-                  </div>
-
-                  {/* AUC */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">AUC</span>
-                    <span className="text-white text-[20px] font-medium leading-none">
-                      {m.auc != null ? m.auc.toFixed(3) : "—"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Jobs bar */}
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Jobs Run</span>
-                    <span className="text-[#6B6B6B] text-[11px]">{m.totalJobs} total</span>
-                  </div>
-                  {m.totalJobs > 0 ? (
-                    <div className="flex h-2 rounded-full overflow-hidden bg-[#1E1E1E]">
-                      {m.completedJobs > 0 && (
-                        <div
-                          className="bg-emerald-400 h-full"
-                          style={{ width: `${(m.completedJobs / m.totalJobs) * 100}%` }}
-                          title={`${m.completedJobs} completed`}
-                        />
-                      )}
-                      {m.failedJobs > 0 && (
-                        <div
-                          className="bg-red-400 h-full"
-                          style={{ width: `${(m.failedJobs / m.totalJobs) * 100}%` }}
-                          title={`${m.failedJobs} failed`}
-                        />
-                      )}
-                    </div>
-                  ) : (
-                    <div className="h-2 rounded-full bg-[#1E1E1E]" />
-                  )}
-                  {m.totalJobs > 0 && (
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> {m.completedJobs} passed
-                      </span>
-                      {m.failedJobs > 0 && (
-                        <span className="flex items-center gap-1 text-[10px] text-red-400">
-                          <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> {m.failedJobs} failed
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      
 
       {/* ── Recent Studies ── */}
       {/* {!loading && recentStudies.length > 0 && (

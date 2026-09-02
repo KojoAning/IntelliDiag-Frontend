@@ -128,7 +128,7 @@ function LoadingRow() {
 
 // ── Filters ───────────────────────────────────────────────────────────────────
 
-const MODALITIES = ["All", "MRI", "CT", "X-Ray", "Ultrasound", "PET"];
+const MODALITIES = ["All", "MR", "CT", "X-Ray", "Ultrasound", "PET"];
 const STATUSES   = ["All", "Draft", "Signed"];
 
 // ── Main Page ─────────────────────────────────────────────────────────────────

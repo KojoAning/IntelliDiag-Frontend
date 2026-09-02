@@ -7,7 +7,7 @@ const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
 
 const modalityOptions = [
-  { value: "MRI",        color: "text-[#0694FB] bg-[rgba(6,148,251,0.1)] border-[rgba(6,148,251,0.3)]" },
+  { value: "MR",         color: "text-[#0694FB] bg-[rgba(6,148,251,0.1)] border-[rgba(6,148,251,0.3)]" },
   { value: "CT",         color: "text-[#F59E0B] bg-[rgba(245,158,11,0.1)] border-[rgba(245,158,11,0.3)]" },
   { value: "X-Ray",      color: "text-[#22C55E] bg-[rgba(34,197,94,0.1)] border-[rgba(34,197,94,0.3)]" },
   { value: "Ultrasound", color: "text-[#A855F7] bg-[rgba(168,85,247,0.1)] border-[rgba(168,85,247,0.3)]" },

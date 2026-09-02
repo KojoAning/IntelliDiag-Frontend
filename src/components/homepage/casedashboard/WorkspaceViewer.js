@@ -147,7 +147,27 @@ function WorkspaceViewer() {
           }),
         });
 
-        if (reportRes.ok && reportRes.body) {
+        // Try to prefill from a saved report for this series
+        const seriesId = activeSeries?.id;
+        let hasSavedReport = false;
+        if (seriesId) {
+          try {
+            const savedRes = await authFetch(`${API_BASE}/reports/series/${seriesId}`);
+            if (savedRes.ok) {
+              const saved = await savedRes.json();
+              if (!cancelled) {
+                if (saved.ai_report) {
+                  updateCtx(pollModelId, { aiResponse: saved.ai_report });
+                  hasSavedReport = true;
+                }
+                if (saved.notes) setImpression(saved.notes);
+              }
+            }
+          } catch { /* no saved report — fall through to streaming */ }
+        }
+
+        // Only stream a new report if no saved one exists
+        if (!hasSavedReport && reportRes.ok && reportRes.body) {
           const reader = reportRes.body.getReader();
           const decoder = new TextDecoder();
           let text = "";
@@ -838,6 +858,7 @@ function WorkspaceViewer() {
       series_id: activeSeries?.id || undefined,
       job_id: jobId || undefined,
       ai_report: aiResponse || undefined,
+      notes: impression.trim() || undefined,
       model_name: selectedModel?.name || undefined,
       severity: undefined,
       tat: undefined,
@@ -1008,7 +1029,7 @@ function WorkspaceViewer() {
 
         {overrideDialog && (
           <motion.div
-            className="fixed inset-0 z-[999] flex items-center justify-center"
+            className="fixed inset-0 z-[1001] flex items-center justify-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -1090,7 +1111,7 @@ function WorkspaceViewer() {
                 <div>
                   <div className="flex items-center justify-between shrink-0">
                     <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-                      <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Report</p>
+                      <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
                     </div>
                     <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
                       <FiX size={18} />
@@ -1117,23 +1138,23 @@ function WorkspaceViewer() {
               </div>
 
               {/* Footer */}
-              {/* <div className="px-7 pb-6 shrink-0">
+              <div className="px-7 pb-6 pt-4 shrink-0 border-t border-[#1E1E1E] flex justify-end">
                 <button
                   onClick={() => handleSaveReport(impression)}
                   disabled={reportSaving || (!aiResponse && !impression.trim())}
-                  className="w-full py-2.5 rounded-full text-[13px] font-medium border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#0694FB] hover:bg-[#0578d1] enabled:cursor-pointer text-white"
+                  className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {reportSaving ? (
-                    <span className="flex items-center justify-center gap-2">
+                    <>
                       <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
                       Saving…
-                    </span>
+                    </>
                   ) : "Save & Generate Report"}
                 </button>
-              </div> */}
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -1245,7 +1266,7 @@ function WorkspaceViewer() {
                 jobStatus={jobStatus}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} />
               </div>
             </div>
 

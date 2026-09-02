@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useReactToPrint } from "react-to-print";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -303,6 +304,20 @@ export default function ReportViewer() {
   const [currentFont, setCurrentFont] = useState("Helvetica");
   const [currentSize, setCurrentSize] = useState("4");
   const reportPaperRef = useRef(null);
+  const handlePrint = useReactToPrint({
+    contentRef: reportPaperRef,
+    documentTitle: report?.title || "Radiology Report",
+    ignoreGlobalStyles: true,
+    pageStyle: `
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 0; background: #fff; font-family: 'Inter', Arial, sans-serif; }
+      @page { size: A4; margin: 0; }
+      @media print {
+        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; color-adjust: exact; }
+        .report-bottom { position: fixed; bottom: 0; left: 0; right: 0; width: 100%; }
+      }
+    `,
+  });
   const [caseReports, setCaseReports] = useState([]);
   const [activeReportTab, setActiveReportTab] = useState(id);
   const [expandedAiReport, setExpandedAiReport] = useState(false);
@@ -356,19 +371,9 @@ export default function ReportViewer() {
         .catch(() => null),
     ]).then(([reportData, tplData]) => {
       const list = Array.isArray(reportData) ? reportData : [];
-      // TODO: remove dummy tabs
-      const dummyTabs = [
-        { id: "dummy-1", study_name: "CRANE+POLYGONE", series_name: "Crane Osseux", ai_report: list[0]?.ai_report },
-        { id: "dummy-2", study_name: "CRANE+POLYGONE", series_name: "Axial T1", ai_report: list[0]?.ai_report },
-        { id: "dummy-3", study_name: "CHEST CT", series_name: "Lung Window", ai_report: list[0]?.ai_report },
-        { id: "dummy-4", study_name: "CHEST CT", series_name: "Mediastinal", ai_report: list[0]?.ai_report },
-        { id: "dummy-5", study_name: "ABDOMEN MRI", series_name: "Coronal T2", ai_report: list[0]?.ai_report },
-        { id: "dummy-6", study_name: "ABDOMEN MRI", series_name: "Axial DWI", ai_report: list[0]?.ai_report },
-      ];
-      const combined = [...list, ...dummyTabs];
       setReport(list[0] || null);
-      setCaseReports(combined);
-      if (combined.length > 0) setActiveReportTab(combined[0].id);
+      setCaseReports(list);
+      if (list.length > 0) setActiveReportTab(list[0].id);
       setTemplate(tplData ?? loadTemplate());
     }).catch(() => {
       setTemplate(loadTemplate());
@@ -509,7 +514,7 @@ export default function ReportViewer() {
               )}
             </div>
 
-            
+
           </div>
         </motion.div>
 
@@ -612,106 +617,105 @@ export default function ReportViewer() {
               );
             })()
           ) : (
-          <div
-            className="flex-1 min-h-0 overflow-auto px-6 pb-6 pt-2 bg-[#080808] border border-t-0 border-[#1E1E1E] rounded-b-[15px]"
-            style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
-          >
             <div
-              ref={reportPaperRef}
-              className="bg-white  shadow-2xl overflow-hidden"
-              style={{ fontFamily: "'Inter', Arial, sans-serif", maxWidth: 900, minHeight: 1273, margin: "0 auto", display: "flex", flexDirection: "column" }}
+              className="flex-1 min-h-0 overflow-auto px-6 pb-6 pt-2 bg-[#080808] border border-t-0 border-[#1E1E1E] rounded-b-[15px]"
+              style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
             >
-              {/* Center header */}
-              <div style={{ background: "#1a2d5a", padding: "25px 20px", fontFamily: "'Google Sans', Arial, sans-serif" }} className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div style={{ width: 48, height: 48, borderRadius: 8, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#1a2d5a" }}>
-                    {centerInfo.name?.[0] || "S"}
-                  </div>
-                  <div>
-                    <div style={{ color: "#fff", fontWeight: 500, fontSize: 18, letterSpacing: 1 }}>{centerInfo.name}</div>
-                    <div style={{ color: "#90caf9", fontSize: 12 }}>{centerInfo.tagline}</div>
-                  </div>
-                </div>
-                <div style={{ textAlign: "right", color: "#90caf9", fontSize: 12, letterSpacing: 1 }}>
-                  <div>{centerInfo.phone}</div>
-                  <div>{centerInfo.email}</div>
-                </div>
-              </div>
-
-              {/* Address bar */}
-              <div style={{ background: "#f5f5f5", padding: "15px 20px", fontSize: 12, color: "#666", borderBottom: "1px solid #ddd" }}>
-                {centerInfo.address}
-              </div>
-
-              {/* Patient info block */}
-              {showPatientInfo && (
-                <div style={{ padding: "30px 50px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 15, color: "#111" }}>{patient.name}</div>
-                    <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>Age: {patient.age} &nbsp;|&nbsp; Sex: {patient.sex}</div>
-                  </div>
-                  <div style={{ fontSize: 11, color: "#555", textAlign: "right" }}>
-                    <div><b>PID:</b> {patient.pid}</div>
-                    <div><b>DOB:</b> {patient.dob}</div>
-                  </div>
-                  <div style={{ fontSize: 11, color: "#555", textAlign: "right" }}>
-                    <div><b>Study Date:</b> {patient.registeredOn}</div>
-                    <div><b>Reported on:</b> {patient.reportedOn}</div>
-                  </div>
-                </div>
-              )}
-
-              {/* Report type title */}
-              <div style={{ textAlign: "left", padding: "10px 40px 6px", fontWeight: 600, fontSize: 17, color: "#000" }}>
-                {report.title || "Radiology Report"}
-              </div>
-
-              {/* Sections */}
-              <div style={{ padding: "8px 50px 16px", flex: 1 }}>
-                {sectionContent.length === 0 && report.ai_report ? (
-                  <EditableDiv
-                    initialHtml={markdownToHtml(report.ai_report)}
-                    style={{ marginBottom: 14, padding: "8px 10px", outline: "none", minHeight: 40 }}
-                  />
-                ) : (
-                  sectionContent.map(section => (
-                    <div key={section.id} style={{ marginBottom: 14, padding: "8px 10px" }}>
-                      <div style={{ fontWeight: 700, fontSize: 15, color: "#000", marginBottom: 6 }}>
-                        {section.title}:
-                      </div>
-                      <EditableDiv
-                        initialHtml={section.content ? markdownToHtml(section.content) : ""}
-                        style={{ fontSize: 12, color: "#333", lineHeight: 1.6, outline: "none", minHeight: 30 }}
-                      />
+              <div
+                ref={reportPaperRef}
+                style={{ background: "#fff", fontFamily: "'Inter', Arial, sans-serif", maxWidth: 900, minHeight: 1273, margin: "0 auto", display: "flex", flexDirection: "column" }}
+              >
+                {/* Center header */}
+                <div style={{ background: "#1a2d5a", padding: "25px 20px", fontFamily: "'Google Sans', Arial, sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ width: 48, height: 48, borderRadius: 8, background: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#1a2d5a", flexShrink: 0 }}>
+                      {centerInfo.name?.[0] || "S"}
                     </div>
-                  ))
+                    <div>
+                      <div style={{ color: "#fff", fontWeight: 500, fontSize: 18, letterSpacing: 1 }}>{centerInfo.name}</div>
+                      <div style={{ color: "#90caf9", fontSize: 12 }}>{centerInfo.tagline}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", color: "#90caf9", fontSize: 12, letterSpacing: 1 }}>
+                    <div>{centerInfo.phone}</div>
+                    <div>{centerInfo.email}</div>
+                  </div>
+                </div>
+
+                {/* Address bar */}
+                <div style={{ background: "#f5f5f5", padding: "15px 20px", fontSize: 12, color: "#666", borderBottom: "1px solid #ddd" }}>
+                  {centerInfo.address}
+                </div>
+
+                {/* Patient info block */}
+                {showPatientInfo && (
+                  <div style={{ padding: "30px 50px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 15, color: "#111" }}>{patient.name}</div>
+                      <div style={{ fontSize: 11, color: "#555", marginTop: 2 }}>Age: {patient.age} &nbsp;|&nbsp; Sex: {patient.sex}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#555", textAlign: "right" }}>
+                      <div><b>PID:</b> {patient.pid}</div>
+                      <div><b>DOB:</b> {patient.dob}</div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#555", textAlign: "right" }}>
+                      <div><b>Study Date:</b> {patient.registeredOn}</div>
+                      <div><b>Reported on:</b> {patient.reportedOn}</div>
+                    </div>
+                  </div>
                 )}
-              </div>
 
-              {/* Signature area */}
-              {showSignatureArea && (
-                <div style={{ padding: "10px 20px 16px", borderTop: "1px solid #ddd", display: "flex", justifyContent: "space-between", gap: 12 }}>
-                  {signatures.map(sig => (
-                    <div key={sig.id} style={{ textAlign: "center", flex: 1 }}>
-                      <div style={{ height: 52, borderBottom: "1px solid #aaa", marginBottom: 4, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-                        {sig.image && (
-                          <img src={sig.image} alt={sig.role} style={{ maxHeight: 48, maxWidth: "100%", objectFit: "contain", marginBottom: 2 }} />
-                        )}
-                      </div>
-                      <div style={{ fontSize: 11, color: "#111", fontWeight: 600 }}>{sig.name || "\u00a0"}</div>
-                      <div style={{ fontSize: 10, color: "#555" }}>{sig.role}</div>
-                    </div>
-                  ))}
+                {/* Report type title */}
+                <div style={{ textAlign: "left", padding: "10px 40px 6px", fontWeight: 600, fontSize: 17, color: "#000" }}>
+                  {report.title || "Radiology Report"}
                 </div>
-              )}
 
-              {/* Footer bar */}
-              <div style={{ background: "#1a2d5a", padding: "8px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ color: "#90caf9", fontSize: 10 }}>{centerInfo.name}</div>
-                <div style={{ color: "#fff", fontWeight: 700, fontSize: 13 }}>{centerInfo.phone?.split("/")[0]?.trim()}</div>
+                {/* Sections */}
+                <div style={{ padding: "8px 50px 16px", flex: 1 }}>
+                  {sectionContent.length === 0 && report.ai_report ? (
+                    <EditableDiv
+                      initialHtml={markdownToHtml(report.ai_report)}
+                      style={{ marginBottom: 14, padding: "8px 10px", outline: "none", minHeight: 40 }}
+                    />
+                  ) : (
+                    sectionContent.map(section => (
+                      <div key={section.id} style={{ marginBottom: 14, padding: "8px 10px" }}>
+                        <div style={{ fontWeight: 700, fontSize: 15, color: "#000", marginBottom: 6 }}>
+                          {section.title}:
+                        </div>
+                        <EditableDiv
+                          initialHtml={section.content ? markdownToHtml(section.content) : ""}
+                          style={{ fontSize: 12, color: "#333", lineHeight: 1.6, outline: "none", minHeight: 30 }}
+                        />
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Signature area */}
+                {showSignatureArea && (
+                  <div className="report-bottom" style={{ padding: "10px 20px 16px", borderTop: "1px solid #ddd", display: "flex", justifyContent: "space-between", gap: 12 }}>
+                    {signatures.map(sig => (
+                      <div key={sig.id} style={{ textAlign: "center", flex: 1 }}>
+                        <div style={{ height: 52, borderBottom: "1px solid #aaa", marginBottom: 4, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+                          {sig.image && (
+                            <img src={sig.image} alt={sig.role} style={{ maxHeight: 48, maxWidth: "100%", objectFit: "contain", marginBottom: 2 }} />
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#111", fontWeight: 600 }}>{sig.name || "\u00a0"}</div>
+                        <div style={{ fontSize: 10, color: "#555" }}>{sig.role}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Footer bar */}
+                <div className="report-bottom" style={{ background: "#1a2d5a", padding: "8px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ color: "#90caf9", fontSize: 10 }}>{centerInfo.name}</div>
+                  <div style={{ color: "#fff", fontWeight: 700, fontSize: 13 }}>{centerInfo.phone?.split("/")[0]?.trim()}</div>
+                </div>
               </div>
             </div>
-          </div>
           )}
         </motion.div>
 
@@ -719,12 +723,7 @@ export default function ReportViewer() {
         <div className="w-[370px] shrink-0 flex flex-col gap-2">
           <div className="flex items-center justify-end gap-2  mb-4 shrink-0">
             <button
-              onClick={() => {
-                if (!reportPaperRef.current) return;
-                reportPaperRef.current.classList.add("print-target");
-                window.print();
-                reportPaperRef.current.classList.remove("print-target");
-              }}
+              onClick={handlePrint}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-transparent text-[#A0A0A0] hover:text-white hover:border-[#2a2a2a] text-[13px] cursor-pointer transition-all"
             >
               <FiPrinter size={14} />
@@ -734,118 +733,135 @@ export default function ReportViewer() {
               Finalize & Sign
             </button>
           </div>
-        <motion.div
-          className="flex-1 min-h-0 flex flex-col gap-3 bg-[#161616] rounded-[15px] p-[18px]"
-          initial={{ opacity: 0, x: 14 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.3, delay: 0.1 }}
-        >
-          <div className="flex items-center justify-between mb-1">
-            <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1 flex items-center gap-1.5 w-fit">
-              <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Reports</p>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => {
-                  const activeReport = caseReports.find(r => r.id === activeReportTab) || report;
-                  if (!activeReport) return;
-                  navigate("/case-workspace/viewer", {
-                    state: {
-                      study: { id: activeReport.study_id, name: activeReport.study_name, case_id: activeReport.case_id },
-                      series: { id: activeReport.series_id, name: activeReport.series_name },
-                      case_id: activeReport.case_id,
-                      from_jobs: true,
-                      job_id: activeReport.job_id,
-                      initial_status: "completed",
-                    },
-                  });
-                }}
-                className="flex items-center gap-1.5 px-[12px] py-1.5 rounded-full text-[#1a1a1a] bg-[#E4F77D] hover:bg-[#d4ec6a] transition-colors cursor-pointer border-none text-[12px] font-medium"
-                title="DICOM Viewer"
-              >
-                <FiMonitor size={13} />
-               View DICOM
-              </button>
-              <button
-                onClick={() => setExpandedAiReport(true)}
-                className="text-[#6B6B6B] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1"
-                title="Expand"
-              >
-                <FiMaximize2 size={14} />
-              </button>
-            </div>
-          </div>
-
-          {/* Series tabs */}
-          {caseReports.length > 0 && (
-            <div
-              className="flex flex-wrap shrink-0"
-              style={{ borderBottom: "1px solid #2a2a2a" }}
-            >
-              {caseReports.map((r) => {
-                const label = [r.study_name, r.series_name].filter(Boolean).join(" - ") || r.title || "Report";
-                const isActive = r.id === activeReportTab;
-                return (
-                  <button
-                    key={r.id}
-                    onClick={() => setActiveReportTab(r.id)}
-                    className="px-4 py-2 text-[11px] font-medium cursor-pointer transition-all whitespace-nowrap shrink-0 bg-transparent"
-                    style={{
-                      border: "1px solid #2a2a2a",
-                      borderBottom: "none",
-                      borderRadius: "9px 9px 0 0",
-                      color: isActive ? "#fff" : "#757575",
-                      backgroundColor: isActive ? "#0694FB" : "#161616",
-                      marginBottom: -1,
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {(() => {
-            const activeAiReport = caseReports.find(r => r.id === activeReportTab) || report;
-            console.log("activeAiReport keys:", activeAiReport ? Object.keys(activeAiReport) : "null", activeAiReport);
-            return activeAiReport?.ai_report ? (
-              <div
-                className="text-[#fdfbfb] bg-[#111111] p-4 rounded-[5px] text-[12px] leading-relaxed overflow-y-auto flex-1 min-h-0 pr-1"
-                style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
-              >
-                {/* Meta: model, severity, TAT */}
-                {(activeAiReport.model_name || activeAiReport.severity || activeAiReport.tat) && (
-                  <div className="flex items-center gap-2 flex-wrap mb-3 pb-3 border-b border-[#2a2a2a]">
-                    {activeAiReport.model_name && (
-                      <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full text-[#0694FB] bg-[rgba(6,148,251,0.12)]">
-                        {activeAiReport.model_name}
-                      </span>
-                    )}
-                    {activeAiReport.severity && (
-                      <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${
-                        activeAiReport.severity.toLowerCase() === "critical" ? "text-red-400 bg-red-500/12" :
-                        activeAiReport.severity.toLowerCase() === "urgent" ? "text-amber-400 bg-amber-500/12" :
-                        "text-emerald-400 bg-emerald-500/12"
-                      }`}>
-                        {activeAiReport.severity}
-                      </span>
-                    )}
-                    {activeAiReport.tat && (
-                      <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full text-[#A78BFA] bg-[rgba(167,139,250,0.12)]">
-                        TAT: {activeAiReport.tat}
-                      </span>
-                    )}
-                  </div>
-                )}
-                {renderMarkdownDark(activeAiReport.ai_report)}
+          <motion.div
+            className="flex-1 min-h-0 flex flex-col gap-3 bg-[#161616] rounded-[15px] p-[18px]"
+            initial={{ opacity: 0, x: 14 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.3, delay: 0.1 }}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1 flex items-center gap-1.5 w-fit">
+                <p className="text-[#0694FB] text-[12px] font-medium m-0">Generated Reports</p>
               </div>
-            ) : (
-              <p className="text-[#6B6B6B] text-[12px] m-0 italic">No AI report available</p>
-            );
-          })()}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    const activeReport = caseReports.find(r => r.id === activeReportTab) || report;
+                    if (!activeReport) return;
+                    navigate("/case-workspace/viewer", {
+                      state: {
+                        study: { id: activeReport.study_id, name: activeReport.study_name, case_id: activeReport.case_id },
+                        series: { id: activeReport.series_id, name: activeReport.series_name },
+                        case_id: activeReport.case_id,
+                        from_jobs: true,
+                        job_id: activeReport.job_id,
+                        initial_status: "completed",
+                      },
+                    });
+                  }}
+                  className="flex items-center gap-1.5 px-[12px] py-1.5 rounded-full text-[#1a1a1a] bg-[#E4F77D] hover:bg-[#d4ec6a] transition-colors cursor-pointer border-none text-[12px] font-medium"
+                  title="DICOM Viewer"
+                >
+                  <FiMonitor size={13} />
+                  View DICOM
+                </button>
+                <button
+                  onClick={() => setExpandedAiReport(true)}
+                  className="text-[#6B6B6B] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1"
+                  title="Expand"
+                >
+                  <FiMaximize2 size={14} />
+                </button>
+              </div>
+            </div>
 
-        </motion.div>
+            {/* Series tabs */}
+            {caseReports.length > 0 && (
+              <div
+                className="flex flex-wrap shrink-0"
+                style={{ borderBottom: "1px solid #2a2a2a" }}
+              >
+                {caseReports.map((r) => {
+                  const label = [r.study_name, r.series_name].filter(Boolean).join(" - ") || r.title || "Report";
+                  const isActive = r.id === activeReportTab;
+                  return (
+                    <button
+                      key={r.id}
+                      onClick={() => setActiveReportTab(r.id)}
+                      title={label}
+                      className="px-4 py-2 text-[11px] font-medium cursor-pointer transition-all shrink-0 bg-transparent overflow-hidden"
+                      style={{
+                        border: "1px solid #2a2a2a",
+                        borderBottom: "none",
+                        borderRadius: "9px 9px 0 0",
+                        color: isActive ? "#fff" : "#757575",
+                        backgroundColor: isActive ? "#0694FB" : "#161616",
+                        marginBottom: -1,
+                        maxWidth: 200,
+                        whiteSpace: "nowrap",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {(() => {
+              const activeAiReport = caseReports.find(r => r.id === activeReportTab) || report;
+              console.log("activeAiReport keys:", activeAiReport ? Object.keys(activeAiReport) : "null", activeAiReport);
+              return (
+                <div
+                  className="text-[#fdfbfb] bg-[#111111] p-4 rounded-[5px] text-[12px] leading-relaxed overflow-y-auto flex-1 min-h-0 pr-1"
+                  style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
+                >
+                  {activeAiReport?.notes && (
+                    <div className="flex flex-col gap-2 mb-4 pb-4 border-b border-[#2a2a2a]">
+                      <p className="text-[#6B6B6B] text-[11px] font-medium uppercase tracking-wider m-0">Doctor Notes</p>
+                      <div className="bg-[#161616] border border-[#2a2a2a] rounded-xl px-4 py-3">
+                        <p className="text-[#CCCCCC] text-[12px] m-0 leading-relaxed whitespace-pre-wrap">{activeAiReport.notes}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeAiReport?.ai_report ? (
+                    <>
+                      {/* Section header + model pill */}
+                      <div className="flex items-center justify-between gap-2 mb-3 pb-3 border-b border-[#2a2a2a]">
+                        <p className="text-[#6B6B6B] text-[11px] font-medium uppercase tracking-wider m-0">System Generated Report</p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {activeAiReport.model_name && (
+                            <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full text-[#0694FB] bg-[rgba(6,148,251,0.12)]">
+                              {activeAiReport.model_name}
+                            </span>
+                          )}
+                          {activeAiReport.severity && (
+                            <span className={`text-[11px] font-medium px-2.5 py-0.5 rounded-full ${activeAiReport.severity.toLowerCase() === "critical" ? "text-red-400 bg-red-500/12" :
+                              activeAiReport.severity.toLowerCase() === "urgent" ? "text-amber-400 bg-amber-500/12" :
+                                "text-emerald-400 bg-emerald-500/12"
+                              }`}>
+                              {activeAiReport.severity}
+                            </span>
+                          )}
+                          {activeAiReport.tat && (
+                            <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full text-[#A78BFA] bg-[rgba(167,139,250,0.12)]">
+                              TAT: {activeAiReport.tat}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {renderMarkdownDark(activeAiReport.ai_report)}
+                    </>
+                  ) : (
+                    <p className="text-[#6B6B6B] text-[12px] m-0 italic">No Sytem Generated Report Available</p>
+                  )}
+                </div>
+              );
+            })()}
+
+          </motion.div>
         </div>
       </div>
 
@@ -872,7 +888,7 @@ export default function ReportViewer() {
               {/* Header */}
               <div className="flex items-center justify-between px-7 pt-6 pb-4">
                 <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-                  <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Reports</p>
+                  <p className="text-[#0694FB] text-[12px] font-medium m-0">Generated Reports</p>
                 </div>
                 <button onClick={() => setExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1">
                   <FiX size={18} />
@@ -907,12 +923,25 @@ export default function ReportViewer() {
               )}
 
               {/* Report content */}
-              <div className="flex-1 bg-[#1a1a1a] overflow-y-auto px-7 py-5" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
+              <div className="flex-1 bg-[#1a1a1a] overflow-y-auto px-7 py-5 flex flex-col gap-6" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
                 {(() => {
-                  const activeAiReport = caseReports.find(r => r.id === activeReportTab) || report;
-                  return activeAiReport?.ai_report
-                    ? renderMarkdownDark(activeAiReport.ai_report)
-                    : <p className="text-[#6B6B6B] text-[12px] m-0 italic">No AI report available</p>;
+                  const activeReport = caseReports.find(r => r.id === activeReportTab) || report;
+                  return (
+                    <>
+
+                      {activeReport?.notes && (
+                        <div className="flex flex-col gap-2">
+                          <p className="text-[#6B6B6B] text-[11px] font-medium uppercase tracking-wider m-0">Doctor Notes</p>
+                          <div className="bg-[#111] border border-[#2a2a2a] rounded-xl px-4 py-3">
+                            <p className="text-[#CCCCCC] text-[13px] m-0 leading-relaxed whitespace-pre-wrap">{activeReport.notes}</p>
+                          </div>
+                        </div>
+                      )} {activeReport?.ai_report
+                        ? renderMarkdownDark(activeReport.ai_report)
+                        : <p className="text-[#6B6B6B] text-[12px] m-0 italic">No System Generated Report Availablr</p>}
+
+                    </>
+                  );
                 })()}
               </div>
             </motion.div>

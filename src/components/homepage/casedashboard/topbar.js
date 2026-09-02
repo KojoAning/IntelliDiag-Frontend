@@ -11,7 +11,7 @@ const statusColors = {
 };
 
 const studyModalityColors = {
-  MRI:       "text-[#0694FB]",
+  MR:        "text-[#0694FB]",
   CT:        "text-[#F59E0B]",
   "X-Ray":   "text-[#22C55E]",
   Ultrasound:"text-[#A855F7]",

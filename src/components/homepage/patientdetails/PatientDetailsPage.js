@@ -40,7 +40,6 @@ const urgencyStyles = {
 };
 
 const modalityColors = {
-  MRI: "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
   MR: "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
   "X-Ray": "text-[#22C55E] bg-[rgba(34,197,94,0.15)]",
   CT: "text-[#F59E0B] bg-[rgba(245,158,11,0.15)]",
@@ -760,7 +759,7 @@ function PatientDetailsPage() {
     setReportsLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const res = await authFetch(`${baseURL}/reports/?case_id=${caseId}`);
+      const res = await authFetch(`${baseURL}/reports/case/${caseId}`);
       if (!res.ok) return;
       setReports(await res.json());
     } catch (_) { }

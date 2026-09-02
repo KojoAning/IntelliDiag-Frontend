@@ -7,7 +7,7 @@ const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
 
 const modalityColors = {
-  MRI:        "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
+  MR:         "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
   CT:         "text-[#F59E0B] bg-[rgba(245,158,11,0.15)]",
   "X-Ray":    "text-[#22C55E] bg-[rgba(34,197,94,0.15)]",
   Ultrasound: "text-[#A855F7] bg-[rgba(168,85,247,0.15)]",

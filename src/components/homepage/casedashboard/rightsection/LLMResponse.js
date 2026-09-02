@@ -73,8 +73,7 @@ function renderInline(text) {
 // Height below which we collapse to the compact "View Report" button
 const COLLAPSE_THRESHOLD = 260;
 
-function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving }) {
-  const [impression, setImpression] = useState("");
+function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving, impression = "", onImpressionChange }) {
   const [collapsed, setCollapsed] = useState(false);
   const observerRef = useRef(null);
 
@@ -128,7 +127,7 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
       {/* Header */}
       <div className="flex items-center justify-between shrink-0">
         <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-          <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Report</p>
+          <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
         </div>
         {response && <button onClick={()=>expandReport()}><ExpandIcon size={20}  className="text-[#0694FB]"/></button>}
         
@@ -169,7 +168,7 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
         <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0">Radiologist Impression</p>
         <textarea
           value={impression}
-          onChange={(e) => setImpression(e.target.value)}
+          onChange={(e) => onImpressionChange?.(e.target.value)}
           placeholder="Add your impression..."
           rows={3}
           className="w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none"

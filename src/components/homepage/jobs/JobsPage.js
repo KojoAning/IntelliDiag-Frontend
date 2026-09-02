@@ -169,7 +169,7 @@ function LoadingRow() {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const MODALITIES = ["All", "CT", "MRI", "PET", "XRAY", "US"];
+const MODALITIES = ["All", "CT", "MR", "PET", "XRAY", "US"];
 const STATUSES   = ["All", "running", "pending", "queued", "completed", "failed", "cancelled"];
 const SEVERITIES = ["All", "high", "medium", "low"];
 

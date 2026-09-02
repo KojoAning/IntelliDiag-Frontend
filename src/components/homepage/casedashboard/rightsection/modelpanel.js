@@ -6,7 +6,7 @@ import { Plus } from "lucide-react";
 const DEFAULT_MODELS = [
  ];
 
-function ModelPanel({ onModelSelect, selectedModel: externalModel }) {
+function ModelPanel({ onModelSelect, selectedModel: externalModel, modality }) {
   const [models, setModels]         = useState(DEFAULT_MODELS);
   const [modalOpen, setModalOpen]   = useState(false);
   const [selectedId, setSelectedId] = useState(null);
@@ -100,6 +100,7 @@ function ModelPanel({ onModelSelect, selectedModel: externalModel }) {
         addedIds={addedIds}
         onAdd={handleAdd}
         onRemove={handleRemove}
+        modality={modality}
       />
     </>
   );

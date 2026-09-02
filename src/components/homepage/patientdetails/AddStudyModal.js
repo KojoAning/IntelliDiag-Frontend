@@ -104,7 +104,7 @@ function AddStudyModal({ isOpen, onClose, caseId, onCreated }) {
                 <label className={labelCls}>Study Name</label>
                 <input
                   type="text"
-                  placeholder="e.g. MRI Right Knee"
+                  placeholder="e.g. MR Right Knee"
                   value={studyInfo.name || ""}
                   onChange={e => set("name", e.target.value)}
                   className={inputCls}

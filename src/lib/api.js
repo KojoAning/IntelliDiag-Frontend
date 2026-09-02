@@ -265,6 +265,13 @@ export function confirmDocumentUpload(documentId, status) {
 }
 
 /**
+ * DELETE /documents/{document_id}
+ */
+export function deleteDocument(documentId) {
+  return request("DELETE", `/documents/${documentId}`);
+}
+
+/**
  * POST /series/
  * @param {{ series_name, series_number, modality, description, study_id }} payload
  */
@@ -307,8 +314,9 @@ export const markAllNotificationsRead = () => request("PATCH", "/notifications/r
  * GET /models/
  * Returns all AI models available for inference.
  */
-export function getModels() {
-  return request("GET", "/models/");
+export function getModels(modality) {
+  const qs = modality ? `?modality=${encodeURIComponent(modality)}` : "";
+  return request("GET", `/models/${qs}`);
 }
 
 /**

@@ -11,7 +11,7 @@ import {
   FiArrowLeft, FiDownload, FiMaximize2, FiSearch,
   FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud, FiTrash2,
 } from "react-icons/fi";
-import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, getPatientById, deleteStudy, authFetch } from "../../../lib/api";
+import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, deleteDocument, getPatientById, deleteStudy, authFetch } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 20 },
@@ -131,9 +131,9 @@ function FindingCard({ finding }) {
 const DOCUMENT_TYPES = ["Consent", "Referral", "Insurance", "History", "Lab", "Other"];
 
 function DocumentsSection({ patientId, caseId }) {
-  const [docs, setDocs]         = useState([]);
+  const [docs, setDocs] = useState([]);
   const [docsLoading, setDocsLoading] = useState(true);
-  const [search, setSearch]     = useState("");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     if (!patientId) return;
@@ -143,13 +143,13 @@ function DocumentsSection({ patientId, caseId }) {
         setDocs((data ?? [])
           .filter(d => d.status === "uploaded")
           .map(d => ({
-            id:         d.id,
-            name:       d.file_name,
-            type:       d.file_name.split(".").pop().toUpperCase(),
-            size:       "",
-            uploadedBy: d.uploaded_by_id ?? "—",
-            date:       d.created_at ? new Date(d.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
-            category:   d.document_type ?? "Other",
+            id: d.id,
+            name: d.file_name,
+            type: d.file_name.split(".").pop().toUpperCase(),
+            size: "",
+            uploadedBy: d.uploaded_by_name ?? "—",
+            date: d.created_at ? new Date(d.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
+            category: d.document_type ?? "Other",
           }))
         );
       })
@@ -157,12 +157,16 @@ function DocumentsSection({ patientId, caseId }) {
       .finally(() => setDocsLoading(false));
   }, [patientId]);
 
+  // Delete confirmation dialog
+  const [deleteDialog, setDeleteDialog] = useState(null); // { id, name }
+  const [deleting, setDeleting] = useState(false);
+
   // Upload flow state
-  const fileInputRef              = useRef(null);
-  const [pendingFile, setPending] = useState(null);   // File awaiting type selection
-  const [docType, setDocType]     = useState("Consent");
+  const fileInputRef = useRef(null);
+  const [pendingFiles, setPending] = useState([]);   // Files awaiting type selection
+  const [docType, setDocType] = useState("Consent");
   const [uploading, setUploading] = useState(false);
-  const [uploadPct, setUploadPct] = useState(0);
+  const [uploadPct, setUploadPct] = useState(0);   // overall progress across all files
   const [uploadErr, setUploadErr] = useState(null);
 
   const filtered = docs.filter(d =>
@@ -171,59 +175,53 @@ function DocumentsSection({ patientId, caseId }) {
   );
 
   const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setPending(file);
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setPending(files);
     setDocType("Consent");
     setUploadErr(null);
     e.target.value = null;
   };
 
   const handleUpload = async () => {
-    if (!pendingFile || !patientId) return;
+    if (!pendingFiles.length || !patientId) return;
     setUploading(true);
     setUploadPct(0);
     setUploadErr(null);
+    const newDocs = [];
     try {
-      // Step 1 — request a signed GCS upload URL
-      const uploadPayload = {
-        patient_id:    patientId,
-        file_name:     pendingFile.name,
-        document_type: docType,
-      };
-      if (caseId) uploadPayload.case_id = caseId;
+      for (let i = 0; i < pendingFiles.length; i++) {
+        const file = pendingFiles[i];
+        const baseProgress = Math.round((i / pendingFiles.length) * 100);
+        const uploadPayload = { patient_id: patientId, file_name: file.name, document_type: docType };
+        if (caseId) uploadPayload.case_id = caseId;
 
-      console.log(caseId)
+        const { document_id, upload_url } = await requestDocumentUpload(uploadPayload);
 
-      const { document_id, upload_url } = await requestDocumentUpload(uploadPayload);
+        try {
+          await uploadToSignedUrl(upload_url, file, (pct) => {
+            setUploadPct(baseProgress + Math.round(pct / pendingFiles.length));
+          });
+        } catch (err) {
+          await confirmDocumentUpload(document_id, "failed");
+          throw err;
+        }
 
+        await confirmDocumentUpload(document_id, "uploaded");
 
-
-      // Step 2 — PUT directly to GCS
-      try {
-        await uploadToSignedUrl(upload_url, pendingFile, setUploadPct);
-      } catch (uploadErr) {
-        console.log(uploadErr)
-        await confirmDocumentUpload(document_id, "failed");
-        throw uploadErr;
+        const ext = file.name.split(".").pop().toUpperCase();
+        newDocs.push({
+          id: document_id,
+          name: file.name,
+          type: ext,
+          size: `${Math.round(file.size / 1024)} KB`,
+          uploadedBy: "You",
+          date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+          category: docType,
+        });
       }
-
-      // Step 3 — confirm upload with backend
-      await confirmDocumentUpload(document_id, "uploaded");
-
-      // Add to local list
-      const ext = pendingFile.name.split(".").pop().toUpperCase();
-      setDocs(prev => [{
-        id:         document_id,
-        name:       pendingFile.name,
-        type:       ext,
-        size:       `${Math.round(pendingFile.size / 1024)} KB`,
-        uploadedBy: "You",
-        date:       new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-        category:   docType,
-      }, ...prev]);
-
-      setPending(null);
+      setDocs(prev => [...newDocs, ...prev]);
+      setPending([]);
     } catch (err) {
       setUploadErr(err.message || "Upload failed");
     } finally {
@@ -240,67 +238,211 @@ function DocumentsSection({ patientId, caseId }) {
           <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">Consent forms, referrals, insurance, and clinical records for this patient.</p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Search documents..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="bg-[#111] border border-[#1E1E1E] rounded-lg px-3 py-1.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors w-44"
-          />
+          <div className="relative">
+            <FiSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#6B6B6B] pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search documents..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-[10px] pl-8 pr-3 py-[8px] text-white text-[13px] outline-none placeholder:text-[#6B6B6B] w-48"
+            />
+          </div>
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0694FB] hover:bg-[#0578d1] text-white text-[12px] font-medium border-none cursor-pointer transition-colors whitespace-nowrap"
+            className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors shrink-0"
           >
-          Upload
+            Upload Document
           </button>
-          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileChange} />
         </div>
       </div>
 
-      {/* Inline upload panel — shown after file is selected */}
-      {pendingFile && (
-        <div className="bg-[#111] border border-[#1E1E1E] rounded-xl px-4 py-3 flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 min-w-0">
-              <FiFileText size={14} className="text-[#0694FB] shrink-0" />
-              <p className="text-white text-[13px] m-0 truncate">{pendingFile.name}</p>
-              <span className="text-[#6B6B6B] text-[11px] shrink-0">{Math.round(pendingFile.size / 1024)} KB</span>
-            </div>
-            <button onClick={() => { setPending(null); setUploadErr(null); }} className="text-[#3a3a3a] hover:text-white bg-transparent border-none cursor-pointer transition-colors">
-              <FiX size={14} />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <select
-              value={docType}
-              onChange={e => setDocType(e.target.value)}
-              className="bg-[#0D0D0D] border border-[#1E1E1E] rounded-lg px-3 py-1.5 text-white text-[12px] outline-none focus:border-[#0694FB] transition-colors cursor-pointer flex-1"
+      {/* Upload dialog */}
+      <AnimatePresence>
+        {pendingFiles.length > 0 && (
+          <motion.div
+            className="fixed inset-0 z-[999] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => { if (!uploading) { setPending([]); setUploadErr(null); } }}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 20, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 12, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-[440px] bg-[#161616] border border-[#1E1E1E] rounded-2xl overflow-hidden"
             >
-              {DOCUMENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <button
-              onClick={handleUpload}
-              disabled={uploading}
-              className="px-4 py-1.5 rounded-lg bg-[#0694FB] hover:bg-[#0578d1] disabled:opacity-50 text-white text-[12px] font-medium border-none cursor-pointer transition-colors shrink-0"
-            >
-              {uploading ? `${uploadPct}%` : "Confirm Upload"}
-            </button>
-          </div>
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 pt-6 pb-4">
+                <div>
+                  <h2 className="text-white text-[16px] font-medium m-0">
+                    Upload {pendingFiles.length > 1 ? `${pendingFiles.length} Documents` : "Document"}
+                  </h2>
+                  <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">Select a document type before uploading</p>
+                </div>
+                <button
+                  onClick={() => { if (!uploading) { setPending([]); setUploadErr(null); } }}
+                  disabled={uploading}
+                  className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 disabled:opacity-30"
+                >
+                  <FiX size={18} />
+                </button>
+              </div>
 
-          {uploading && (
-            <div className="w-full h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
-              <div className="h-full bg-[#0694FB] rounded-full transition-all" style={{ width: `${uploadPct}%` }} />
-            </div>
-          )}
-          {uploadErr && <p className="text-[#FF4A4A] text-[11px] m-0">{uploadErr}</p>}
-        </div>
-      )}
+              <div className="h-px bg-[#1E1E1E]" />
+
+              {/* Body */}
+              <div className="px-6 py-5 flex flex-col gap-4">
+                {/* File list */}
+                <div className="flex flex-col gap-2 max-h-40 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
+                  {pendingFiles.map((f, i) => (
+                    <div key={i} className="flex items-center gap-3 bg-[#111] border border-[#1E1E1E] rounded-xl px-4 py-3">
+                      <FiFileText size={16} className="text-[#0694FB] shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-[13px] m-0 truncate">{f.name}</p>
+                        <p className="text-[#6B6B6B] text-[11px] m-0 mt-0.5">{Math.round(f.size / 1024)} KB</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Document type */}
+                <div>
+                  <p className="text-[#6B6B6B] text-[11px] m-0 mb-2 uppercase tracking-wide">Document Type</p>
+                  <div className="flex flex-wrap gap-2">
+                    {DOCUMENT_TYPES.map(t => (
+                      <button
+                        key={t}
+                        onClick={() => setDocType(t)}
+                        className={`px-3 py-1.5 rounded-xl border text-[12px] font-medium cursor-pointer transition-all duration-200 ${
+                          docType === t
+                            ? "bg-[rgba(6,148,251,0.12)] text-[#0694FB] border-[rgba(6,148,251,0.4)]"
+                            : "bg-transparent text-[#4a4a4a] border-[#1E1E1E] hover:border-[#2a2a2a] hover:text-white"
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                {uploading && (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex justify-between">
+                      <p className="text-[#6B6B6B] text-[11px] m-0">Uploading…</p>
+                      <p className="text-[#0694FB] text-[11px] m-0">{uploadPct}%</p>
+                    </div>
+                    <div className="w-full h-1.5 bg-[#1a1a1a] rounded-full overflow-hidden">
+                      <div className="h-full bg-[#0694FB] rounded-full transition-all" style={{ width: `${uploadPct}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                {uploadErr && <p className="text-[#FF4A4A] text-[12px] m-0">{uploadErr}</p>}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-6 py-4 border-t border-[#1E1E1E]">
+                <button
+                  onClick={() => { setPending([]); setUploadErr(null); }}
+                  disabled={uploading}
+                  className="px-4 py-2 rounded-xl border border-[#1E1E1E] text-[#6B6B6B] text-[13px] bg-transparent hover:border-[#2a2a2a] hover:text-white cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleUpload}
+                  disabled={uploading}
+                  className="flex items-center gap-2 px-5 py-2 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {uploading ? (
+                    <><div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Uploading…</>
+                  ) : (
+                    <>Upload</>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete confirmation dialog */}
+      <AnimatePresence>
+        {deleteDialog && (
+          <motion.div
+            className="fixed inset-0 z-[999] flex items-center justify-center"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setDeleteDialog(null)}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              <div className="flex items-start justify-between px-7 pt-7 pb-5">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <FiTrash2 size={18} className="text-red-400 shrink-0" />
+                    <h2 className="text-white text-[17px] font-medium m-0">Delete Document?</h2>
+                  </div>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
+                    <span className="text-white/70">{deleteDialog.name}</span> will be permanently deleted and cannot be recovered.
+                  </p>
+                </div>
+                <button onClick={() => setDeleteDialog(null)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                  <FiX size={18} />
+                </button>
+              </div>
+              <div className="flex gap-3 px-7 pb-6">
+                <button
+                  onClick={() => setDeleteDialog(null)}
+                  disabled={deleting}
+                  className="flex-1 py-2.5 rounded-full border border-[#1E1E1E] text-[#6B6B6B] text-[13px] bg-transparent hover:border-[#2a2a2a] hover:text-white cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const { id } = deleteDialog;
+                    setDeleting(true);
+                    try {
+                      await deleteDocument(id);
+                      setDocs(prev => prev.filter(d => d.id !== id));
+                      setDeleteDialog(null);
+                    } catch (_) {} finally {
+                      setDeleting(false);
+                    }
+                  }}
+                  disabled={deleting}
+                  className="flex-1 py-2.5 rounded-full bg-red-500 hover:bg-red-600 text-white text-[13px] font-medium border-none cursor-pointer transition-colors flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {deleting ? (
+                    <><div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Deleting…</>
+                  ) : "Delete"}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Column headers */}
-      <div className="grid grid-cols-[1fr_60px_130px_100px_32px] gap-3 px-3 pb-2 border-b border-[#1E1E1E]">
+      <div className="grid grid-cols-[2fr_0.5fr_1fr_1fr_72px] gap-3 px-3 pb-2 border-b border-[#1E1E1E]">
         {["Document", "Type", "Uploaded by", "Date", ""].map((h) => (
-          <p key={h} className="text-[#ffffff] text-[13px] font-semibold uppercase  m-0">{h}</p>
+          <p key={h} className="text-[#ffffff] text-[13px] font-semibold uppercase m-0">{h}</p>
         ))}
       </div>
 
@@ -316,7 +458,7 @@ function DocumentsSection({ patientId, caseId }) {
         ) : filtered.map((doc) => (
           <div
             key={doc.id}
-            className="group grid grid-cols-[1fr_60px_130px_100px_32px] gap-3 items-center px-3 py-2.5 rounded-xl hover:bg-[rgba(255,255,255,0.03)] transition-all"
+            className="group grid grid-cols-[2fr_0.5fr_1fr_1fr_72px] gap-3 items-center px-3 py-2.5 rounded-xl hover:bg-[rgba(255,255,255,0.03)] transition-all"
           >
             <div className="flex items-center gap-3 min-w-0">
               <div
@@ -331,29 +473,40 @@ function DocumentsSection({ patientId, caseId }) {
                   <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${categoryColors[doc.category] || "text-white bg-[#1a1a1a]"}`}>
                     {doc.category}
                   </span>
-                  <span className="text-[#6B6B6B] text-[10px]">{doc.size}</span>
+                  <span className="text-[#FFFFFF] text-[10px]">{doc.size}</span>
                 </div>
               </div>
             </div>
-            <p className="text-[#6B6B6B] text-[15px]  m-0">{doc.type}</p>
-            <p className="text-[#6B6B6B] text-[15px] m-0 truncate   ">{doc.uploadedBy}</p>
-            <p className="text-[#6B6B6B] text-[15px] m-0   ">{doc.date}</p>
-            <button
-              onClick={async () => {
-                try {
-                  const url = await getDocumentDownloadUrl(doc.id);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = doc.name;
-                  a.target = "_blank";
-                  a.rel = "noopener noreferrer";
-                  a.click();
-                } catch (_) {}
-              }}
-              className="opacity-0 group-hover:opacity-100 w-7 h-7 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent hover:bg-[#1a1a1a] cursor-pointer transition-all"
-            >
-              <FiDownload size={12} color="#22C55E" />
-            </button>
+            <p className="text-[#FFFFFF] text-[15px]  m-0">{doc.type}</p>
+            <p className="text-[#FFFFFF] text-[15px] m-0 truncate   ">{doc.uploadedBy}</p>
+            <p className="text-[#FFFFFF] text-[15px] m-0   ">{doc.date}</p>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={async () => {
+                  try {
+                    const data = await getDocumentDownloadUrl(doc.id);
+                    const url = data?.download_url || data?.url || data;
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = doc.name;
+                    a.target = "_blank";
+                    a.rel = "noopener noreferrer";
+                    a.click();
+                  } catch (_) { }
+                }}
+                title="Download"
+                className="w-7 h-7 flex items-center justify-center rounded-lg  bg-transparent hover:bg-[#1a1a1a] cursor-pointer transition-all"
+              >
+                <FiDownload size={15} color="#22C55E" />
+              </button>
+              <button
+                onClick={() => setDeleteDialog({ id: doc.id, name: doc.name })}
+                title="Delete"
+                className="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-[#FF3B3B]/10 cursor-pointer transition-all"
+              >
+                <FiTrash2 size={15} color="#FF3B3B" />
+              </button>
+            </div>
           </div>
         ))}
       </div>
@@ -556,7 +709,7 @@ function PatientDetailsPage() {
         const match = cases.find(c => (c.patient?.id || c.patient_id) === id);
         if (match) setCaseId(match.id);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [id, caseId]);
 
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, label }
@@ -585,18 +738,18 @@ function PatientDetailsPage() {
         data
           .filter((s) => s.case_id === caseId)
           .map((s) => ({
-            id:         s.id,
-            modality:   s.modality,
-            label:      s.study_name,
-            region:     s.body_region ?? "",
-            accNumber:  s.acc_number ?? "",
-            date:       s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
-            studyId:    s.id,
-            case_id:    s.case_id,
-            flagged:    s.flagged,
+            id: s.id,
+            modality: s.modality,
+            label: s.study_name,
+            region: s.body_region ?? "",
+            accNumber: s.acc_number ?? "",
+            date: s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
+            studyId: s.id,
+            case_id: s.case_id,
+            flagged: s.flagged,
           }))
       );
-    } catch (_) {}
+    } catch (_) { }
     finally { setStudiesLoading(false); }
   }, [caseId]);
 
@@ -610,7 +763,7 @@ function PatientDetailsPage() {
       const res = await authFetch(`${baseURL}/reports/?case_id=${caseId}`);
       if (!res.ok) return;
       setReports(await res.json());
-    } catch (_) {}
+    } catch (_) { }
     finally { setReportsLoading(false); }
   }, [caseId]);
 
@@ -621,7 +774,7 @@ function PatientDetailsPage() {
       const baseURL = process.env.REACT_APP_API_URL || "";
       await authFetch(`${baseURL}/reports/${reportId}`, { method: "DELETE" });
       setReports((prev) => prev.filter((r) => r.id !== reportId));
-    } catch (_) {}
+    } catch (_) { }
   };
   if (patientLoading) {
     return (
@@ -650,7 +803,7 @@ function PatientDetailsPage() {
 
           <div className="flex flex-col flex-1 min-w-0 overflow-y-auto gap-5 pr-1 pb-4 mt-0 pt-0">
 
-           
+
             {/* ── Body ── */}
             <div className="flex gap-5 flex-1 min-h-0">
 
@@ -719,10 +872,10 @@ function PatientDetailsPage() {
                       </button>
                       <button
                         onClick={() => setImportStudyOpen(true)}
-                       className="bg-[#06fb74] hover:bg-[#00ce6e] text-black text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap"
-                      title="Import a study from DICOM files — studies and series are detected automatically"
+                        className="bg-[#06fb74] hover:bg-[#00ce6e] text-black text-[13px] px-4 py-[8px] rounded-full border-none cursor-pointer transition-colors duration-200 whitespace-nowrap"
+                        title="Import a study from DICOM files — studies and series are detected automatically"
                       >
-                       Upload DICOM Study
+                        Upload DICOM Study
                       </button>
                       <button
                         onClick={() => setAddStudyOpen(true)}
@@ -783,11 +936,11 @@ function PatientDetailsPage() {
                       <p className="text-[#6B6B6B] text-[12px] m-0">Radiology reports generated for this patient. Click a report to view or download.</p>
                     </div>
                     {/* <SectionLabel>Reports</SectionLabel> */}
-                    <button
+                    {/* {reports.length === 1 ? <button
                       onClick={() => setNewReportOpen(true)}
                       className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors">
                       New Report
-                    </button>
+                    </button> : <></>} */}
                   </div>
                   <div className="flex flex-col gap-2">
                     {reportsLoading ? (
@@ -797,8 +950,8 @@ function PatientDetailsPage() {
                     ) : reports.length === 0 ? (
                       <p className="text-[#3a3a3a] text-sm text-center py-6 m-0">No reports found</p>
                     ) : reports.map((report) => (
-                      <div key={report.id} onClick={() => setSelectedReport(report)} className="flex items-center gap-4 px-4 py-3 bg-[#111] border border-[#1E1E1E] rounded-xl hover:border-[#0694FB] transition-all group cursor-pointer">
-                        <div className="w-8 h-8 rounded-lg bg-[#0A0A0A] border border-[#1E1E1E] flex items-center justify-center shrink-0">
+                      <div key={report.id} onClick={() => setSelectedReport(report)} className="flex items-center gap-4 px-4 py-3 rounded-xl hover:border-[#0694FB] transition-all group cursor-pointer">
+                        <div className="w-12 h-12 rounded-lg bg-[#222222] border border-[#222222] flex items-center justify-center shrink-0">
                           <FiFileText size={13} color="#0694FB" />
                         </div>
                         <div className="flex-1 min-w-0">
@@ -808,11 +961,10 @@ function PatientDetailsPage() {
                             {report.created_at ? new Date(report.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : ""}
                           </p>
                         </div>
-                        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 ${
-                          report.status === "Signed"
-                            ? "text-[#22C55E] bg-[rgba(34,197,94,0.12)]"
-                            : "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]"
-                        }`}>{report.status || "Draft"}</span>
+                        <span className={`text-[12px] font-medium px-2 py-0.5 rounded-full shrink-0 ${report.status === "Signed"
+                          ? "text-[#22C55E] bg-[rgba(34,197,94,0.12)]"
+                          : "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]"
+                          }`}>{report.status || "Draft"}</span>
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteReport(report.id); }}
                           className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent hover:bg-[rgba(255,59,59,0.1)] hover:border-[rgba(255,59,59,0.3)] cursor-pointer shrink-0"
@@ -866,15 +1018,15 @@ function PatientDetailsPage() {
                     <FiTrash2 size={20} className="text-red-400 shrink-0 mt-0.5" />
                     <h2 className="text-white text-[17px] font-medium m-0">Delete Study?</h2>
                   </div>
-                  
+
                 </div>
                 <button onClick={() => setDeleteConfirm(null)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
                   <FiX size={18} />
                 </button>
               </div>
               <p className="px-7 text-[#6B6B6B] text-[14px] m-0 mt-0">
-                    <span className="text-white">"{deleteConfirm.label}"</span> will be permanently deleted. This cannot be undone.
-                  </p>
+                <span className="text-white">"{deleteConfirm.label}"</span> will be permanently deleted. This cannot be undone.
+              </p>
               {/* Footer */}
               <div className="px-7 pb-6 flex flex-row gap-2">
                 <button

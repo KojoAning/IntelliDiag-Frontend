@@ -140,7 +140,7 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
           <div className="flex flex-col items-center justify-center py-8 gap-2">
             <FiCpu size={24} className="text-[#6B6B6B]" />
             <p className="text-[#6B6B6B] text-[13px] m-0 text-center">
-              Hit "Run AI Analysis" to generate a report
+              Hit "Run Analysis" to generate a report
             </p>
           </div>
         ) : loading && !response ? (

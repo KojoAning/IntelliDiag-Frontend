@@ -5,7 +5,7 @@ import { getModels } from "../../../../lib/api";
 const TYPE_COLORS = {
   Detection:      "text-[#FF6B35] bg-[rgba(255,107,53,0.12)]",
   Segmentation:   "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
-  Classification: "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
+  Classification: "text-[#06FBBE] bg-[rgba(6,148,251,0.12)]",
   Quantification: "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
 };
 
@@ -58,7 +58,7 @@ function CatalogueCard({ model, added, onAdd, onRemove }) {
             <p className="text-[#8a8a8a] text-[12px] m-0 font-mono">{model.id}</p>
           </div>
         </div>
-        <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0 ${model.typeColor}`}>
+        <span className={`text-[12px] font-medium px-2 py-0.5 rounded-full shrink-0 ${model.typeColor}`}>
           {model.type}
         </span>
       </div>
@@ -76,7 +76,7 @@ function CatalogueCard({ model, added, onAdd, onRemove }) {
         {added ? (
           <button
             onClick={() => onRemove(model.id)}
-            className="flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-full bg-[rgba(34,197,94,0.1)] text-[#22C55E] border border-[rgba(34,197,94,0.2)] hover:bg-[rgba(255,74,74,0.1)] hover:text-[#FF4A4A] hover:border-[rgba(255,74,74,0.2)] cursor-pointer transition-all shrink-0"
+            className="flex items-center gap-1 text-[11px] px-3 py-1.5 rounded-full bg-[rgba(34,197,94,0.1)] text-[#22C55E]  hover:bg-[rgba(255,74,74,0.1)] hover:text-[#FF4A4A] hover:border-[rgba(255,74,74,0.2)] cursor-pointer transition-all shrink-0"
           >
             <FiCheck size={11} />
             <span>Added</span>
@@ -84,9 +84,9 @@ function CatalogueCard({ model, added, onAdd, onRemove }) {
         ) : (
           <button
             onClick={() => onAdd(model)}
-            className="text-[11px] px-3 py-1.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white border-none cursor-pointer transition-colors shrink-0"
+            className="text-[12px] px-3 py-1.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white border-none cursor-pointer transition-colors shrink-0"
           >
-            + Add
+          Add to Workspace
           </button>
         )}
       </div>
@@ -95,7 +95,7 @@ function CatalogueCard({ model, added, onAdd, onRemove }) {
 }
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
-function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove }) {
+function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove, modality }) {
   const [query, setQuery]         = useState("");
   const [activeFilter, setFilter] = useState("All");
   const [catalogue, setCatalogue] = useState([]);
@@ -107,12 +107,12 @@ function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getModels()
+    getModels(modality)
       .then(data => { if (!cancelled) setCatalogue((data ?? []).map(mapModel)); })
       .catch(err => { if (!cancelled) setError(err.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [isOpen]);
+  }, [isOpen, modality]);
 
   const filtered = useMemo(() => {
     return catalogue.filter(m => {
@@ -160,7 +160,7 @@ function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove }) {
               className="bg-transparent border-none outline-none text-white text-[13px] flex-1 placeholder:text-[#3a3a3a]"
             />
           </div>
-          <div className="flex gap-2 flex-wrap">
+          {/* <div className="flex gap-2 flex-wrap">
             {MODALITY_FILTERS.map(f => (
               <button
                 key={f}
@@ -174,7 +174,7 @@ function AddModelModal({ isOpen, onClose, addedIds, onAdd, onRemove }) {
                 {f}
               </button>
             ))}
-          </div>
+          </div> */}
         </div>
 
         {/* Catalogue list */}

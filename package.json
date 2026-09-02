@@ -5,6 +5,7 @@
   "dependencies": {
     "@cornerstonejs/core": "^4.22.8",
     "@cornerstonejs/dicom-image-loader": "^4.22.8",
+    "@cornerstonejs/streaming-image-volume-loader": "^1.86.1",
     "@cornerstonejs/tools": "^4.22.8",
     "@craco/craco": "^7.1.0",
     "@gsap/react": "^2.1.2",

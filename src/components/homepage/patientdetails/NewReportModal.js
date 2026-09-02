@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { FiX, FiFileText } from "react-icons/fi";
+import { FiX, FiFileText, FiLoader } from "react-icons/fi";
 import { authFetch } from "../../../lib/api";
 
 const inputCls =
@@ -13,7 +13,7 @@ const statusOptions = [
   { value: "Signed", color: "text-[#22C55E] bg-[rgba(34,197,94,0.1)] border-[rgba(34,197,94,0.3)]" },
 ];
 
-function NewReportModal({ isOpen, onClose, caseId, onCreated }) {
+function NewReportModal({ isOpen, onClose, caseId, studyId, seriesId, jobId, onCreated }) {
   const [form, setForm] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -40,13 +40,16 @@ function NewReportModal({ isOpen, onClose, caseId, onCreated }) {
       const res = await authFetch(`${baseURL}/reports/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(Object.fromEntries(Object.entries({
           title: form.title,
           radiologist: form.radiologist,
           modality: form.modality,
-          notes: form.notes || "",
-          case_id: caseId,
-        }),
+          notes: form.notes || undefined,
+          case_id: caseId || undefined,
+          study_id: studyId || undefined,
+          series_id: seriesId || undefined,
+          job_id: jobId || undefined,
+        }).filter(([, v]) => v !== undefined))),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -109,7 +112,7 @@ function NewReportModal({ isOpen, onClose, caseId, onCreated }) {
                 <label className={labelCls}>Report Title</label>
                 <input
                   type="text"
-                  placeholder="e.g. MRI Knee — Radiology Report"
+                  placeholder="e.g. MR Knee — Radiology Report"
                   value={form.title || ""}
                   onChange={(e) => set("title", e.target.value)}
                   className={inputCls}
@@ -202,7 +205,7 @@ function NewReportModal({ isOpen, onClose, caseId, onCreated }) {
                       : "bg-[#1a1a1a] text-[#3a3a3a] cursor-not-allowed"
                   }`}
                 >
-                  {submitting ? "Creating…" : "Create Report"}
+                  {submitting ? <><FiLoader size={14} className="animate-spin" /> Creating…</> : "Create Report"}
                 </button>
               </div>
             </div>

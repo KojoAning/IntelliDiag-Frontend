@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import CornerstoneViewport from "./CornerstoneViewport";
+import CornerstoneVolumeViewport from "./CornerstoneVolumeViewport";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
 import { annotation as csAnnotation, Enums as csToolsEnums } from "@cornerstonejs/tools";
 import {
@@ -19,7 +20,7 @@ import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
 import { PiPolygonLight } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
-import { TbRulerMeasure, TbAngle, TbCirclePlus } from "react-icons/tb";
+import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360 } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 
 // ── Small top-bar button ───────────────────────────────────────────────────────
@@ -126,6 +127,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
+
+  // View mode: "stack" (2D), "axial", "sagittal", "coronal" (MPR)
+  const [viewMode, setViewMode] = useState("stack");
+  const [mprMenuOpen, setMprMenuOpen] = useState(false);
+  const mprMenuRef = useRef(null);
+  const volumeVpRef = useRef(null);
   const infoRef = useRef(null);
 
   // Mirror state for display only — Cornerstone owns the actual values
@@ -165,6 +172,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   useEffect(() => {
     const handler = (e) => {
       if (infoRef.current && !infoRef.current.contains(e.target)) setInfoOpen(false);
+      if (mprMenuRef.current && !mprMenuRef.current.contains(e.target)) setMprMenuOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -335,7 +343,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         const tag = e.target?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return;
         e.preventDefault();
-        const removed = vpRef.current?.deleteSelectedAnnotations();
+        const removed = activeVp.current?.deleteSelectedAnnotations();
         if (removed) { setHasSelection(false); return; }
       }
       if (e.key === "ArrowUp" || e.key === "ArrowLeft") goTo(currentIndex - 1);
@@ -371,6 +379,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   const toggleTool = (name) => setActiveTool(t => t === name ? null : name);
 
+  // Pick the active viewport ref based on current view mode
+  const activeVp = viewMode === "stack" ? vpRef : volumeVpRef;
+
   const drawTools = [
     { name: "circle", icon: <LiaCircleSolid size={20} />, label: "Draw Circle (Elliptical ROI)" },
     { name: "square", icon: <IoSquareOutline size={20} />, label: "Draw Rectangle ROI" },
@@ -399,24 +410,24 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           <VDivider />
 
           {/* Zoom */}
-          <ViewBtn icon={<FiZoomOut size={16} />} label="Zoom out" onClick={() => { vpRef.current?.zoomOut(); setZoomPct(p => Math.max(10, p - 25)); }} />
+          <ViewBtn icon={<FiZoomOut size={16} />} label="Zoom out" onClick={() => { activeVp.current?.zoomOut(); setZoomPct(p => Math.max(10, p - 25)); }} />
           <span className="text-[#6B6B6B] text-[10px] font-mono w-[36px] text-center shrink-0">{zoomPct}%</span>
-          <ViewBtn icon={<FiZoomIn size={16} />} label="Zoom in" onClick={() => { vpRef.current?.zoomIn(); setZoomPct(p => Math.min(500, p + 25)); }} />
-          <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { vpRef.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); }} />
+          <ViewBtn icon={<FiZoomIn size={16} />} label="Zoom in" onClick={() => { activeVp.current?.zoomIn(); setZoomPct(p => Math.min(500, p + 25)); }} />
+          <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); }} />
 
           <VDivider />
 
           {/* Rotate */}
-          <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { vpRef.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
-          <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { vpRef.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
+          <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
+          <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
 
           {/* Flip */}
-          <ViewBtn icon={<MdFlip size={16} />} label="Flip horizontal" active={flipH} onClick={() => { vpRef.current?.flipH(); setFlipH(f => !f); }} />
+          <ViewBtn icon={<MdFlip size={16} />} label="Flip horizontal" active={flipH} onClick={() => { activeVp.current?.flipH(); setFlipH(f => !f); }} />
           <ViewBtn
             icon={<MdFlip size={16} style={{ transform: "rotate(90deg)" }} />}
             label="Flip vertical"
             active={flipV}
-            onClick={() => { vpRef.current?.flipV(); setFlipV(f => !f); }}
+            onClick={() => { activeVp.current?.flipV(); setFlipV(f => !f); }}
           />
 
           <VDivider />
@@ -432,16 +443,61 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               if (!wlActive) setActiveTool(null);
             }}
           />
-          <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { vpRef.current?.toggleInvert(); setInverted(i => !i); }} />
+          <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
 
           <VDivider />
 
           <button
-            onClick={() => { vpRef.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); }}
+            onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); setViewMode("stack"); }}
             className="text-[#6B6B6B] hover:text-white text-[12px] font-mono px-2 py-1 rounded-lg hover:bg-[#1a1a1a] bg-transparent border-none cursor-pointer transition-all shrink-0"
           >
             RESET
           </button>
+
+          <VDivider />
+
+          {/* MPR / 3D view toggle */}
+          <div ref={mprMenuRef} className="relative">
+            <button
+              onClick={() => setMprMenuOpen(v => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${
+                viewMode !== "stack"
+                  ? "bg-[#0694FB] text-white"
+                  : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+              }`}
+            >
+              <TbView360 size={15} />
+              {viewMode === "stack" ? "MPR" : viewMode.toUpperCase()}
+            </button>
+            {mprMenuOpen && (
+              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[130px]">
+                <button
+                  onClick={() => { setViewMode("stack"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "stack" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                >
+                  2D Stack
+                </button>
+                <button
+                  onClick={() => { setViewMode("axial"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "axial" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                >
+                  Axial
+                </button>
+                <button
+                  onClick={() => { setViewMode("sagittal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "sagittal" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                >
+                  Sagittal
+                </button>
+                <button
+                  onClick={() => { setViewMode("coronal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "coronal" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                >
+                  Coronal
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Slice navigation */}
@@ -473,7 +529,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   Analyzing…
                 </>
               )
-            ) : "Run Ai Analysis"}
+            ) : <>Run Analysis</>}
           </button>
           <button
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
@@ -506,22 +562,32 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             </div>
           )}
 
-          {/* Cornerstone element */}
+          {/* Cornerstone element — 2D stack or MPR volume */}
           <div className="absolute inset-0 z-10">
-            <CornerstoneViewport
-              ref={vpRef}
-              imageIds={imageIds}
-              activeTool={activeTool}
-              windowLevel={wlActive}
-              onIndexChange={(idx) => {
-                setCurrentIndex(idx);
-                // Keep selectedImage in sync so thumbnail highlight and mask overlay follow scroll
-                const img = images[idx];
-                if (img) onSelectImage?.(img.blobUrl ?? img.url);
-              }}
-              onArrowTextRequest={handleArrowTextRequest}
-              onCameraChanged={handleCameraChanged}
-            />
+            {viewMode === "stack" ? (
+              <CornerstoneViewport
+                ref={vpRef}
+                imageIds={imageIds}
+                activeTool={activeTool}
+                windowLevel={wlActive}
+                onIndexChange={(idx) => {
+                  setCurrentIndex(idx);
+                  const img = images[idx];
+                  if (img) onSelectImage?.(img.blobUrl ?? img.url);
+                }}
+                onArrowTextRequest={handleArrowTextRequest}
+                onCameraChanged={handleCameraChanged}
+              />
+            ) : (
+              <CornerstoneVolumeViewport
+                ref={volumeVpRef}
+                imageIds={imageIds}
+                viewMode={viewMode}
+                activeTool={activeTool}
+                windowLevel={wlActive}
+                onArrowTextRequest={handleArrowTextRequest}
+              />
+            )}
           </div>
 
           {/* DICOM corner overlays */}
@@ -602,7 +668,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               label={hasSelection ? "Delete selected (Del)" : "Click an annotation to select it"}
               active={hasSelection}
               onClick={() => {
-                const removed = vpRef.current?.deleteSelectedAnnotations();
+                const removed = activeVp.current?.deleteSelectedAnnotations();
                 if (removed) setHasSelection(false);
               }}
             />
@@ -611,7 +677,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             <ToolBtn icon={<FiTrash2 size={15} />} label="Clear all annotations" onClick={() => {
               try { csAnnotation.state.removeAllAnnotations(); } catch (_) { }
               setHasSelection(false);
-              vpRef.current?.render?.();
+              activeVp.current?.render?.();
             }} />
           </div>
 

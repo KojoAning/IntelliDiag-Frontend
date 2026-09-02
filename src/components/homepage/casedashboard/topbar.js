@@ -94,7 +94,7 @@ function Topbar({ caseInfo, activeStudy, onCloseStudy, onAddScanClick }) {
               onClick={onAddScanClick}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all"
             >
-              Run AI Analysis
+              Run Analysis
             </button>
             {/* <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#1E1E1E] text-[#6B6B6B] text-[12px] bg-transparent hover:text-white hover:border-[#2a2a2a] cursor-pointer transition-all">
               Save Draft

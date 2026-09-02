@@ -1245,7 +1245,7 @@ function WorkspaceViewer() {
                 jobStatus={jobStatus}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} />
               </div>
             </div>
 

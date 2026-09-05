@@ -10,18 +10,20 @@ import {
   FiTrash2, FiDelete,
   FiPlay, FiPause, FiSkipBack, FiSkipForward,
   FiX, FiInfo,
-  FiLoader,
+  FiLoader, FiCheck,
 } from "react-icons/fi";
+import { BsDiamondFill } from "react-icons/bs";
 import { MdFlip, MdInvertColors } from "react-icons/md";
 import { RiContrastFill } from "react-icons/ri";
 import { LiaCircleSolid } from "react-icons/lia";
 import { TfiText } from "react-icons/tfi";
 import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
-import { PiPolygonLight } from "react-icons/pi";
+import { PiPolygonLight, PiSparkleFill } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
 import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360 } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
+import { Sparkle } from "lucide-react";
 
 // ── Small top-bar button ───────────────────────────────────────────────────────
 function ViewBtn({ icon, label, active, onClick, disabled }) {
@@ -123,14 +125,26 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationMode, onCloseTranslation, jobStatus }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationMode, onCloseTranslation, jobStatus, onViewModeChange }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
 
   // View mode: "stack" (2D), "axial", "sagittal", "coronal" (MPR)
   const [viewMode, setViewMode] = useState("stack");
+
+  const switchViewMode = (mode) => {
+    setViewMode(mode);
+    onViewModeChange?.(mode);
+  };
   const [mprMenuOpen, setMprMenuOpen] = useState(false);
+  const [enhancementActive, setEnhancementActive] = useState(false);
+  const [enhancementDone, setEnhancementDone] = useState(false);
+  const [enhancementHovered, setEnhancementHovered] = useState(false);
+  const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
+  const [toolbarNarrow, setToolbarNarrow] = useState(false);
+  const overflowMenuRef = useRef(null);
+  const toolbarRef = useRef(null);
   const mprMenuRef = useRef(null);
   const volumeVpRef = useRef(null);
   const infoRef = useRef(null);
@@ -173,9 +187,20 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     const handler = (e) => {
       if (infoRef.current && !infoRef.current.contains(e.target)) setInfoOpen(false);
       if (mprMenuRef.current && !mprMenuRef.current.contains(e.target)) setMprMenuOpen(false);
+      if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target)) setOverflowMenuOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Toolbar ResizeObserver — switches to overflow menu when toolbar gets narrow
+  useEffect(() => {
+    if (!toolbarRef.current) return;
+    const ro = new ResizeObserver(([entry]) => {
+      setToolbarNarrow(entry.contentRect.width < 1000);
+    });
+    ro.observe(toolbarRef.current);
+    return () => ro.disconnect();
   }, []);
 
   // DICOM metadata extracted from the first DICOM file in the series
@@ -225,7 +250,17 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   // Camera transform synced from Cornerstone — keeps mask aligned with the DICOM image
   const [maskTransform, setMaskTransform] = useState({ zoom: 1, panX: 0, panY: 0, rotation: 0, flipH: false, flipV: false });
-  const handleCameraChanged = useCallback((t) => setMaskTransform(t), []);
+  const handleCameraChanged = useCallback((t) => {
+    setMaskTransform(prev => (
+      prev.zoom === t.zoom &&
+      prev.panX === t.panX &&
+      prev.panY === t.panY &&
+      prev.rotation === t.rotation &&
+      prev.flipH === t.flipH &&
+      prev.flipV === t.flipV
+        ? prev : t
+    ));
+  }, []);
 
   // Track whether any annotation is currently selected (drives toolbar button state)
   const [hasSelection, setHasSelection] = useState(false);
@@ -379,6 +414,28 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   const toggleTool = (name) => setActiveTool(t => t === name ? null : name);
 
+  const imageEnhancement = () => {
+    if (enhancementLoading) return;
+    if (enhancementActive) {
+      setEnhancementActive(false);
+      return;
+    }
+    setEnhancementHovered(false);
+    onRunEnhancement?.();
+  }
+
+  // Watch for enhancement completing so we can show the done checkmark
+  useEffect(() => {
+    if (!enhancementLoading && enhancementResult) {
+      setEnhancementDone(true);
+      const t = setTimeout(() => {
+        setEnhancementDone(false);
+        setEnhancementActive(true);
+      }, 800);
+      return () => clearTimeout(t);
+    }
+  }, [enhancementLoading, enhancementResult]);
+
   // Pick the active viewport ref based on current view mode
   const activeVp = viewMode === "stack" ? vpRef : volumeVpRef;
 
@@ -399,8 +456,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     <div className="flex flex-col gap-2 flex-1 min-w-0 h-full overflow-hidden">
 
       {/* ── Top toolbar ── */}
-      <div className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
-        <div className="flex items-center">
+      <div ref={toolbarRef} className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
+        <div className="flex items-center gap-0 min-w-0">
+          {/* ── Always visible: slice nav ── */}
           <ViewBtn icon={<FiChevronLeft size={16} />} label="Prev slice" disabled={currentIndex <= 0} onClick={() => goTo(currentIndex - 1)} />
           <span className="text-[#6B6B6B] text-[13px] font-mono w-[60px] text-center shrink-0">
             {images.length > 0 ? `${currentIndex + 1} / ${images.length}` : "— / —"}
@@ -409,62 +467,81 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           <VDivider />
 
-          {/* Zoom */}
+          {/* ── Always visible: zoom in/out ── */}
           <ViewBtn icon={<FiZoomOut size={16} />} label="Zoom out" onClick={() => { activeVp.current?.zoomOut(); setZoomPct(p => Math.max(10, p - 25)); }} />
-          <span className="text-[#6B6B6B] text-[10px] font-mono w-[36px] text-center shrink-0">{zoomPct}%</span>
+          {!toolbarNarrow && <span className="text-[#6B6B6B] text-[10px] font-mono w-[36px] text-center shrink-0">{zoomPct}%</span>}
           <ViewBtn icon={<FiZoomIn size={16} />} label="Zoom in" onClick={() => { activeVp.current?.zoomIn(); setZoomPct(p => Math.min(500, p + 25)); }} />
-          <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); }} />
 
           <VDivider />
 
-          {/* Rotate */}
-          <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
-          <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
+          {/* ── Secondary tools: hidden when toolbar is narrow ── */}
+          {!toolbarNarrow && (
+            <div className="flex items-center">
+              <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); }} />
+              <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
+              <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
+              <ViewBtn icon={<MdFlip size={16} />} label="Flip horizontal" active={flipH} onClick={() => { activeVp.current?.flipH(); setFlipH(f => !f); }} />
+              <ViewBtn icon={<MdFlip size={16} style={{ transform: "rotate(90deg)" }} />} label="Flip vertical" active={flipV} onClick={() => { activeVp.current?.flipV(); setFlipV(f => !f); }} />
+              <VDivider />
+              <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level — drag on image" active={wlActive} onClick={() => { setWlActive(w => !w); if (!wlActive) setActiveTool(null); }} />
+              <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
+              <VDivider />
+              <button
+                onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); switchViewMode("stack"); }}
+                className="text-[#6B6B6B] hover:text-white text-[12px] font-mono px-2 py-1 rounded-lg hover:bg-[#1a1a1a] bg-transparent border-none cursor-pointer transition-all shrink-0"
+              >
+                RESET
+              </button>
+              <VDivider />
+            </div>
+          )}
 
-          {/* Flip */}
-          <ViewBtn icon={<MdFlip size={16} />} label="Flip horizontal" active={flipH} onClick={() => { activeVp.current?.flipH(); setFlipH(f => !f); }} />
-          <ViewBtn
-            icon={<MdFlip size={16} style={{ transform: "rotate(90deg)" }} />}
-            label="Flip vertical"
-            active={flipV}
-            onClick={() => { activeVp.current?.flipV(); setFlipV(f => !f); }}
-          />
+          {/* ── Overflow ⋯ button: visible when toolbar is narrow ── */}
+          {toolbarNarrow && <div ref={overflowMenuRef} className="relative flex items-center">
+            <button
+              onClick={() => setOverflowMenuOpen(v => !v)}
+              className={`w-7 h-7 flex items-center justify-center rounded-lg border-none cursor-pointer transition-all duration-150 shrink-0 text-[16px] leading-none ${overflowMenuOpen ? 'bg-[#1a1a1a] text-white' : 'bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white'}`}
+            >
+              ···
+            </button>
+            {overflowMenuOpen && (
+              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl overflow-hidden min-w-[180px]">
+                {/* Fit / Rotate / Flip */}
+                <div className="flex items-center gap-1 px-3 py-2 border-b border-[#2a2a2a]">
+                  <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); setOverflowMenuOpen(false); }} />
+                  <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
+                  <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
+                  <ViewBtn icon={<MdFlip size={16} />} label="Flip H" active={flipH} onClick={() => { activeVp.current?.flipH(); setFlipH(f => !f); }} />
+                  <ViewBtn icon={<MdFlip size={16} style={{ transform: "rotate(90deg)" }} />} label="Flip V" active={flipV} onClick={() => { activeVp.current?.flipV(); setFlipV(f => !f); }} />
+                </div>
+                {/* W/L + Invert */}
+                <div className="flex items-center gap-1 px-3 py-2 border-b border-[#2a2a2a]">
+                  <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level" active={wlActive} onClick={() => { setWlActive(w => !w); if (!wlActive) setActiveTool(null); }} />
+                  <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
+                  <span className="text-[#555] text-[11px] ml-1">W/L · Invert</span>
+                </div>
+                {/* Reset */}
+                <div className="px-3 py-2">
+                  <button
+                    onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); switchViewMode("stack"); setOverflowMenuOpen(false); }}
+                    className="w-full text-left text-[#6B6B6B] hover:text-white text-[12px] font-mono px-2 py-1 rounded-lg hover:bg-[#1a1a1a] bg-transparent border-none cursor-pointer transition-all"
+                  >
+                    RESET ALL
+                  </button>
+                </div>
+              </div>
+            )}
+            <VDivider />
+          </div>}
 
-          <VDivider />
-
-          {/* W/L toggle — activates Cornerstone WindowLevelTool as primary */}
-          <ViewBtn
-            icon={<RiContrastFill size={16} />}
-            label="Window / Level — drag on image"
-            active={wlActive}
-            onClick={() => {
-              setWlActive(w => !w);
-              // When toggling W/L, clear any annotation tool
-              if (!wlActive) setActiveTool(null);
-            }}
-          />
-          <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
-
-          <VDivider />
-
-          <button
-            onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); setViewMode("stack"); }}
-            className="text-[#6B6B6B] hover:text-white text-[12px] font-mono px-2 py-1 rounded-lg hover:bg-[#1a1a1a] bg-transparent border-none cursor-pointer transition-all shrink-0"
-          >
-            RESET
-          </button>
-
-          <VDivider />
-
-          {/* MPR / 3D view toggle */}
+          {/* ── Always visible: MPR menu ── */}
           <div ref={mprMenuRef} className="relative">
             <button
               onClick={() => setMprMenuOpen(v => !v)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${
-                viewMode !== "stack"
-                  ? "bg-[#0694FB] text-white"
-                  : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
-              }`}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${viewMode !== "stack"
+                ? "bg-[#0694FB] text-white"
+                : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+                }`}
             >
               <TbView360 size={15} />
               {viewMode === "stack" ? "MPR" : viewMode.toUpperCase()}
@@ -472,25 +549,25 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             {mprMenuOpen && (
               <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[130px]">
                 <button
-                  onClick={() => { setViewMode("stack"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  onClick={() => { switchViewMode("stack"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "stack" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
                   2D Stack
                 </button>
                 <button
-                  onClick={() => { setViewMode("axial"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  onClick={() => { switchViewMode("axial"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "axial" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
                   Axial
                 </button>
                 <button
-                  onClick={() => { setViewMode("sagittal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  onClick={() => { switchViewMode("sagittal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "sagittal" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
                   Sagittal
                 </button>
                 <button
-                  onClick={() => { setViewMode("coronal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  onClick={() => { switchViewMode("coronal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "coronal" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
                   Coronal
@@ -498,6 +575,74 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               </div>
             )}
           </div>
+
+          <VDivider />
+
+          {/* ── Always visible: Enhance button ── */}
+          <div className="relative flex items-center shrink-0">
+            <motion.button
+              onClick={imageEnhancement}
+              onMouseEnter={() => setEnhancementHovered(true)}
+              onMouseLeave={() => setEnhancementHovered(false)}
+              animate={{
+                width: enhancementLoading ? 76
+                  : enhancementDone ? 28
+                    : enhancementHovered ? (enhancementActive ? 130 : 100)
+                      : 28
+              }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className={`relative h-7 flex items-center justify-center rounded-full overflow-hidden border-none cursor-pointer z-10 ${enhancementDone || enhancementActive ? 'bg-[#0694FB]' : 'bg-[#1c1c1c] hover:bg-[#242424]'
+                }`}
+              style={{ minWidth: 28 }}
+            >
+              {enhancementLoading ? (
+                <span className="flex items-center gap-1.5 px-2 whitespace-nowrap">
+                  <span className="relative w-[18px] h-[18px] shrink-0 flex items-center justify-center">
+                    <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 18 18">
+                      <circle cx="9" cy="9" r="6.5" fill="none" stroke="#2a2a2a" strokeWidth="2" />
+                      <circle
+                        cx="9" cy="9" r="6.5"
+                        fill="none" stroke="#0694FB" strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeDasharray={`${2 * Math.PI * 6.5}`}
+                        strokeDashoffset={`${2 * Math.PI * 6.5 * (1 - enhancementProgress / 100)}`}
+                        style={{ transition: 'stroke-dashoffset 0.15s ease' }}
+                      />
+                    </svg>
+
+                  </span>
+                  <motion.span
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="text-[11px] text-[#888] tabular-nums"
+                  >
+                    {enhancementProgress}%
+                  </motion.span>
+                </span>
+              ) : enhancementDone ? (
+                <FiCheck size={13} className="text-white" />
+              ) : (
+                <span className="flex items-center gap-1.5 px-2 whitespace-nowrap">
+                  <PiSparkleFill size={18} className={enhancementActive ? 'text-white' : 'text-[#6B6B6B]'} />
+                  <AnimatePresence>
+                    {enhancementHovered && (
+                      <motion.span
+                        key="enhance-label"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.1 }}
+                        className={`text-[12px]  ${enhancementActive ? 'text-white' : 'text-[#6B6B6B]'}`}
+                      >
+                        {enhancementActive ? 'Enhance Active' : 'Enhance'}
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </span>
+              )}
+            </motion.button>
+          </div>
+
         </div>
 
         {/* Slice navigation */}
@@ -534,8 +679,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           <button
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
             className={`flex items-center gap-2.5 px-4 py-[8px] rounded-full text-[13px] cursor-pointer transition-all border-none ${translationActive
-                ? "bg-[#A855F7] text-white"
-                : "bg-[#303030] text-[#a1a1a1] hover:text-white hover:bg-[#222]"
+              ? "bg-[#A855F7] text-white"
+              : "bg-[#303030] text-[#a1a1a1] hover:text-white hover:bg-[#222]"
               }`}
           >
             Translate Image
@@ -698,8 +843,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onClick={() => setPlaying(p => !p)}
                 title={playing ? "Pause" : "Play through slices"}
                 className={`w-9 h-9 flex items-center justify-center rounded-full border-none cursor-pointer transition-all ${playing
-                    ? "bg-white text-black hover:bg-white/80"
-                    : "bg-[#0694FB] text-white hover:bg-[#0578d1]"
+                  ? "bg-white text-black hover:bg-white/80"
+                  : "bg-[#0694FB] text-white hover:bg-[#0578d1]"
                   }`}
               >
                 {playing ? <FiPause size={16} /> : <FiPlay size={16} style={{ marginLeft: 2 }} />}
@@ -755,8 +900,35 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             </div>
           )}
 
+          {/* ── Enhancement overlay (sits between DICOM and segmentation) ── */}
+          {enhancementResult && enhancementActive && viewMode === "stack" && (() => {
+            const eSlice = enhancementResult.slices?.[currentIndex];
+            const eOverlay = eSlice?.enhanced_image;
+            if (!eOverlay) return null;
+            const eSrc = eOverlay.startsWith("data:") ? eOverlay : `data:image/png;base64,${eOverlay}`;
+            return (
+              <img
+                src={eSrc}
+                alt="enhancement overlay"
+                style={{
+                  opacity: 1,
+                  mixBlendMode: "normal",
+                  transformOrigin: "center center",
+                  transform: [
+                    `translate(${maskTransform.panX}px, ${maskTransform.panY}px)`,
+                    `scale(${maskTransform.zoom})`,
+                    `rotate(${maskTransform.rotation}deg)`,
+                    maskTransform.flipH ? "scaleX(-1)" : "",
+                    maskTransform.flipV ? "scaleY(-1)" : "",
+                  ].filter(Boolean).join(" "),
+                }}
+                className="absolute inset-0 w-full h-full object-contain z-10 pointer-events-none"
+              />
+            );
+          })()}
+
           {/* ── Segmentation mask overlay ── */}
-          {inferenceResult && (() => {
+          {inferenceResult && viewMode === "stack" && (() => {
             const sliceData = inferenceResult.slices?.[currentIndex];
             const overlay = sliceData?.mask;
             if (!overlay) return null;
@@ -826,7 +998,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                         onMouseDown={handleOverlayDragStart}
                         className="flex items-center justify-center gap-1 py-1.5 cursor-grab active:cursor-grabbing select-none hover:bg-[#1E1E1E] transition-colors"
                       >
-                        {[0,1,2,3,4].map(i => (
+                        {[0, 1, 2, 3, 4].map(i => (
                           <span key={i} style={{ width: 3, height: 3, borderRadius: "50%", background: "#3a3a3a", display: "inline-block" }} />
                         ))}
                       </div>
@@ -841,7 +1013,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                         </p>
                         <span className="mt-2 flex items-center gap-2 shrink-0">
                           <span className="flex items-end gap-0.5">
-                            {[0, 1, 2,3].map(bar => (
+                            {[0, 1, 2, 3].map(bar => (
                               <span
                                 key={bar}
                                 style={{
@@ -858,11 +1030,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                           <span className="text-[13px] font-medium text-[#949494]">{signalLabel}</span>
                         </span>
                       </div>
-                      
+
 
                       {/* Footer — signal meter left, slider + close right */}
                       <div className="border-t border-[#1E1E1E] bg-[#111]/60 px-3 py-2 flex items-center ">
-                       
+
 
                         {/* Opacity slider + close */}
                         <span className="flex items-center gap-2 flex-1 min-w-0">

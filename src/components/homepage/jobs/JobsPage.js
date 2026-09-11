@@ -113,7 +113,7 @@ function JobRow({ j, onClick }) {
       </td>
       {/* Details */}
       <td className="py-5 px-4 max-w-0 w-[22%]">
-        <span className="text-white/80 text-[14px] block truncate">{j.case_title || "—"}</span>
+        <span className="text-white uppercase text-[14px] block truncate">{j.case_title || "—"}</span>
         {j.model_type && (
           <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{j.model_type}</span>
         )}
@@ -121,14 +121,14 @@ function JobRow({ j, onClick }) {
       {/* Model */}
       <td className="py-5 px-4 max-w-0 w-[18%]">
         {j.model_name
-          ? <span className="text-white/80 text-[14px] block truncate">{j.model_name}</span>
+          ? <span className="text-white uppercase text-[14px] block truncate">{j.model_name}</span>
           : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
       {/* Modality */}
       <td className="py-5 px-4 whitespace-nowrap">
         {j.modality
-          ? <span className="text-white/80 text-[14px] uppercase">{j.modality}</span>
+          ? <span className="text-white text-[14px] uppercase">{j.modality}</span>
           : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>

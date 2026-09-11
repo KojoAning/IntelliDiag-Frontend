@@ -56,6 +56,9 @@ const todayDate = new Date().toLocaleDateString("en-US", {
   weekday: "long", month: "long", day: "numeric",
 });
 
+// Module-level cache — survives route changes, cleared on full page refresh
+let dashboardCache = null;
+
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -109,6 +112,7 @@ const SEVERITY_STYLES = {
   high: "bg-[#32161E] text-red-400 border border-red-500/20",
   medium: "bg-[#312A17] text-amber-400 border border-amber-500/20",
   low: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  none: "text-[#ffffff] text-[14px]"
 };
 
 const STATUS_STYLES = {
@@ -162,22 +166,22 @@ function ActivityRow({ primary, age, gender, details, modelName, modelType, moda
 
       {/* Details */}
       <td className="py-5 px-4 max-w-0 w-[22%]">
-        <span className="text-white/80 text-[14px] block truncate">{details || "—"}</span>
+        <span className="text-white text-[14px] block truncate">{details || "—"}</span>
         {modelType && <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{modelType}</span>}
       </td>
 
       {/* Model */}
       <td className="py-5 px-4 max-w-0 w-[18%]">
         {modelName
-          ? <span className="text-white/80 text-[13px] block truncate">{modelName}</span>
-          : <span className="text-[#2a2a2a] text-[13px]">—</span>
+          ? <span className="text-white text-[14px] block truncate uppercase">{modelName}</span>
+          : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
 
       {/* Modality */}
       <td className="py-5 px-4 whitespace-nowrap">
         {modality
-          ? <span className="text-white/80 text-[14px] uppercase">{modality}</span>
+          ? <span className="text-white text-[14px] uppercase">{modality}</span>
           : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
@@ -245,30 +249,21 @@ function Display() {
   const navigate = useNavigate();
   const name = localStorage.getItem("name") || "Doctor";
 
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ patients: 0, openCases: 0, tat: 0, flagged: 0 });
-  const [recentJobs, setRecentJobs] = useState([]);
+  const [loading, setLoading] = useState(!dashboardCache);
+  const [stats, setStats] = useState(dashboardCache?.stats ?? { patients: 0, openCases: 0, tat: 0, flagged: 0 });
+  const [recentJobs, setRecentJobs] = useState(dashboardCache?.recentJobs ?? []);
   const [modalityFilter, setModalityFilter] = useState("All");
   const [severityFilter, setSeverityFilter] = useState("All");
-  const [recentStudies, setRecentStudies] = useState([]);
-  const [upcomingAppts, setUpcomingAppts] = useState([]);
-  const [pendingDicoms, setPendingDicoms] = useState([]);
-  const [draftReports, setDraftReports] = useState([]);
-  const [models, setModels] = useState([]);
-  const [modelPerf, setModelPerf] = useState([]);
-  const [usageData, setUsageData] = useState([]);
+  const [recentStudies, setRecentStudies] = useState(dashboardCache?.recentStudies ?? []);
+  const [upcomingAppts, setUpcomingAppts] = useState(dashboardCache?.upcomingAppts ?? []);
+  const [pendingDicoms, setPendingDicoms] = useState(dashboardCache?.pendingDicoms ?? []);
+  const [draftReports, setDraftReports] = useState(dashboardCache?.draftReports ?? []);
+  const [models, setModels] = useState(dashboardCache?.models ?? []);
+  const [modelPerf, setModelPerf] = useState(dashboardCache?.modelPerf ?? []);
+  const [usageData, setUsageData] = useState(dashboardCache?.usageData ?? []);
 
   useEffect(() => {
-    Promise.allSettled([
-      getPatients("?limit=500"),
-      getCases("?limit=100"),
-      getStudies("?limit=100"),
-      getDicomImages("?status=pending&limit=10"),
-      getReports("?status=draft&limit=10"),
-      getRecentJobs(),
-      getModels(),
-      getUsageAnalytics(),
-    ]).then(([pRes, cRes, sRes, dRes, rRes, jRes, mRes, uRes]) => {
+    const applyResults = ([pRes, cRes, sRes, dRes, rRes, jRes, mRes, uRes]) => {
       const patients = pRes.status === "fulfilled" ? (pRes.value ?? []) : [];
       const cases = cRes.status === "fulfilled" ? (cRes.value ?? []) : [];
       const studies = sRes.status === "fulfilled" ? (sRes.value ?? []) : [];
@@ -281,41 +276,32 @@ function Display() {
       );
 
       const completedWithTAT = jobs.filter(j =>
-        (j.status || "").toLowerCase() === "completed" && j.created_at && j.estimated_completion
+        (j.status || "").toLowerCase() === "completed" && j.created_at && j.completed_at
       );
       const avgTatMs = completedWithTAT.length
         ? completedWithTAT.reduce((sum, j) =>
-          sum + (new Date(j.estimated_completion).getTime() - new Date(j.created_at).getTime()), 0
+          sum + (new Date(j.completed_at).getTime() - new Date(j.created_at).getTime()), 0
         ) / completedWithTAT.length
         : 0;
 
-      setStats({
+      const newStats = {
         patients: patients.length,
         openCases: openCases.length,
         tat: avgTatMs > 0 ? fmtDuration(avgTatMs) : "—",
         flagged: studies.filter(s => s.flagged).length,
-      });
-
-      setRecentJobs(jobs);
-
+      };
       const sortedStudies = [...studies].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-      setRecentStudies(sortedStudies.slice(0, 4));
-
-      setPendingDicoms(dicoms.slice(0, 4));
-      setDraftReports(reports.slice(0, 3));
-
-      // Model performance from models + jobs
+      const newRecentStudies = sortedStudies.slice(0, 4);
+      const newPendingDicoms = dicoms.slice(0, 4);
+      const newDraftReports = reports.slice(0, 3);
       const allModels = mRes.status === "fulfilled" ? (mRes.value ?? []) : [];
-      setModels(allModels);
+      const newUsageData = uRes.status === "fulfilled" ? (uRes.value ?? []) : [];
 
       const perfData = allModels.map(m => {
         const modelJobs = jobs.filter(j => j.model_id === m.id || j.model_name === (m.name || m.model_name));
         const completed = modelJobs.filter(j => (j.status || "").toLowerCase() === "completed");
         const failed = modelJobs.filter(j => (j.status || "").toLowerCase() === "failed");
         const total = modelJobs.length;
-        const successRate = total > 0 ? ((completed.length / total) * 100) : null;
-        const failureRate = total > 0 ? ((failed.length / total) * 100) : null;
-
         return {
           id: m.id,
           name: m.name || m.model_name || "Unknown",
@@ -328,15 +314,41 @@ function Display() {
           totalJobs: total,
           completedJobs: completed.length,
           failedJobs: failed.length,
-          successRate,
-          failureRate,
+          successRate: total > 0 ? ((completed.length / total) * 100) : null,
+          failureRate: total > 0 ? ((failed.length / total) * 100) : null,
         };
       });
-      setModelPerf(perfData);
-      setUsageData(uRes.status === "fulfilled" ? (uRes.value ?? []) : []);
 
+      // Update state
+      setStats(newStats);
+      console.log(newStats)
+      setRecentJobs(jobs);
+      setRecentStudies(newRecentStudies);
+      setPendingDicoms(newPendingDicoms);
+      setDraftReports(newDraftReports);
+      setModels(allModels);
+      setModelPerf(perfData);
+      setUsageData(newUsageData);
       setLoading(false);
-    });
+
+      // Save to module-level cache
+      dashboardCache = {
+        stats: newStats, recentJobs: jobs, recentStudies: newRecentStudies,
+        upcomingAppts: [], pendingDicoms: newPendingDicoms, draftReports: newDraftReports,
+        models: allModels, modelPerf: perfData, usageData: newUsageData,
+      };
+    };
+
+    Promise.allSettled([
+      getPatients("?limit=500"),
+      getCases("?limit=100"),
+      getStudies("?limit=100"),
+      getDicomImages("?status=pending&limit=10"),
+      getReports("?status=draft&limit=10"),
+      getRecentJobs(),
+      getModels(),
+      getUsageAnalytics(),
+    ]).then(applyResults);
   }, []);
 
   return (
@@ -452,7 +464,7 @@ function Display() {
                           modelName={j.model_name || ""}
                           modelType={j.model_type || ""}
                           modality={j.modality || ""}
-                          severity={j.severity || j.case_urgency || ""}
+                          severity={j.severity || "None"}
                           status={j.status || ""}
                           tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
                           onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study", case_id: j.case_id }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}

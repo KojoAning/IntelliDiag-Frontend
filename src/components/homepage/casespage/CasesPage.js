@@ -75,7 +75,6 @@ function CasesPage() {
       const res = await authFetch(`${baseURL}/cases/?limit=100`);
       if (!res.ok) return;
       const data = await res.json();
-      console.log(data)
       setPatients(
         data.map((c) => {
           const dob = c.patient?.date_of_birth;

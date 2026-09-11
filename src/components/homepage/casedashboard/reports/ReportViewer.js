@@ -339,8 +339,7 @@ export default function ReportViewer() {
         const url = data?.download_url || data?.url || "";
         setOpenDocTabs(prev => prev.map(t => t.id === doc.id ? { ...t, url, loading: false } : t));
       })
-      .catch(err => {
-        console.error("Failed to get document URL:", err);
+      .catch(() => {
         setOpenDocTabs(prev => prev.map(t => t.id === doc.id ? { ...t, loading: false, error: true } : t));
       });
   };
@@ -811,7 +810,6 @@ export default function ReportViewer() {
 
             {(() => {
               const activeAiReport = caseReports.find(r => r.id === activeReportTab) || report;
-              console.log("activeAiReport keys:", activeAiReport ? Object.keys(activeAiReport) : "null", activeAiReport);
               return (
                 <div
                   className="text-[#fdfbfb] bg-[#111111] p-4 rounded-[5px] text-[12px] leading-relaxed overflow-y-auto flex-1 min-h-0 pr-1"

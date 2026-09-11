@@ -112,11 +112,11 @@ function ReportViewModal({ isOpen, onClose, report, onUpdated }) {
                 ) : (
                   <h2 className="text-white text-[17px] font-medium m-0 leading-snug truncate">{report.title}</h2>
                 )}
-                <div className="flex items-center gap-2 mt-1.5">
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${statusColor}`}>
+                <div className="flex items-center gap-2 mt-1.5 text-[#dadada] text-sm">
+                  <span className={`text-[12px] font-medium px-2 py-0.5 rounded-full ${statusColor}`}>
                     {currentStatus || "Draft"}
                   </span>
-                  {date && <span className="text-[#3a3a3a] text-[11px]">{date}</span>}
+                  Created on {date && <span className="text-[#dadada] text-sm">{date}</span>}
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">

@@ -152,7 +152,6 @@ export default function ReportsPage() {
       const res = await authFetch(`${baseURL}/reports/`);
       if (res.ok) {
         const data = await res.json();
-        console.log(data)
         setReports(Array.isArray(data) ? data : []);
       }
     } catch { /* silently ignore */ } finally {

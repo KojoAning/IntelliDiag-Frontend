@@ -72,9 +72,8 @@ export async function initCornerstone() {
 
     // Suppress noisy unhandled image-load errors from Cornerstone —
     // log them once with useful info instead of flooding the console.
-    eventTarget.addEventListener(csEnums.Events.IMAGE_LOAD_ERROR, (evt) => {
-      const { imageId, error } = evt.detail || {};
-      console.warn("[Cornerstone] image load failed:", imageId, error?.message || error);
+    eventTarget.addEventListener(csEnums.Events.IMAGE_LOAD_ERROR, (_evt) => {
+      // image load errors are suppressed
     });
 
     initialized = true;

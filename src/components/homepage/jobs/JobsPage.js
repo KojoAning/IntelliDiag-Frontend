@@ -57,7 +57,8 @@ const STATUS_STYLES = {
 const SEVERITY_STYLES = {
   high:   "bg-[#32161E] text-red-400 border border-red-500/20",
   medium: "bg-[#312A17] text-amber-400 border border-amber-500/20",
-  low:    "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  low: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  none: "text-[#ffffff] text-[14px]"
 };
 
 const STATUS_ICONS = {
@@ -133,7 +134,7 @@ function JobRow({ j, onClick }) {
       </td>
       {/* Severity */}
       <td className="py-5 px-4 whitespace-nowrap">
-        <Badge label={j.severity || j.case_urgency} styleMap={SEVERITY_STYLES} />
+        <Badge label={j.severity || "None"} styleMap={SEVERITY_STYLES} />
       </td>
       {/* Status */}
       <td className="py-5 px-4 whitespace-nowrap">

@@ -687,14 +687,13 @@ function PatientDetailsPage() {
 
   useEffect(() => {
     if (state?.patient) {
-      console.log("patient (from state):", state.patient);
       return;
     }
     if (!id) return;
     setPatientLoading(true);
     getPatientById(id)
-      .then(data => { console.log("patient (from API):", data); setPatient(data); })
-      .catch((err) => { console.error("patient fetch error:", err); setPatient(null); })
+      .then(data => { setPatient(data); })
+      .catch(() => { setPatient(null); })
       .finally(() => setPatientLoading(false));
   }, [id, state?.patient]);
 
@@ -712,6 +711,7 @@ function PatientDetailsPage() {
   }, [id, caseId]);
 
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, label }
+  const [deleteReportConfirm, setDeleteReportConfirm] = useState(null); // { id, title }
   const [activeStudy, setActiveStudy] = useState(null);
   const [addStudyOpen, setAddStudyOpen] = useState(false);
   const [importStudyOpen, setImportStudyOpen] = useState(false);
@@ -732,7 +732,6 @@ function PatientDetailsPage() {
       const res = await authFetch(`${baseURL}/imaging-studies/?limit=100`);
       if (!res.ok) return;
       const data = await res.json();
-      console.log(data)
       setStudies(
         data
           .filter((s) => s.case_id === caseId)
@@ -774,6 +773,10 @@ function PatientDetailsPage() {
       await authFetch(`${baseURL}/reports/${reportId}`, { method: "DELETE" });
       setReports((prev) => prev.filter((r) => r.id !== reportId));
     } catch (_) { }
+  };
+
+  const confirmDeleteReport = (report) => {
+    setDeleteReportConfirm({ id: report.id, title: report.title });
   };
   if (patientLoading) {
     return (
@@ -965,10 +968,10 @@ function PatientDetailsPage() {
                           : "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]"
                           }`}>{report.status || "Draft"}</span>
                         <button
-                          onClick={(e) => { e.stopPropagation(); deleteReport(report.id); }}
+                          onClick={(e) => { e.stopPropagation(); confirmDeleteReport(report); }}
                           className="opacity-0 group-hover:opacity-100 transition-opacity w-7 h-7 flex items-center justify-center rounded-lg border border-[#1E1E1E] bg-transparent hover:bg-[rgba(255,59,59,0.1)] hover:border-[rgba(255,59,59,0.3)] cursor-pointer shrink-0"
                         >
-                          <FiX size={12} color="#FF3B3B" />
+                          <FiTrash2 size={12} color="#FF3B3B" />
                         </button>
                       </div>
                     ))}
@@ -1045,6 +1048,61 @@ function PatientDetailsPage() {
                   className="flex-1 py-2.5 rounded-full bg-red-500/20 hover:bg-red-500/30 text-red-400 text-[13px] font-medium bordercursor-pointer transition-colors"
                 >
                   Delete Study
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Delete report confirmation ── */}
+      <AnimatePresence>
+        {deleteReportConfirm && (
+          <motion.div
+            className="fixed inset-0 z-[1000] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setDeleteReportConfirm(null)}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border gap-5 border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              <div className="flex items-start justify-between px-7 pt-7">
+                <div className="flex flex-row gap-2">
+                  <FiTrash2 size={20} className="text-red-400 shrink-0 mt-0.5" />
+                  <h2 className="text-white text-[17px] font-medium m-0">Delete Report?</h2>
+                </div>
+                <button onClick={() => setDeleteReportConfirm(null)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                  <FiX size={18} />
+                </button>
+              </div>
+              <p className="px-7 text-[#6B6B6B] text-[14px] m-0">
+                <span className="text-white">"{deleteReportConfirm.title}"</span> will be permanently deleted. This cannot be undone.
+              </p>
+              <div className="px-7 pb-6 flex flex-row gap-2">
+                <button
+                  onClick={() => setDeleteReportConfirm(null)}
+                  className="flex-1 py-2.5 rounded-full bg-transparent hover:bg-[#1E1E1E] text-[#6B6B6B] text-[13px] font-medium cursor-pointer transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const { id } = deleteReportConfirm;
+                    setDeleteReportConfirm(null);
+                    deleteReport(id);
+                  }}
+                  className="flex-1 py-2.5 rounded-full bg-red-500/20 hover:bg-red-500/30 text-red-400 text-[13px] font-medium cursor-pointer transition-colors"
+                >
+                  Delete Report
                 </button>
               </div>
             </motion.div>

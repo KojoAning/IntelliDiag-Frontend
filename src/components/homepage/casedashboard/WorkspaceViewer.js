@@ -82,7 +82,7 @@ function WorkspaceViewer() {
   const aiLoading = currentCtx.aiLoading ?? false;
   const inferenceResult = currentCtx.inferenceResult ?? null;
   const inferenceProgress = currentCtx.inferenceProgress ?? null;
- 
+
   const enhancementCtx = modelContexts['10000001'] ?? {};
   const enhancementResponse = enhancementCtx.enhancementResponse ?? null;
   const enhancementDone = enhancementCtx.enhancementDone ?? null;
@@ -91,7 +91,7 @@ function WorkspaceViewer() {
   const enhancementProgress = enhancementCtx.enhancementProgress ?? null;
   const jobStatus = currentCtx.jobStatus ?? null;
 
-  // ── Job status polling (when navigated from Jobs page) ───────────────────────
+
   useEffect(() => {
     if (!from_jobs || !jobId) return;
     let cancelled = false;
@@ -99,10 +99,66 @@ function WorkspaceViewer() {
     // Pre-select the model that was used for this job
     const modelId = navState?.model_id ?? null;
     if (modelId) {
-      getModels().then(models => {
-        const found = (Array.isArray(models) ? models : []).find(m => String(m.id) === String(modelId));
-        if (found && !cancelled) setSelectedModel(found);
-      }).catch(() => { });
+      if (modelId == '10000001') {
+        // ── Enhancement job ───────────────────────────────────────────────────
+        const fetchEnhancementResults = async () => {
+          updateCtx('10000001', { enhancementLoading: true, enhancementProgress: 100 });
+          try {
+            let results;
+            if (process.env.NODE_ENV === 'development') {
+              const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+              if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
+              results = await resR.json();
+            } else {
+              const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+              if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
+              const { url } = await res.json();
+              results = await fetch(url).then(r => r.json());
+            }
+            if (!cancelled) updateCtx('10000001', { enhancementResult: results });
+          } catch {
+            if (!cancelled) updateCtx('10000001', { jobStatus: 'failed' });
+          } finally {
+            if (!cancelled) updateCtx('10000001', { enhancementLoading: false, enhancementProgress: null });
+          }
+        };
+
+        const pollEnhancement = async () => {
+          const status = (initialJobStatus || '').toLowerCase();
+          if (status === 'failed') { updateCtx('10000001', { jobStatus: 'failed' }); return; }
+          if (status === 'completed') { await fetchEnhancementResults(); return; }
+
+          updateCtx('10000001', { enhancementLoading: true, enhancementProgress: status === 'running' ? 0 : null });
+
+          while (!cancelled) {
+            await new Promise(r => setTimeout(r, 2500));
+            if (cancelled) break;
+            try {
+              const res = await authFetch(`${API_BASE}/jobs/check_status/${jobId}`);
+              if (!res.ok || cancelled) break;
+              const data = await res.json();
+              if (data.status === 'running') {
+                updateCtx('10000001', { enhancementProgress: Math.round(data.progress ?? 0) });
+              } else if (data.status === 'completed') {
+                await fetchEnhancementResults(); break;
+              } else if (data.status === 'failed') {
+                if (!cancelled) updateCtx('10000001', { jobStatus: 'failed', enhancementLoading: false, enhancementProgress: null });
+                break;
+              }
+            } catch { break; }
+          }
+        };
+
+        pollEnhancement();
+        return () => { cancelled = true; };
+      }
+      else {
+        getModels().then(models => {
+          const found = (Array.isArray(models) ? models : []).find(m => String(m.id) === String(modelId));
+          if (found && !cancelled) setSelectedModel(found);
+        }).catch(() => { });
+      }
+
     }
 
     // Key context updates under the job's model id (falls back to jobId if model unknown)
@@ -379,7 +435,6 @@ function WorkspaceViewer() {
     }
 
     const contentType = res.headers.get("content-type") ?? "";
-    console.log("[prefetchBulk] content-type:", contentType);
     // Boundary may be quoted: boundary="abc" or unquoted: boundary=abc
     const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/);
     const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
@@ -387,7 +442,7 @@ function WorkspaceViewer() {
 
     const buffer = await res.arrayBuffer();
     const parts = parseMultipartBody(buffer, boundary);
-    console.log(`[prefetchBulk] ${parts.length} parts parsed, ${imgs.length} imgs expected`);
+    ;
 
     // Parse instance numbers and sort clinically. Wrapped in try/catch so a
     // parse failure degrades to original order rather than aborting the bulk fetch.
@@ -407,7 +462,7 @@ function WorkspaceViewer() {
         orderedParts = annotated.map(a => a.part);
       }
     } catch (sortErr) {
-      console.warn("[prefetchBulk] instance sort failed, using original order:", sortErr);
+      // instance sort failed, using original order
     }
 
     const blobUrls = new Array(imgs.length).fill(null);
@@ -425,7 +480,6 @@ function WorkspaceViewer() {
 
     const result = imgs.map((img, i) => blobUrls[i] ? { ...img, blobUrl: blobUrls[i] } : img);
     const missing = result.filter(img => !img.blobUrl).length;
-    if (missing) console.warn(`[prefetchBulk] ${missing} image(s) have no blobUrl — will fall back to stream`);
 
     // Extract DICOM metadata from the first available slice
     const firstBlobUrl = blobUrls.find(Boolean);
@@ -455,11 +509,10 @@ function WorkspaceViewer() {
             setDicomMetadata(metadata);
           }
         } catch (bulkErr) {
-          console.error("[prefetchBulk] failed, falling back to stream URLs:", bulkErr);
           if (!cancelled) setImages(imgs);
         }
       })
-      .catch(err => console.error("Failed to load images:", err))
+      .catch(() => { })
       .finally(() => { if (!cancelled) setImagesLoading(false); });
 
     return () => { cancelled = true; };
@@ -495,7 +548,7 @@ function WorkspaceViewer() {
     try {
       setImages(await fetchImages(seriesId));
     } catch (err) {
-      console.error("Failed to reload images:", err);
+      // ignore reload error
     }
 
     if (errors.length) setUploadError(errors.join(" · "));
@@ -562,17 +615,6 @@ function WorkspaceViewer() {
       } else {
 
         const newJobId = crypto.randomUUID();
-        console.log({
-          job_id: newJobId,
-          series_id: activeSeries?.id,
-          token: seriesToken,
-          user_token: localStorage.getItem("token"),
-          user_id: localStorage.getItem("sub"),
-          user_email: localStorage.getItem("email"),
-          user_name: localStorage.getItem("name"),
-          model_id: '10000001',
-          view_plane: viewMode,
-        })
         const response = await fetch(`${process.env.REACT_APP_API_IMAGE_ENHANCEMENT_BASE}/bm3d/enhance`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -610,7 +652,6 @@ function WorkspaceViewer() {
 
         const status = await statusRes.json();
 
-        console.log(status.status)
         if (status.status === "running") {
           updateCtx('10000001', { enhancementProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
@@ -654,19 +695,6 @@ function WorkspaceViewer() {
     });
     if (!res.ok) throw new Error("Failed to get inference token");
     const data = await res.json();
-
-    // const res2 = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/segment`, {
-    //   method: "POST",
-    //   body: {
-    //     "series_id": seriesId,
-    //     "token": data.token
-    //   },
-    //   headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-    // });
-
-    // const data2 = await res2.json();
-    // console.log(data2)
-
     return data.token;
   };
 
@@ -738,7 +766,6 @@ function WorkspaceViewer() {
 
         const status = await statusRes.json();
 
-        console.log(status.status)
         if (status.status === "running") {
           updateCtx(capturedModelId, { inferenceProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
@@ -826,11 +853,8 @@ function WorkspaceViewer() {
             updateCtx(capturedModelId, { aiResponse: reportText });
           }
           reportText += reportDecoder.decode();
-          console.log('kljnljksdfnkljdfnjkldfn')
-          console.log(reportText)
           updateCtx(capturedModelId, { aiResponse: reportText || buildSummary(results) });
         } else {
-          console.log(reportRes)
           updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
         }
       }
@@ -909,7 +933,7 @@ function WorkspaceViewer() {
       const data = await res.json();
       setReportSuccessDialog({ caseId: data.case_id || caseId });
     } catch (err) {
-      console.error("Failed to save report:", err);
+      // ignore save error
     } finally {
       setReportSaving(false);
     }
@@ -928,7 +952,7 @@ function WorkspaceViewer() {
       const data = await res.json();
       setReportSuccessDialog({ caseId: data.case_id || caseId });
     } catch (err) {
-      console.error("Failed to override report:", err);
+      // ignore override error
     } finally {
       setReportSaving(false);
     }
@@ -942,7 +966,6 @@ function WorkspaceViewer() {
     else {
       setshowExpandedAiReport(false)
     }
-    console.log('started running translation');
   }
 
   return (
@@ -1268,25 +1291,7 @@ function WorkspaceViewer() {
         <div className="w-full flex flex-row box-border mt-[30px] flex-1 min-h-0">
           <div className="flex flex-col flex-1 min-w-0 gap-4 overflow-hidden">
 
-            {/* Page header */}
-            {/* <div className="flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-white text-[25px] font-medium m-0 leading-tight pb-1">
-                      {activeStudy.name}
-                    </h1>
-                    <span className="text-[#6B6B6B] text-[18px] font-light">/</span>
-                    <span className="text-[#6B6B6B] text-[17px] font-light">{activeSeries?.name}</span>
-                  </div>
-                  <p className="text-[#6B6B6B] text-sm m-0">{activeStudy.date} · {activeStudy.region}</p>
-                </div>
-              </div>
 
-
-            </div> */}
-
-            {/* Viewer layout */}
             <div className="flex flex-row gap-4 flex-1 min-h-0 overflow-hidden relative">
               {(imagesLoading || uploading) && (
                 <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 rounded-xl">

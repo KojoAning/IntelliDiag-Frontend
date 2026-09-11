@@ -285,7 +285,6 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
         headers: jsonHeaders,
         body: JSON.stringify(patientBody),
       });
-      console.log(patientBody)
       if (!patientRes.ok) {
         const err = await patientRes.json().catch(() => ({}));
         throw new Error(err.detail || err.message || "Failed to create patient");
@@ -314,7 +313,6 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
       });
       if (!caseRes.ok) {
         const err = await caseRes.json().catch(() => ({}));
-        console.error("Case 422 detail:", JSON.stringify(err.detail, null, 2));
         const msg = Array.isArray(err.detail)
           ? err.detail.map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", ")
           : err.detail || err.message || "Failed to create case";

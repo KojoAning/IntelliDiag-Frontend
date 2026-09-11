@@ -10,6 +10,13 @@ module.exports = {
         fs: false,
         path: false,
       };
+
+      // Suppress missing source map warnings from third-party packages
+      webpackConfig.ignoreWarnings = [
+        ...(webpackConfig.ignoreWarnings || []),
+        /Failed to parse source map/,
+      ];
+
       return webpackConfig;
     },
   },

@@ -54,7 +54,6 @@ function ImageComparisonSlider({ originalSrc, overlaySrc, overlayLabel = "AI Ove
           setLoading(false);
         }
       } catch (err) {
-        console.error("ImageComparisonSlider: failed to load original", err);
         setLoading(false);
       }
     })();

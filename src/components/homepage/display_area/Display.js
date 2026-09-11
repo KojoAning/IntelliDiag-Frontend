@@ -471,7 +471,7 @@ function Display() {
         <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">AI Usage Analytics</h2>
+              <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">Usage Analytics</h2>
               <p className="m-0 text-[#999999] text-[14px] mt-0">Monthly inference volume and model activity</p>
             </div>
             <div className="flex items-center gap-5">
@@ -520,7 +520,7 @@ function Display() {
       </div>
 
       {/* ── Model Performance Overview ── */}
-      
+
 
       {/* ── Recent Studies ── */}
       {/* {!loading && recentStudies.length > 0 && (

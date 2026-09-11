@@ -28,7 +28,7 @@ function NotificationItem({ n, index, onRead }) {
       className="notif-item flex items-center gap-3 px-3 py-2.5 rounded-2xl cursor-pointer transition-all duration-200"
       style={{
         background: isUnread ? "rgba(6,148,251,0.07)" : "rgba(255,255,255,0.04)",
-        border: `1px solid ${isUnread ? "rgba(6,148,251,0.18)" : "rgba(255,255,255,0.06)"}`,
+       
       }}
     >
       <div
@@ -52,27 +52,27 @@ function NotificationItem({ n, index, onRead }) {
 function getBreadcrumbs(pathname) {
   if (pathname.startsWith("/cases/")) {
     return [
-      { label: "Cases",           path: "/cases" },
+      { label: "Cases", path: "/cases" },
       { label: "Patient Case Details", path: null },
     ];
   }
   if (pathname === "/case-workspace/viewer") {
     return [
-      { label: "Cases",     path: "/cases" },
-      { label: "Series",    path: "/case-workspace" },
-      { label: "Viewer",    path: null },
+      { label: "Cases", path: "/cases" },
+      { label: "Series", path: "/case-workspace" },
+      { label: "Viewer", path: null },
     ];
   }
   if (pathname === "/case-workspace") {
     return [
-      { label: "Cases",  path: "/cases" },
+      { label: "Cases", path: "/cases" },
       { label: "Series", path: null },
     ];
   }
   if (pathname.startsWith("/patient-reports/")) {
     return [
       { label: "Patient Reports", path: "/patient-reports" },
-      { label: "Report Viewer",   path: null },
+      { label: "Report Viewer", path: null },
     ];
   }
   if (pathname.startsWith("/report-templates")) {
@@ -82,14 +82,14 @@ function getBreadcrumbs(pathname) {
     ];
   }
   const MAP = {
-    "/dashboard": [{ label: "Dashboard",      path: null }],
-    "/cases":     [{ label: "Cases",          path: null }],
-    "/calendar":  [{ label: "Calendar",       path: null }],
-    "/new-case":  [{ label: "New Case",       path: null }],
-    "/jobs":             [{ label: "Inference Jobs",  path: null }],
-    "/settings":        [{ label: "Settings",        path: null }],
+    "/dashboard": [{ label: "Dashboard", path: null }],
+    "/cases": [{ label: "Cases", path: null }],
+    "/calendar": [{ label: "Calendar", path: null }],
+    "/new-case": [{ label: "New Case", path: null }],
+    "/jobs": [{ label: "Inference Jobs", path: null }],
+    "/settings": [{ label: "Settings", path: null }],
     "/patient-reports": [{ label: "Patient Reports", path: null }],
-    "/models":          [{ label: "Models",          path: null }],
+    "/models": [{ label: "Models", path: null }],
   };
   return MAP[pathname] ?? [];
 }
@@ -207,7 +207,7 @@ function Appbar() {
       <div className="flex flex-row items-center gap-2">
         {/* Collaborators */}
         <div ref={collabRef} className="relative">
-          <button
+          {/* <button
             onClick={() => setCollabOpen(v => !v)}
             className="relative flex items-center gap-2 border-none cursor-pointer overflow-hidden transition-all duration-300"
             style={{
@@ -226,32 +226,32 @@ function Appbar() {
             >
               Collaborators
             </span>
-          </button>
+          </button> */}
 
-          {collabOpen && (
+          {/* {collabOpen && ( */}
             <div
-              className="absolute right-0 top-[calc(100%+10px)] w-[300px] rounded-[22px] overflow-hidden shadow-2xl"
-              style={{
-                background: "rgba(30,30,30,0.72)",
-                backdropFilter: "blur(28px)",
-                WebkitBackdropFilter: "blur(28px)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                animation: "notifFadeIn 0.18s ease forwards",
-              }}
+              // className="absolute right-0 top-[calc(100%+10px)] w-[300px] rounded-[22px] overflow-hidden shadow-2xl"
+              // style={{
+                // background: "rgba(30,30,30,0.72)",
+                // backdropFilter: "blur(28px)",
+                // WebkitBackdropFilter: "blur(28px)",
+                // border: "1px solid rgba(255,255,255,0.08)",
+                // animation: "notifFadeIn 0.18s ease forwards",
+              // }}
             >
-              <div className="flex items-center justify-between px-4 pt-4 pb-2">
+              {/* <div className="flex items-center justify-between px-4 pt-4 pb-2">
                 <p className="text-white text-[13px] font-medium m-0">Collaborators</p>
-                {/* <button className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white border-none cursor-pointer transition-colors">
+                 <button className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white border-none cursor-pointer transition-colors">
                   <FiUserPlus size={12} />
                   Invite
-                </button> */}
-              </div>
-              <div className="flex flex-col items-center justify-center py-8 px-4 gap-2">
+                </button> 
+              </div> */}
+              {/* <div className="flex flex-col items-center justify-center py-8 px-4 gap-2">
                 <HiUsers size={24} className="text-[#2a2a2a]" />
                 <p className="text-[#3a3a3a] text-[12px] m-0 text-center">No current collaborators</p>
-              </div>
+              </div> */}
             </div>
-          )}
+          {/* )} */}
         </div>
 
         {/* Notification bell */}
@@ -297,7 +297,7 @@ function Appbar() {
             >
               {/* Header */}
               <div className="flex items-center justify-between px-4 pt-4 pb-2">
-                <p className="text-white text-[13px] font-medium m-0">
+                <p className="text-white text-[15px] font-medium m-0">
                   Notifications
                   {unreadCount > 0 && (
                     <span className="ml-2 text-[11px] text-[#0694FB] font-normal">{unreadCount} unread</span>
@@ -379,7 +379,7 @@ function Appbar() {
               {/* Actions */}
               <div className="px-2 py-2">
                 <button
-                  onClick={() => { ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k)); setProfileOpen(false); navigate("/"); }}
+                  onClick={() => { ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k)); setProfileOpen(false); navigate("/"); }}
                   className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#FF6B6B] hover:bg-[rgba(255,107,107,0.1)] bg-transparent border-none cursor-pointer transition-colors text-[13px]"
                 >
                   <FiLogOut size={14} />

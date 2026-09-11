@@ -296,7 +296,6 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         }
       } catch (err) {
         if (!cancelled) {
-          console.error("Volume load error:", err);
           setError(err.message || "Failed to load volume");
         }
       } finally {

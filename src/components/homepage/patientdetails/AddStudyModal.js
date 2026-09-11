@@ -45,7 +45,6 @@ function AddStudyModal({ isOpen, onClose, caseId, onCreated }) {
         study_date: studyInfo.date ? new Date(studyInfo.date).toISOString() : new Date().toISOString(),
         case_id: caseId,
       };
-      console.log(body)
       const res = await authFetch(`${baseURL}/imaging-studies/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

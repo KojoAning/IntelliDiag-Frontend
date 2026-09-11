@@ -128,7 +128,7 @@ function LoadingRow() {
 
 // ── Filters ───────────────────────────────────────────────────────────────────
 
-const MODALITIES = ["All", "MRI", "CT", "X-Ray", "Ultrasound", "PET"];
+const MODALITIES = ["All", "MR", "CT", "X-Ray", "Ultrasound", "PET"];
 const STATUSES   = ["All", "Draft", "Signed"];
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
@@ -152,7 +152,6 @@ export default function ReportsPage() {
       const res = await authFetch(`${baseURL}/reports/`);
       if (res.ok) {
         const data = await res.json();
-        console.log(data)
         setReports(Array.isArray(data) ? data : []);
       }
     } catch { /* silently ignore */ } finally {

@@ -7,7 +7,7 @@ const inputCls = "w-full bg-[#111111] border border-[#1E1E1E] rounded-xl px-4 py
 const labelCls = "text-[#6B6B6B] text-xs mb-1.5 block";
 
 const modalityOptions = [
-  { value: "MRI",        color: "text-[#0694FB] bg-[rgba(6,148,251,0.1)] border-[rgba(6,148,251,0.3)]" },
+  { value: "MR",         color: "text-[#0694FB] bg-[rgba(6,148,251,0.1)] border-[rgba(6,148,251,0.3)]" },
   { value: "CT",         color: "text-[#F59E0B] bg-[rgba(245,158,11,0.1)] border-[rgba(245,158,11,0.3)]" },
   { value: "X-Ray",      color: "text-[#22C55E] bg-[rgba(34,197,94,0.1)] border-[rgba(34,197,94,0.3)]" },
   { value: "Ultrasound", color: "text-[#A855F7] bg-[rgba(168,85,247,0.1)] border-[rgba(168,85,247,0.3)]" },
@@ -45,7 +45,6 @@ function AddStudyModal({ isOpen, onClose, caseId, onCreated }) {
         study_date: studyInfo.date ? new Date(studyInfo.date).toISOString() : new Date().toISOString(),
         case_id: caseId,
       };
-      console.log(body)
       const res = await authFetch(`${baseURL}/imaging-studies/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -104,7 +103,7 @@ function AddStudyModal({ isOpen, onClose, caseId, onCreated }) {
                 <label className={labelCls}>Study Name</label>
                 <input
                   type="text"
-                  placeholder="e.g. MRI Right Knee"
+                  placeholder="e.g. MR Right Knee"
                   value={studyInfo.name || ""}
                   onChange={e => set("name", e.target.value)}
                   className={inputCls}

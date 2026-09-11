@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { FiArrowRight } from "react-icons/fi";
 
-const MODALITIES = ["CT", "MRI",];
+const MODALITIES = ["CT", "MR"];
 
 const PAIRS = [
-  { from: "CT", to: "MRI", description: "Synthesize MRI contrast from CT scan" },
-  { from: "MRI", to: "CT", description: "Generate CT equivalent from MRI scan" },
+  { from: "CT", to: "MR", description: "Synthesize MR contrast from CT scan" },
+  { from: "MR", to: "CT", description: "Generate CT equivalent from MR scan" },
 ];
 
 function TranslationPanel({ onTranslate }) {

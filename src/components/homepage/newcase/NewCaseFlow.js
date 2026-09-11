@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { authFetch } from "../../../lib/api";
 import { motion, AnimatePresence } from "framer-motion";
-import { FiUploadCloud, FiX, FiCheck } from "react-icons/fi";
+import { FiUploadCloud, FiX, FiCheck, FiLoader } from "react-icons/fi";
 import { uid } from "../../../lib/uid";
 
 // ─── Step indicator ────────────────────────────────────────────────────────────
@@ -58,15 +58,15 @@ function StepPatientInfo({ data, onChange }) {
   return (
     <div className="grid grid-cols-2 gap-3">
       <div className="col-span-2">
-        <label className={labelCls}>Full Name</label>
+        <label className={labelCls}>Full Name <span className="text-[#FF4A4A]">*</span></label>
         <input type="text" placeholder="e.g. Courtney Smith" value={data.fullName || ""} onChange={(e) => onChange("fullName", e.target.value)} className={inputCls} />
       </div>
       <div>
-        <label className={labelCls}>Date of Birth</label>
+        <label className={labelCls}>Date of Birth <span className="text-[#FF4A4A]">*</span></label>
         <input type="date" value={data.dob || ""} onChange={(e) => onChange("dob", e.target.value)} className={inputCls } />
       </div>
       <div>
-        <label className={labelCls}>Gender</label>
+        <label className={labelCls}>Gender <span className="text-[#FF4A4A]">*</span></label>
         <select value={data.gender || ""} onChange={(e) => onChange("gender", e.target.value)} className={`${inputCls} [&>option]:bg-[#111]`}>
           <option value="">Select gender</option>
           <option value="Male">Male</option>
@@ -75,7 +75,7 @@ function StepPatientInfo({ data, onChange }) {
         </select>
       </div>
       <div>
-        <label className={labelCls}>MRN #</label>
+        <label className={labelCls}>MRN # <span className="text-[#FF4A4A]">*</span></label>
         <input type="text" placeholder="e.g. 6864558" value={data.mrn || ""} onChange={(e) => onChange("mrn", e.target.value)} className={inputCls} />
       </div>
       <div>
@@ -260,7 +260,7 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
   const toggleModel = (id) => setSelectedModels((m) => m.includes(id) ? m.filter((x) => x !== id) : [...m, id]);
 
   const canProceed = () => {
-    if (step === 1) return !!patientInfo.fullName && !!patientInfo.gender;
+    if (step === 1) return !!patientInfo.fullName && !!patientInfo.gender && !!patientInfo.mrn && !!patientInfo.dob;
     if (step === 2) return !!caseDetails.reason && !!caseDetails.urgency;
     return true;
   };
@@ -276,18 +276,15 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
       const jsonHeaders = { "Content-Type": "application/json" };
 
       // ── 1. Create patient ──────────────────────────────────────────────────
-      const patientBody = { full_name: patientInfo.fullName, gender: patientInfo.gender };
-      if (patientInfo.mrn) patientBody.mrn = patientInfo.mrn;
+      const patientBody = { full_name: patientInfo.fullName, gender: patientInfo.gender, mrn: patientInfo.mrn, date_of_birth: patientInfo.dob };
       if (patientInfo.phone) patientBody.phone = patientInfo.phone;
       if (patientInfo.email) patientBody.email = patientInfo.email;
-      if (patientInfo.dob) patientBody.date_of_birth = patientInfo.dob;
 
       const patientRes = await authFetch(`${baseURL}/patients/`, {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify(patientBody),
       });
-      console.log(patientBody)
       if (!patientRes.ok) {
         const err = await patientRes.json().catch(() => ({}));
         throw new Error(err.detail || err.message || "Failed to create patient");
@@ -316,7 +313,6 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
       });
       if (!caseRes.ok) {
         const err = await caseRes.json().catch(() => ({}));
-        console.error("Case 422 detail:", JSON.stringify(err.detail, null, 2));
         const msg = Array.isArray(err.detail)
           ? err.detail.map(d => `${d.loc?.slice(-1)[0]}: ${d.msg}`).join(", ")
           : err.detail || err.message || "Failed to create case";
@@ -407,7 +403,7 @@ function NewCaseModal({ isOpen, onClose, onCreated }) {
                     disabled={!canProceed() || submitting}
                     className={`px-5 py-2 rounded-md text-sm font-medium border-none transition-all duration-200 ${canProceed() && !submitting ? "bg-[#0694FB] text-white cursor-pointer hover:bg-[#0578d1]" : "bg-[#1a1a1a] text-[#3a3a3a] cursor-not-allowed"}`}
                   >
-                    {submitting ? "Creating…" : step === steps.length ? "Finish" : "Continue"}
+                    {submitting ? <><FiLoader size={14} className="animate-spin" /> Creating…</> : step === steps.length ? "Finish" : "Continue"}
                   </button>
                 </div>
               </div>

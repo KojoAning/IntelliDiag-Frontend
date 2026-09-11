@@ -850,7 +850,6 @@ export default function ReportTemplateEditor() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      console.error("Save failed:", err);
       // Fallback: persist to localStorage so work isn't lost
       saveTemplate(template);
     } finally {
@@ -879,16 +878,16 @@ export default function ReportTemplateEditor() {
       <div className="flex-1 min-w-0 h-full flex flex-col min-h-0">
         {/* ── Page header ── */}
         <motion.div
-          className="shrink-0 mb-6 flex items-start justify-between"
+          className="shrink-0 mb-4 flex items-start justify-between"
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: [0.32, 0.72, 0, 1] }}
         >
           <div>
-            <h1 className="m-0 text-white text-[35px] font-medium">Report Templates</h1>
-            <p className="m-0 text-[#999898] text-[13px] mt-0.5">Design the layout that generated reports will follow</p>
+            <h1 className="m-0 text-white text-[32px] font-medium mb-0">Report Templates</h1>
+            <p className="m-0 text-[#999898] text-[13px]">Design the layout that generated reports will follow</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-0">
             <button
               onClick={handleReset}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-transparent border border-[#1E1E1E] text-[#6B6B6B] hover:text-white hover:border-[#2a2a2a] text-[13px] cursor-pointer transition-all"

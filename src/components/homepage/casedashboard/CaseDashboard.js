@@ -4,8 +4,10 @@ import Appbar from "../appbar/appbar";
 import Sidebar from "../sidebar/Sidebar";
 import SeriesGrid from "./SeriesGrid";
 import AddSeriesModal from "./AddSeriesModal";
-import { getSeriesForStudy, deleteSeries } from "../../../lib/api";
+import { getSeriesForStudy, deleteSeries, authFetch } from "../../../lib/api";
 import { FiShare2, FiFileText, FiPlusCircle } from "react-icons/fi";
+
+const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
 const statusColors = {
   "In Revyiew": "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]",
@@ -27,18 +29,32 @@ function CaseDashboard() {
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [seriesError, setSeriesError] = useState(null);
 
-  // Fetch series for the active study from the API
+  // Fetch series for the active study from the API.
+  // When coming from a jobs-originated viewer, study.id is actually a series_id —
+  // resolve the real study_id first via the series record.
   useEffect(() => {
-    const studyId = navState?.studyId ?? activeStudy?.id;
-    if (!studyId) return;
+    const rawId = navState?.studyId ?? activeStudy?.id;
+    if (!rawId) return;
 
     let cancelled = false;
     setSeriesLoading(true);
     setSeriesError(null);
 
-    getSeriesForStudy(studyId)
-      .then(data => {
-        console.log(data)
+    const load = async () => {
+      try {
+        let studyId = rawId;
+
+        // When from_jobs is set, study.id is a series_id — resolve the real study_id
+        if (navState?.from_jobs) {
+          const res = await authFetch(`${API_BASE}/series/${rawId}`);
+          if (!res.ok) throw new Error(`Could not resolve study from series: ${res.status}`);
+          const data = await res.json();
+          studyId = data.study_id ?? data.study?.id;
+          if (!studyId) throw new Error("Series record has no study_id");
+          if (!cancelled) setActiveStudy(prev => ({ ...prev, id: studyId }));
+        }
+
+        const data = await getSeriesForStudy(studyId);
         if (cancelled) return;
         const series = (data ?? []).map(s => ({
           id: s.id,
@@ -49,14 +65,14 @@ function CaseDashboard() {
           expanded: false,
         }));
         setActiveStudy(prev => ({ ...prev, series }));
-      })
-      .catch(err => {
+      } catch (err) {
         if (!cancelled) setSeriesError(err.message);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setSeriesLoading(false);
-      });
+      }
+    };
 
+    load();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navState?.studyId, activeStudy?.id]);

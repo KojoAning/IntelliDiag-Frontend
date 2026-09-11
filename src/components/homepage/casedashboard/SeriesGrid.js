@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { FiMoreHorizontal, FiMaximize2, FiTrash2 } from "react-icons/fi";
 
 const modalityColors = {
-  MRI:        "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
+  MR:        "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
   "X-Ray":    "text-[#22C55E] bg-[rgba(34,197,94,0.15)]",
   CT:         "text-[#F59E0B] bg-[rgba(245,158,11,0.15)]",
   Ultrasound: "text-[#A855F7] bg-[rgba(168,85,247,0.15)]",

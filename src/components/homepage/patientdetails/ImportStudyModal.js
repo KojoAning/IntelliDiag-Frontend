@@ -9,7 +9,7 @@ import { parseDicomForIngest } from "../../../lib/dicomUtils";
 const CONCURRENCY = 4;
 
 const modalityColors = {
-  MRI:        "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
+  MR:         "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
   CT:         "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]",
   "X-Ray":    "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
   Ultrasound: "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",

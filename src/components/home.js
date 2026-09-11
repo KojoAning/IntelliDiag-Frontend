@@ -707,7 +707,6 @@ function ImmersiveOverlay({ close, size }) {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        console.log(data)
         throw new Error(data.detail || data.message || "Invalid email or password");
       }
       const data = await res.json();
@@ -746,7 +745,7 @@ function ImmersiveOverlay({ close, size }) {
           role,
           phone,
           institution,
-          ...(role === "doctor" ? { license_number: licenseNumber } : {}),
+          license_number: licenseNumber,
         }),
       });
 
@@ -902,21 +901,12 @@ function ImmersiveOverlay({ close, size }) {
                   value={institution}
                   onChange={(e) => setInstitution(e.target.value)}
                 />
-                <ModalSelect
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                >
-                  <option value="doctor">Doctor</option>
-                  <option value="admin">Admin</option>
-                </ModalSelect>
-                {role === "doctor" && (
-                  <ModalInput
-                    type="text"
-                    placeholder="Medical License Number"
-                    value={licenseNumber}
-                    onChange={(e) => setLicenseNumber(e.target.value)}
-                  />
-                )}
+                <ModalInput
+                  type="text"
+                  placeholder="Medical License Number"
+                  value={licenseNumber}
+                  onChange={(e) => setLicenseNumber(e.target.value)}
+                />
               </ModalInputs>
 
               {error ? <ModalError>{error}</ModalError> : null}

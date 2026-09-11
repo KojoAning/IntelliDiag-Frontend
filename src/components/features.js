@@ -114,7 +114,7 @@ function Features() {
             Brain Tumor Analysis with intelliDiag leverages advanced artificial
             intelligence and deep learning algorithms to assist clinicians in
             the early detection, localization, and classification of brain
-            tumors from MRI scans. Our technology is trained on diverse,
+            tumors from MR scans. Our technology is trained on diverse,
             high-quality medical imaging datasets to ensure accurate
             differentiation between tumor types such as gliomas, meningiomas,
             and pituitary tumors.

@@ -57,7 +57,8 @@ const STATUS_STYLES = {
 const SEVERITY_STYLES = {
   high:   "bg-[#32161E] text-red-400 border border-red-500/20",
   medium: "bg-[#312A17] text-amber-400 border border-amber-500/20",
-  low:    "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  low: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  none: "text-[#ffffff] text-[14px]"
 };
 
 const STATUS_ICONS = {
@@ -112,7 +113,7 @@ function JobRow({ j, onClick }) {
       </td>
       {/* Details */}
       <td className="py-5 px-4 max-w-0 w-[22%]">
-        <span className="text-white/80 text-[14px] block truncate">{j.case_title || "—"}</span>
+        <span className="text-white uppercase text-[14px] block truncate">{j.case_title || "—"}</span>
         {j.model_type && (
           <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{j.model_type}</span>
         )}
@@ -120,20 +121,20 @@ function JobRow({ j, onClick }) {
       {/* Model */}
       <td className="py-5 px-4 max-w-0 w-[18%]">
         {j.model_name
-          ? <span className="text-white/80 text-[14px] block truncate">{j.model_name}</span>
+          ? <span className="text-white uppercase text-[14px] block truncate">{j.model_name}</span>
           : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
       {/* Modality */}
       <td className="py-5 px-4 whitespace-nowrap">
         {j.modality
-          ? <span className="text-white/80 text-[14px] uppercase">{j.modality}</span>
+          ? <span className="text-white text-[14px] uppercase">{j.modality}</span>
           : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
       {/* Severity */}
       <td className="py-5 px-4 whitespace-nowrap">
-        <Badge label={j.severity || j.case_urgency} styleMap={SEVERITY_STYLES} />
+        <Badge label={j.severity || "None"} styleMap={SEVERITY_STYLES} />
       </td>
       {/* Status */}
       <td className="py-5 px-4 whitespace-nowrap">
@@ -169,7 +170,7 @@ function LoadingRow() {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-const MODALITIES = ["All", "CT", "MRI", "PET", "XRAY", "US"];
+const MODALITIES = ["All", "CT", "MR", "PET", "XRAY", "US"];
 const STATUSES   = ["All", "running", "pending", "queued", "completed", "failed", "cancelled"];
 const SEVERITIES = ["All", "high", "medium", "low"];
 

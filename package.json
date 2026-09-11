@@ -5,6 +5,7 @@
   "dependencies": {
     "@cornerstonejs/core": "^4.22.8",
     "@cornerstonejs/dicom-image-loader": "^4.22.8",
+    "@cornerstonejs/streaming-image-volume-loader": "^1.86.1",
     "@cornerstonejs/tools": "^4.22.8",
     "@craco/craco": "^7.1.0",
     "@gsap/react": "^2.1.2",
@@ -26,6 +27,7 @@
     "react-scroll": "^1.9.3",
     "react-sketch-canvas": "^6.2.0",
     "react-tabs": "^6.1.1",
+    "react-to-print": "^3.3.0",
     "recharts": "^3.10.1",
     "styled-components": "^6.1.19",
     "web-vitals": "^2.1.4"

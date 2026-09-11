@@ -16,6 +16,7 @@ import {
   StackScrollTool,
 } from "@cornerstonejs/tools";
 import * as dicomImageLoader from "@cornerstonejs/dicom-image-loader";
+import { volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core";
 import loadWebImage from "./webImageLoader";
 
 let initialized = false;
@@ -48,6 +49,9 @@ export async function initCornerstone() {
     // Register loader for plain web/blob image URLs (PNG/JPG)
     imageLoader.registerImageLoader("web", loadWebImage);
 
+    // Register volume loader for 3D/MPR rendering
+    volumeLoader.registerVolumeLoader("cornerstoneStreamingImageVolume", cornerstoneStreamingImageVolumeLoader);
+
     // Register all tools once globally
     [
       PanTool,
@@ -68,9 +72,8 @@ export async function initCornerstone() {
 
     // Suppress noisy unhandled image-load errors from Cornerstone —
     // log them once with useful info instead of flooding the console.
-    eventTarget.addEventListener(csEnums.Events.IMAGE_LOAD_ERROR, (evt) => {
-      const { imageId, error } = evt.detail || {};
-      console.warn("[Cornerstone] image load failed:", imageId, error?.message || error);
+    eventTarget.addEventListener(csEnums.Events.IMAGE_LOAD_ERROR, (_evt) => {
+      // image load errors are suppressed
     });
 
     initialized = true;

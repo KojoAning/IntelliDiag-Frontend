@@ -4,7 +4,7 @@ import {
   FiClock, FiChevronRight, FiCheck, FiLoader, FiAlertTriangle,
 } from "react-icons/fi";
 import { HiUsers, HiBriefcase, HiClock, HiExclamationTriangle } from "react-icons/hi2";
-import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs, getModels } from "../../../lib/api";
+import { getPatients, getCases, getStudies, getDicomImages, getReports, getRecentJobs, getModels, getUsageAnalytics } from "../../../lib/api";
 import { CiStopwatch } from "react-icons/ci";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -56,22 +56,9 @@ const todayDate = new Date().toLocaleDateString("en-US", {
   weekday: "long", month: "long", day: "numeric",
 });
 
-// ── Dummy chart data ─────────────────────────────────────────────────────────
+// Module-level cache — survives route changes, cleared on full page refresh
+let dashboardCache = null;
 
-const USAGE_CHART_DATA = [
-  { month: "JAN", inferences: 1420, studies: 980,  flagged: 320  },
-  { month: "FEB", inferences: 1680, studies: 1100, flagged: 410  },
-  { month: "MAR", inferences: 2840, studies: 1450, flagged: 580  },
-  { month: "APR", inferences: 2100, studies: 1300, flagged: 490  },
-  { month: "MAY", inferences: 1560, studies: 870,  flagged: 350  },
-  { month: "JUN", inferences: 1320, studies: 760,  flagged: 280  },
-  { month: "JUL", inferences: 1750, studies: 920,  flagged: 410  },
-  { month: "AUG", inferences: 1480, studies: 840,  flagged: 370  },
-  { month: "SEP", inferences: 1100, studies: 650,  flagged: 240  },
-  { month: "OCT", inferences: 1380, studies: 810,  flagged: 310  },
-  { month: "NOV", inferences: 2200, studies: 1250, flagged: 520  },
-  { month: "DEC", inferences: 1900, studies: 1080, flagged: 450  },
-];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -125,6 +112,7 @@ const SEVERITY_STYLES = {
   high: "bg-[#32161E] text-red-400 border border-red-500/20",
   medium: "bg-[#312A17] text-amber-400 border border-amber-500/20",
   low: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+  none: "text-[#ffffff] text-[14px]"
 };
 
 const STATUS_STYLES = {
@@ -178,22 +166,22 @@ function ActivityRow({ primary, age, gender, details, modelName, modelType, moda
 
       {/* Details */}
       <td className="py-5 px-4 max-w-0 w-[22%]">
-        <span className="text-white/80 text-[14px] block truncate">{details || "—"}</span>
+        <span className="text-white text-[14px] block truncate">{details || "—"}</span>
         {modelType && <span className="text-[#3a3a3a] text-[11px] font-mono block truncate mt-0.5">{modelType}</span>}
       </td>
 
       {/* Model */}
       <td className="py-5 px-4 max-w-0 w-[18%]">
         {modelName
-          ? <span className="text-white/80 text-[13px] block truncate">{modelName}</span>
-          : <span className="text-[#2a2a2a] text-[13px]">—</span>
+          ? <span className="text-white text-[14px] block truncate uppercase">{modelName}</span>
+          : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
 
       {/* Modality */}
       <td className="py-5 px-4 whitespace-nowrap">
         {modality
-          ? <span className="text-white/80 text-[14px] uppercase">{modality}</span>
+          ? <span className="text-white text-[14px] uppercase">{modality}</span>
           : <span className="text-[#2a2a2a] text-[14px]">—</span>
         }
       </td>
@@ -261,28 +249,21 @@ function Display() {
   const navigate = useNavigate();
   const name = localStorage.getItem("name") || "Doctor";
 
-  const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ patients: 0, openCases: 0, tat: 0, flagged: 0 });
-  const [recentJobs, setRecentJobs] = useState([]);
+  const [loading, setLoading] = useState(!dashboardCache);
+  const [stats, setStats] = useState(dashboardCache?.stats ?? { patients: 0, openCases: 0, tat: 0, flagged: 0 });
+  const [recentJobs, setRecentJobs] = useState(dashboardCache?.recentJobs ?? []);
   const [modalityFilter, setModalityFilter] = useState("All");
   const [severityFilter, setSeverityFilter] = useState("All");
-  const [recentStudies, setRecentStudies] = useState([]);
-  const [upcomingAppts, setUpcomingAppts] = useState([]);
-  const [pendingDicoms, setPendingDicoms] = useState([]);
-  const [draftReports, setDraftReports] = useState([]);
-  const [models, setModels] = useState([]);
-  const [modelPerf, setModelPerf] = useState([]);
+  const [recentStudies, setRecentStudies] = useState(dashboardCache?.recentStudies ?? []);
+  const [upcomingAppts, setUpcomingAppts] = useState(dashboardCache?.upcomingAppts ?? []);
+  const [pendingDicoms, setPendingDicoms] = useState(dashboardCache?.pendingDicoms ?? []);
+  const [draftReports, setDraftReports] = useState(dashboardCache?.draftReports ?? []);
+  const [models, setModels] = useState(dashboardCache?.models ?? []);
+  const [modelPerf, setModelPerf] = useState(dashboardCache?.modelPerf ?? []);
+  const [usageData, setUsageData] = useState(dashboardCache?.usageData ?? []);
 
   useEffect(() => {
-    Promise.allSettled([
-      getPatients("?limit=500"),
-      getCases("?limit=100"),
-      getStudies("?limit=100"),
-      getDicomImages("?status=pending&limit=10"),
-      getReports("?status=draft&limit=10"),
-      getRecentJobs(),
-      getModels(),
-    ]).then(([pRes, cRes, sRes, dRes, rRes, jRes, mRes]) => {
+    const applyResults = ([pRes, cRes, sRes, dRes, rRes, jRes, mRes, uRes]) => {
       const patients = pRes.status === "fulfilled" ? (pRes.value ?? []) : [];
       const cases = cRes.status === "fulfilled" ? (cRes.value ?? []) : [];
       const studies = sRes.status === "fulfilled" ? (sRes.value ?? []) : [];
@@ -295,41 +276,32 @@ function Display() {
       );
 
       const completedWithTAT = jobs.filter(j =>
-        (j.status || "").toLowerCase() === "completed" && j.created_at && j.estimated_completion
+        (j.status || "").toLowerCase() === "completed" && j.created_at && j.completed_at
       );
       const avgTatMs = completedWithTAT.length
         ? completedWithTAT.reduce((sum, j) =>
-          sum + (new Date(j.estimated_completion).getTime() - new Date(j.created_at).getTime()), 0
+          sum + (new Date(j.completed_at).getTime() - new Date(j.created_at).getTime()), 0
         ) / completedWithTAT.length
         : 0;
 
-      setStats({
+      const newStats = {
         patients: patients.length,
         openCases: openCases.length,
         tat: avgTatMs > 0 ? fmtDuration(avgTatMs) : "—",
         flagged: studies.filter(s => s.flagged).length,
-      });
-
-      setRecentJobs(jobs);
-
+      };
       const sortedStudies = [...studies].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-      setRecentStudies(sortedStudies.slice(0, 4));
-
-      setPendingDicoms(dicoms.slice(0, 4));
-      setDraftReports(reports.slice(0, 3));
-
-      // Model performance from models + jobs
+      const newRecentStudies = sortedStudies.slice(0, 4);
+      const newPendingDicoms = dicoms.slice(0, 4);
+      const newDraftReports = reports.slice(0, 3);
       const allModels = mRes.status === "fulfilled" ? (mRes.value ?? []) : [];
-      setModels(allModels);
+      const newUsageData = uRes.status === "fulfilled" ? (uRes.value ?? []) : [];
 
       const perfData = allModels.map(m => {
         const modelJobs = jobs.filter(j => j.model_id === m.id || j.model_name === (m.name || m.model_name));
         const completed = modelJobs.filter(j => (j.status || "").toLowerCase() === "completed");
         const failed = modelJobs.filter(j => (j.status || "").toLowerCase() === "failed");
         const total = modelJobs.length;
-        const successRate = total > 0 ? ((completed.length / total) * 100) : null;
-        const failureRate = total > 0 ? ((failed.length / total) * 100) : null;
-
         return {
           id: m.id,
           name: m.name || m.model_name || "Unknown",
@@ -342,14 +314,41 @@ function Display() {
           totalJobs: total,
           completedJobs: completed.length,
           failedJobs: failed.length,
-          successRate,
-          failureRate,
+          successRate: total > 0 ? ((completed.length / total) * 100) : null,
+          failureRate: total > 0 ? ((failed.length / total) * 100) : null,
         };
       });
-      setModelPerf(perfData);
 
+      // Update state
+      setStats(newStats);
+      console.log(newStats)
+      setRecentJobs(jobs);
+      setRecentStudies(newRecentStudies);
+      setPendingDicoms(newPendingDicoms);
+      setDraftReports(newDraftReports);
+      setModels(allModels);
+      setModelPerf(perfData);
+      setUsageData(newUsageData);
       setLoading(false);
-    });
+
+      // Save to module-level cache
+      dashboardCache = {
+        stats: newStats, recentJobs: jobs, recentStudies: newRecentStudies,
+        upcomingAppts: [], pendingDicoms: newPendingDicoms, draftReports: newDraftReports,
+        models: allModels, modelPerf: perfData, usageData: newUsageData,
+      };
+    };
+
+    Promise.allSettled([
+      getPatients("?limit=500"),
+      getCases("?limit=100"),
+      getStudies("?limit=100"),
+      getDicomImages("?status=pending&limit=10"),
+      getReports("?status=draft&limit=10"),
+      getRecentJobs(),
+      getModels(),
+      getUsageAnalytics(),
+    ]).then(applyResults);
   }, []);
 
   return (
@@ -396,7 +395,7 @@ function Display() {
               >
                 <option style={{ background: "#111", color: "#fff" }} value="All">All Modality</option>
                 <option style={{ background: "#111", color: "#fff" }} value="CT">CT</option>
-                <option style={{ background: "#111", color: "#fff" }} value="MRI">MRI</option>
+                <option style={{ background: "#111", color: "#fff" }} value="MR">MR</option>
                 <option style={{ background: "#111", color: "#fff" }} value="PET">PET</option>
                 <option style={{ background: "#111", color: "#fff" }} value="XRAY">X-Ray</option>
                 <option style={{ background: "#111", color: "#fff" }} value="US">Ultrasound</option>
@@ -438,7 +437,7 @@ function Display() {
             : recentJobs.length === 0
               ? <div className="p-5"><EmptyRow text="No jobs yet" /></div>
               : (() => {
-                const filtered = recentJobs.filter(j => {
+                const filtered = recentJobs.slice(0, 2).filter(j => {
                   const mod = (j.modality || "").toUpperCase();
                   const sev = (j.severity || "").toLowerCase();
                   if (modalityFilter !== "All" && mod !== modalityFilter) return false;
@@ -465,7 +464,7 @@ function Display() {
                           modelName={j.model_name || ""}
                           modelType={j.model_type || ""}
                           modality={j.modality || ""}
-                          severity={j.severity || j.case_urgency || ""}
+                          severity={j.severity || "None"}
                           status={j.status || ""}
                           tat={(j.status || "").toLowerCase() === "completed" ? calcTAT(j.created_at, j.completed_at) : calcTimeLeft(j.estimated_completion)}
                           onClick={() => navigate("/case-workspace/viewer", { state: { study: { id: j.series_id, name: j.case_title || "Study", case_id: j.case_id }, series: { id: j.series_id, name: "Series 1" }, from_jobs: true, job_id: j.job_id ?? j.id, initial_status: j.status, model_id: j.model_id } })}
@@ -484,23 +483,23 @@ function Display() {
         <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-6">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">AI Usage Analytics</h2>
+              <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">Usage Analytics</h2>
               <p className="m-0 text-[#999999] text-[14px] mt-0">Monthly inference volume and model activity</p>
             </div>
             <div className="flex items-center gap-5">
               <span className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#0694FB" }} /> Inferences
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#0694FB" }} /> Jobs
               </span>
               <span className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#C4F441" }} /> Studies Processed
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#C4F441" }} /> Studies
               </span>
               <span className="flex items-center gap-1.5 text-[11px] text-[#6B6B6B]">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#A78BFA" }} /> AI Flagged
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: "#A78BFA" }} /> Cases
               </span>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={USAGE_CHART_DATA} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
+            <AreaChart data={usageData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
               <defs>
                 <linearGradient id="gradInferences" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#0694FB" stopOpacity={0.3} />
@@ -524,151 +523,16 @@ function Display() {
                 labelStyle={{ color: "#6B6B6B", marginBottom: 4 }}
                 cursor={{ stroke: "#2a2a2a" }}
               />
-              <Area type="monotone" dataKey="inferences" stroke="#0694FB" strokeWidth={2.5} fill="url(#gradInferences)" dot={false} />
+              <Area type="monotone" dataKey="jobs" stroke="#0694FB" strokeWidth={2.5} fill="url(#gradInferences)" dot={false} />
               <Area type="monotone" dataKey="studies" stroke="#C4F441" strokeWidth={2.5} fill="url(#gradStudies)" dot={false} />
-              <Area type="monotone" dataKey="flagged" stroke="#A78BFA" strokeWidth={2.5} fill="url(#gradFlagged)" dot={false} />
+              <Area type="monotone" dataKey="cases" stroke="#A78BFA" strokeWidth={2.5} fill="url(#gradFlagged)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
       </div>
 
       {/* ── Model Performance Overview ── */}
-      <div className="flex flex-col gap-2 shrink-0 mb-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="m-0 text-[#FFFFFF] font-medium text-[18px]">Model Performance</h2>
-            <p className="m-0 text-[#999999] text-[14px] mt-0">Inference success rates and accuracy across AI models</p>
-          </div>
-          <button
-            onClick={() => navigate("/models")}
-            className="flex items-center gap-1 text-[#0694FB] text-[12px] bg-transparent border-none cursor-pointer hover:underline p-0 ml-2"
-          >
-            View all models <FiChevronRight size={12} />
-          </button>
-        </div>
 
-        {loading ? (
-          <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl flex items-center justify-center py-16">
-            <div className="flex flex-col items-center gap-3">
-              <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
-              <p className="text-[#3a3a3a] text-[13px] m-0">Loading models…</p>
-            </div>
-          </div>
-        ) : modelPerf.length === 0 ? (
-          <div className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5">
-            <EmptyRow text="No models available" />
-          </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-4">
-            {modelPerf.slice(0, 3).map(m => (
-              <div
-                key={m.id}
-                onClick={() => navigate("/models")}
-                className="bg-[#0C0C0C] border border-[#1E1E1E] rounded-2xl p-5 flex flex-col gap-4 cursor-pointer hover:border-[#2a2a2a] transition-colors"
-              >
-                {/* Model header */}
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-white text-[14px] font-medium truncate">{m.name}</span>
-                    {m.modality && (
-                      <span className="text-[10px] font-medium px-2 py-0.5 rounded-full text-[#0694FB] bg-[rgba(6,148,251,0.12)] shrink-0 uppercase">
-                        {m.modality}
-                      </span>
-                    )}
-                  </div>
-                  <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full capitalize ${
-                    m.status === "active" ? "text-emerald-400 bg-emerald-500/10" :
-                    m.status === "deprecated" ? "text-red-400 bg-red-500/10" :
-                    "text-[#6B6B6B] bg-[#1E1E1E]"
-                  }`}>
-                    {m.status}
-                  </span>
-                </div>
-
-                {/* Metrics grid */}
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Accuracy */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Accuracy</span>
-                    <span className="text-white text-[20px] font-medium leading-none">
-                      {m.accuracy != null ? `${m.accuracy.toFixed(1)}%` : "—"}
-                    </span>
-                  </div>
-
-                  {/* Success Rate */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Success Rate</span>
-                    <span className={`text-[20px] font-medium leading-none ${
-                      m.successRate == null ? "text-[#3a3a3a]" :
-                      m.successRate >= 90 ? "text-emerald-400" :
-                      m.successRate >= 70 ? "text-amber-400" :
-                      "text-red-400"
-                    }`}>
-                      {m.successRate != null ? `${m.successRate.toFixed(1)}%` : "—"}
-                    </span>
-                  </div>
-
-                  {/* Avg Inference Time */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Avg Inference</span>
-                    <span className="text-white text-[20px] font-medium leading-none">
-                      {m.avgInferenceTime != null ? `${m.avgInferenceTime}ms` : "—"}
-                    </span>
-                  </div>
-
-                  {/* AUC */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">AUC</span>
-                    <span className="text-white text-[20px] font-medium leading-none">
-                      {m.auc != null ? m.auc.toFixed(3) : "—"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Jobs bar */}
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[#6B6B6B] text-[10px] uppercase tracking-wide">Jobs Run</span>
-                    <span className="text-[#6B6B6B] text-[11px]">{m.totalJobs} total</span>
-                  </div>
-                  {m.totalJobs > 0 ? (
-                    <div className="flex h-2 rounded-full overflow-hidden bg-[#1E1E1E]">
-                      {m.completedJobs > 0 && (
-                        <div
-                          className="bg-emerald-400 h-full"
-                          style={{ width: `${(m.completedJobs / m.totalJobs) * 100}%` }}
-                          title={`${m.completedJobs} completed`}
-                        />
-                      )}
-                      {m.failedJobs > 0 && (
-                        <div
-                          className="bg-red-400 h-full"
-                          style={{ width: `${(m.failedJobs / m.totalJobs) * 100}%` }}
-                          title={`${m.failedJobs} failed`}
-                        />
-                      )}
-                    </div>
-                  ) : (
-                    <div className="h-2 rounded-full bg-[#1E1E1E]" />
-                  )}
-                  {m.totalJobs > 0 && (
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> {m.completedJobs} passed
-                      </span>
-                      {m.failedJobs > 0 && (
-                        <span className="flex items-center gap-1 text-[10px] text-red-400">
-                          <span className="w-1.5 h-1.5 rounded-full bg-red-400" /> {m.failedJobs} failed
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
 
       {/* ── Recent Studies ── */}
       {/* {!loading && recentStudies.length > 0 && (

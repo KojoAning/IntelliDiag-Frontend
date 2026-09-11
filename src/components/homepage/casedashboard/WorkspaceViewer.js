@@ -31,6 +31,8 @@ function WorkspaceViewer() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [modelContexts, setModelContexts] = useState({}); // keyed by model id
   const [selectedModel, setSelectedModel] = useState(null);
+  const [inMprMode, setInMprMode] = useState(false);
+  const [viewMode, setViewMode] = useState("stack");
   const [dicomMetadata, setDicomMetadata] = useState(null);
   const [noModelDialog, setNoModelDialog] = useState(false);
   const [noTranslationModeDialog, setNoTranslationModeDialog] = useState(false);
@@ -60,7 +62,7 @@ function WorkspaceViewer() {
           if (resolvedStudy) setStudyId(resolvedStudy);
         }
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [activeSeries?.id, caseId, studyId]);
 
   const fileInputRef = useRef(null);
@@ -80,9 +82,16 @@ function WorkspaceViewer() {
   const aiLoading = currentCtx.aiLoading ?? false;
   const inferenceResult = currentCtx.inferenceResult ?? null;
   const inferenceProgress = currentCtx.inferenceProgress ?? null;
+
+  const enhancementCtx = modelContexts['10000001'] ?? {};
+  const enhancementResponse = enhancementCtx.enhancementResponse ?? null;
+  const enhancementDone = enhancementCtx.enhancementDone ?? null;
+  const enhancementLoading = enhancementCtx.enhancementLoading ?? false;
+  const enhancementResult = enhancementCtx.enhancementResult ?? null;
+  const enhancementProgress = enhancementCtx.enhancementProgress ?? null;
   const jobStatus = currentCtx.jobStatus ?? null;
 
-  // ── Job status polling (when navigated from Jobs page) ───────────────────────
+
   useEffect(() => {
     if (!from_jobs || !jobId) return;
     let cancelled = false;
@@ -90,10 +99,66 @@ function WorkspaceViewer() {
     // Pre-select the model that was used for this job
     const modelId = navState?.model_id ?? null;
     if (modelId) {
-      getModels().then(models => {
-        const found = (Array.isArray(models) ? models : []).find(m => String(m.id) === String(modelId));
-        if (found && !cancelled) setSelectedModel(found);
-      }).catch(() => { });
+      if (modelId == '10000001') {
+        // ── Enhancement job ───────────────────────────────────────────────────
+        const fetchEnhancementResults = async () => {
+          updateCtx('10000001', { enhancementLoading: true, enhancementProgress: 100 });
+          try {
+            let results;
+            if (process.env.NODE_ENV === 'development') {
+              const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+              if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
+              results = await resR.json();
+            } else {
+              const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+              if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
+              const { url } = await res.json();
+              results = await fetch(url).then(r => r.json());
+            }
+            if (!cancelled) updateCtx('10000001', { enhancementResult: results });
+          } catch {
+            if (!cancelled) updateCtx('10000001', { jobStatus: 'failed' });
+          } finally {
+            if (!cancelled) updateCtx('10000001', { enhancementLoading: false, enhancementProgress: null });
+          }
+        };
+
+        const pollEnhancement = async () => {
+          const status = (initialJobStatus || '').toLowerCase();
+          if (status === 'failed') { updateCtx('10000001', { jobStatus: 'failed' }); return; }
+          if (status === 'completed') { await fetchEnhancementResults(); return; }
+
+          updateCtx('10000001', { enhancementLoading: true, enhancementProgress: status === 'running' ? 0 : null });
+
+          while (!cancelled) {
+            await new Promise(r => setTimeout(r, 2500));
+            if (cancelled) break;
+            try {
+              const res = await authFetch(`${API_BASE}/jobs/check_status/${jobId}`);
+              if (!res.ok || cancelled) break;
+              const data = await res.json();
+              if (data.status === 'running') {
+                updateCtx('10000001', { enhancementProgress: Math.round(data.progress ?? 0) });
+              } else if (data.status === 'completed') {
+                await fetchEnhancementResults(); break;
+              } else if (data.status === 'failed') {
+                if (!cancelled) updateCtx('10000001', { jobStatus: 'failed', enhancementLoading: false, enhancementProgress: null });
+                break;
+              }
+            } catch { break; }
+          }
+        };
+
+        pollEnhancement();
+        return () => { cancelled = true; };
+      }
+      else {
+        getModels().then(models => {
+          const found = (Array.isArray(models) ? models : []).find(m => String(m.id) === String(modelId));
+          if (found && !cancelled) setSelectedModel(found);
+        }).catch(() => { });
+      }
+
     }
 
     // Key context updates under the job's model id (falls back to jobId if model unknown)
@@ -147,7 +212,27 @@ function WorkspaceViewer() {
           }),
         });
 
-        if (reportRes.ok && reportRes.body) {
+        // Try to prefill from a saved report for this series
+        const seriesId = activeSeries?.id;
+        let hasSavedReport = false;
+        if (seriesId) {
+          try {
+            const savedRes = await authFetch(`${API_BASE}/reports/series/${seriesId}`);
+            if (savedRes.ok) {
+              const saved = await savedRes.json();
+              if (!cancelled) {
+                if (saved.ai_report) {
+                  updateCtx(pollModelId, { aiResponse: saved.ai_report });
+                  hasSavedReport = true;
+                }
+                if (saved.notes) setImpression(saved.notes);
+              }
+            }
+          } catch { /* no saved report — fall through to streaming */ }
+        }
+
+        // Only stream a new report if no saved one exists
+        if (!hasSavedReport && reportRes.ok && reportRes.body) {
           const reader = reportRes.body.getReader();
           const decoder = new TextDecoder();
           let text = "";
@@ -305,9 +390,9 @@ function WorkspaceViewer() {
     const cached = getCachedInference(img?.id, currentModelId);
     if (cached) {
       updateCtx(currentModelId, { inferenceResult: cached.result, aiResponse: cached.report });
-    } else if (!inferenceResultRef.current) {
-      // Only clear if this model has no results at all — switching back to a model
-      // that already completed inference should preserve its results regardless of type.
+    } else if (!inferenceResultRef.current && !modelContexts[currentModelId]?.aiResponse) {
+      // Only clear if this model has no results and no report at all — switching back to a model
+      // that already completed inference or has a saved report should preserve its state.
       updateCtx(currentModelId, { inferenceResult: null, aiResponse: null });
     }
   }, [selectedImage, currentModelId, images, getCachedInference, updateCtx]);
@@ -350,7 +435,6 @@ function WorkspaceViewer() {
     }
 
     const contentType = res.headers.get("content-type") ?? "";
-    console.log("[prefetchBulk] content-type:", contentType);
     // Boundary may be quoted: boundary="abc" or unquoted: boundary=abc
     const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/);
     const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
@@ -358,7 +442,7 @@ function WorkspaceViewer() {
 
     const buffer = await res.arrayBuffer();
     const parts = parseMultipartBody(buffer, boundary);
-    console.log(`[prefetchBulk] ${parts.length} parts parsed, ${imgs.length} imgs expected`);
+    ;
 
     // Parse instance numbers and sort clinically. Wrapped in try/catch so a
     // parse failure degrades to original order rather than aborting the bulk fetch.
@@ -378,7 +462,7 @@ function WorkspaceViewer() {
         orderedParts = annotated.map(a => a.part);
       }
     } catch (sortErr) {
-      console.warn("[prefetchBulk] instance sort failed, using original order:", sortErr);
+      // instance sort failed, using original order
     }
 
     const blobUrls = new Array(imgs.length).fill(null);
@@ -396,7 +480,6 @@ function WorkspaceViewer() {
 
     const result = imgs.map((img, i) => blobUrls[i] ? { ...img, blobUrl: blobUrls[i] } : img);
     const missing = result.filter(img => !img.blobUrl).length;
-    if (missing) console.warn(`[prefetchBulk] ${missing} image(s) have no blobUrl — will fall back to stream`);
 
     // Extract DICOM metadata from the first available slice
     const firstBlobUrl = blobUrls.find(Boolean);
@@ -426,11 +509,10 @@ function WorkspaceViewer() {
             setDicomMetadata(metadata);
           }
         } catch (bulkErr) {
-          console.error("[prefetchBulk] failed, falling back to stream URLs:", bulkErr);
           if (!cancelled) setImages(imgs);
         }
       })
-      .catch(err => console.error("Failed to load images:", err))
+      .catch(() => { })
       .finally(() => { if (!cancelled) setImagesLoading(false); });
 
     return () => { cancelled = true; };
@@ -466,7 +548,7 @@ function WorkspaceViewer() {
     try {
       setImages(await fetchImages(seriesId));
     } catch (err) {
-      console.error("Failed to reload images:", err);
+      // ignore reload error
     }
 
     if (errors.length) setUploadError(errors.join(" · "));
@@ -512,106 +594,97 @@ function WorkspaceViewer() {
     return lines.join("\n") || "Analysis complete — no summary available.";
   };
 
-  const runAnalysis = async () => {
-    if (aiLoading) return;
-
-    if (!selectedModel) {
-      setNoModelDialog(true);
-      return;
-    }
-
-    const capturedModelId = selectedModel.id;
-
-    if (!selectedImage) {
-      updateCtx(capturedModelId, { aiResponse: "Please select an image first." });
-      return;
-    }
-
-    const img = images.find(i => (i.blobUrl ?? i.url) === selectedImage);
-    if (!img) {
-      updateCtx(capturedModelId, { aiResponse: "Could not find the selected image." });
-      return;
-    }
-
-    // Check cache first — skip the network round-trip if we already have results
-    const cached = getCachedInference(img.id, capturedModelId);
-    if (cached) {
-      updateCtx(capturedModelId, { inferenceResult: cached.result, aiResponse: cached.report });
-      return;
-    }
-
-    updateCtx(capturedModelId, { aiLoading: true, aiResponse: "", inferenceResult: null, inferenceProgress: 0 });
-
-    const modelUrl = selectedModel.url || selectedModel.endpoint_url || selectedModel.inference_url || selectedModel.endpoint;
-
+  const enhanceImage = async () => {
+    updateCtx('10000001', { jobStatus: null, enhancementLoading: true, enhancementResult: null, enhancementProgress: 0 });
     try {
       const seriesToken = await getSeriesToken();
-
-      const response = await fetch(modelUrl, {
-        method: "POST",
+      const jobs_response = await authFetch(`${API_BASE}/series/${activeSeries?.id}/jobs`, {
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          token: seriesToken,
-          series_id: activeSeries?.id,
-          image_id: img.id,
-        }),
       });
+      if (!jobs_response.ok) {
+        const errText = await jobs_response.text().catch(() => "");
+        throw new Error(`unable to get series jobs: ${jobs_response.status} — ${errText.slice(0, 200)}`);
+      }
+      const jobs = await jobs_response.json();
 
-      if (!response.ok) {
-        const errText = await response.text().catch(() => "");
-        throw new Error(`Inference failed: ${response.status} — ${errText.slice(0, 200)}`);
+      const existingJob = jobs.find(j => String(j.model_id) === '10000001');
+
+      let job_id;
+      if (existingJob) {
+        job_id = existingJob.id;
+      } else {
+
+        const newJobId = crypto.randomUUID();
+        const response = await fetch(`${process.env.REACT_APP_API_IMAGE_ENHANCEMENT_BASE}/bm3d/enhance`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: newJobId,
+            series_id: activeSeries?.id,
+            token: seriesToken,
+            user_token: localStorage.getItem("token"),
+            user_id: localStorage.getItem("sub"),
+            user_email: localStorage.getItem("email"),
+            user_name: localStorage.getItem("name"),
+            model_id: 10000001,
+            view_plane: viewMode,
+          }),
+        });
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          throw new Error(`Inference failed: ${response.status} — ${errText.slice(0, 200)}`);
+        }
+        ({ job_id } = await response.json());
+
+        if (!job_id) job_id = newJobId;
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
 
-      const handleSseLine = async (line) => {
-        if (!line.startsWith("data: ")) return;
-        try {
-          const event = JSON.parse(line.slice(6));
-          if (event.status === "processing") {
-            updateCtx(capturedModelId, { inferenceProgress: Math.round(event.processed / event.total * 100) });
-          } else if (event.status === "done") {
-            // const results = await authFetch(`${API_BASE}/results/${event.job_id}`).then(r => r.json());
-            const res = await authFetch(`${API_BASE}/results/${event.job_id}`);
+      let results = null;
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+
+        const statusRes = await authFetch(`${API_BASE}/jobs/check_status/${job_id}`);
+        if (!statusRes.ok) {
+          const errText = await statusRes.text().catch(() => "");
+          throw new Error(`Status check failed: ${statusRes.status} — ${errText.slice(0, 200)}`);
+        }
+
+        const status = await statusRes.json();
+
+        if (status.status === "running") {
+          updateCtx('10000001', { enhancementProgress: Math.round(status.progress ?? 0) });
+        } else if (status.status === "completed") {
+          updateCtx('10000001', { enhancementProgress: 100 });
+          if (process.env.NODE_ENV === 'development') {
+            const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
+            if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
+            results = await resR.json();
+          } else {
+            const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
             if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
             const { url } = await res.json();
-            console.log(url)
-            const results = await fetch(url['url']).then(r => r.json());
-            const summary = buildSummary(results);
-            updateCtx(capturedModelId, { inferenceResult: results, aiResponse: summary });
-            setCachedInference(img.id, capturedModelId, results, summary);
-          } else if (event.status === "error") {
-            console.error("Inference error:", event.message);
-            updateCtx(capturedModelId, { aiResponse: `Error: ${event.message}` });
+            results = await fetch(url).then(r => r.json());
           }
-        } catch { /* malformed SSE line — skip */ }
-      };
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop();
-          for (const line of lines) await handleSseLine(line);
+          break;
+        } else if (status.status === "failed") {
+          updateCtx('10000001', { jobStatus: "failed" });
+          setJobFailedDialog(true);
+          throw new Error(status.message || "Image Enhancement job failed");
         }
-      } catch { /* ERR_INCOMPLETE_CHUNKED_ENCODING — server closed without proper terminator */ }
-      // flush whatever is in the buffer regardless of how the stream ended
-      if (buffer) await handleSseLine(buffer);
+      }
+      if (!results) throw new Error("No results received from inference job");
+      updateCtx('10000001', { enhancementResult: results });
+
 
     } catch (e) {
-      updateCtx(capturedModelId, { aiResponse: `Error: ${e.message}` });
+      updateCtx('10000001', { enhancementResponse: `Error: ${e.message}` });
     } finally {
-      updateCtx(capturedModelId, { aiLoading: false, inferenceProgress: null });
+      updateCtx('10000001', { enhancementLoading: false, enhancementProgress: null });
     }
   };
 
-  const getDicomMetaData = async () => {
 
-  }
 
   // Fetches a short-lived series-scoped token from the main backend.
   // Used by both prefetchBulk (for DICOM retrieval) and runAnalysis (for inference).
@@ -622,19 +695,6 @@ function WorkspaceViewer() {
     });
     if (!res.ok) throw new Error("Failed to get inference token");
     const data = await res.json();
-
-    // const res2 = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/segment`, {
-    //   method: "POST",
-    //   body: {
-    //     "series_id": seriesId,
-    //     "token": data.token
-    //   },
-    //   headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
-    // });
-
-    // const data2 = await res2.json();
-    // console.log(data2)
-
     return data.token;
   };
 
@@ -706,7 +766,6 @@ function WorkspaceViewer() {
 
         const status = await statusRes.json();
 
-        console.log(status.status)
         if (status.status === "running") {
           updateCtx(capturedModelId, { inferenceProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
@@ -794,11 +853,8 @@ function WorkspaceViewer() {
             updateCtx(capturedModelId, { aiResponse: reportText });
           }
           reportText += reportDecoder.decode();
-          console.log('kljnljksdfnkljdfnjkldfn')
-          console.log(reportText)
           updateCtx(capturedModelId, { aiResponse: reportText || buildSummary(results) });
         } else {
-          console.log(reportRes)
           updateCtx(capturedModelId, { aiResponse: buildSummary(results) });
         }
       }
@@ -827,6 +883,7 @@ function WorkspaceViewer() {
 
   const [reportSaving, setReportSaving] = useState(false);
   const [overrideDialog, setOverrideDialog] = useState(null); // stores payload when 409
+  const [reportSuccessDialog, setReportSuccessDialog] = useState(null); // stores { caseId } on success
 
   const buildReportPayload = () => {
     const payload = {
@@ -838,6 +895,7 @@ function WorkspaceViewer() {
       series_id: activeSeries?.id || undefined,
       job_id: jobId || undefined,
       ai_report: aiResponse || undefined,
+      notes: impression.trim() || undefined,
       model_name: selectedModel?.name || undefined,
       severity: undefined,
       tat: undefined,
@@ -873,9 +931,9 @@ function WorkspaceViewer() {
         throw new Error(`Save report failed: ${res.status} — ${errText.slice(0, 200)}`);
       }
       const data = await res.json();
-      navigate(`/patient-reports/${data.case_id || caseId}`);
+      setReportSuccessDialog({ caseId: data.case_id || caseId });
     } catch (err) {
-      console.error("Failed to save report:", err);
+      // ignore save error
     } finally {
       setReportSaving(false);
     }
@@ -892,9 +950,9 @@ function WorkspaceViewer() {
         throw new Error(`Override report failed: ${res.status} — ${errText.slice(0, 200)}`);
       }
       const data = await res.json();
-      navigate(`/patient-reports/${data.case_id || caseId}`);
+      setReportSuccessDialog({ caseId: data.case_id || caseId });
     } catch (err) {
-      console.error("Failed to override report:", err);
+      // ignore override error
     } finally {
       setReportSaving(false);
     }
@@ -908,7 +966,6 @@ function WorkspaceViewer() {
     else {
       setshowExpandedAiReport(false)
     }
-    console.log('started running translation');
   }
 
   return (
@@ -1008,7 +1065,7 @@ function WorkspaceViewer() {
 
         {overrideDialog && (
           <motion.div
-            className="fixed inset-0 z-[999] flex items-center justify-center"
+            className="fixed inset-0 z-[1001] flex items-center justify-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -1067,6 +1124,52 @@ function WorkspaceViewer() {
           </motion.div>
         )}
 
+        {reportSuccessDialog && (
+          <motion.div
+            className="fixed inset-0 z-[1001] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              <div className="px-7 pt-7 pb-5 flex flex-col gap-3">
+                <div className="w-10 h-10 rounded-full bg-[rgba(34,197,94,0.12)] border border-[rgba(34,197,94,0.2)] flex items-center justify-center">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22C55E" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-white text-[17px] font-medium m-0">Report saved successfully</h2>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">The report has been generated and saved. Would you like to view it or stay in the workspace?</p>
+                </div>
+              </div>
+              <div className="px-7 pb-6 flex gap-3">
+                <button
+                  onClick={() => setReportSuccessDialog(null)}
+                  className="flex-1 py-2.5 rounded-full bg-transparent border border-[#2a2a2a] text-[#6B6B6B] hover:text-white hover:border-[#3a3a3a] text-[13px] font-medium cursor-pointer transition-colors"
+                >
+                  Stay in Workspace
+                </button>
+                <button
+                  onClick={() => navigate(`/patient-reports/${reportSuccessDialog.caseId}`)}
+                  className="flex-1 py-2.5 rounded-full bg-[#22C55E] hover:bg-[#16a34a] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"
+                >
+                  View Report
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
         {showExpandedAiReport && (
           <motion.div
             className="fixed inset-0 z-[999] flex items-center justify-center"
@@ -1090,7 +1193,7 @@ function WorkspaceViewer() {
                 <div>
                   <div className="flex items-center justify-between shrink-0">
                     <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-                      <p className="text-[#0694FB] text-[12px] font-medium m-0">AI Generated Report</p>
+                      <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
                     </div>
                     <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
                       <FiX size={18} />
@@ -1117,23 +1220,23 @@ function WorkspaceViewer() {
               </div>
 
               {/* Footer */}
-              {/* <div className="px-7 pb-6 shrink-0">
+              <div className="px-7 pb-6 pt-4 shrink-0 border-t border-[#1E1E1E] flex justify-end">
                 <button
                   onClick={() => handleSaveReport(impression)}
                   disabled={reportSaving || (!aiResponse && !impression.trim())}
-                  className="w-full py-2.5 rounded-full text-[13px] font-medium border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed bg-[#0694FB] hover:bg-[#0578d1] enabled:cursor-pointer text-white"
+                  className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {reportSaving ? (
-                    <span className="flex items-center justify-center gap-2">
+                    <>
                       <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
                       Saving…
-                    </span>
+                    </>
                   ) : "Save & Generate Report"}
                 </button>
-              </div> */}
+              </div>
             </motion.div>
           </motion.div>
         )}
@@ -1188,25 +1291,7 @@ function WorkspaceViewer() {
         <div className="w-full flex flex-row box-border mt-[30px] flex-1 min-h-0">
           <div className="flex flex-col flex-1 min-w-0 gap-4 overflow-hidden">
 
-            {/* Page header */}
-            {/* <div className="flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-white text-[25px] font-medium m-0 leading-tight pb-1">
-                      {activeStudy.name}
-                    </h1>
-                    <span className="text-[#6B6B6B] text-[18px] font-light">/</span>
-                    <span className="text-[#6B6B6B] text-[17px] font-light">{activeSeries?.name}</span>
-                  </div>
-                  <p className="text-[#6B6B6B] text-sm m-0">{activeStudy.date} · {activeStudy.region}</p>
-                </div>
-              </div>
 
-
-            </div> */}
-
-            {/* Viewer layout */}
             <div className="flex flex-row gap-4 flex-1 min-h-0 overflow-hidden relative">
               {(imagesLoading || uploading) && (
                 <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 rounded-xl">
@@ -1233,6 +1318,10 @@ function WorkspaceViewer() {
                 images={images}
                 activeStudy={activeStudy}
                 activeSeries={activeSeries}
+                onRunEnhancement={enhanceImage}
+                enhancementLoading={enhancementLoading}
+                enhancementProgress={enhancementProgress}
+                enhancementResult={enhancementResult}
                 onRunAnalysis={runAnalysis2}
                 aiLoading={aiLoading}
                 inferenceProgress={inferenceProgress}
@@ -1243,9 +1332,13 @@ function WorkspaceViewer() {
                 translationMode={selectedTranslationMode}
                 onCloseTranslation={() => setTranslationActive(false)}
                 jobStatus={jobStatus}
+                onViewModeChange={(mode) => {
+                  setInMprMode(mode !== "stack");
+                  setViewMode(mode);
+                }}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} inMprMode={inMprMode} />
               </div>
             </div>
 

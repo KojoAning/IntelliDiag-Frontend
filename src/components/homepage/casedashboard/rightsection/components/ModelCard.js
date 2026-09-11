@@ -1,6 +1,13 @@
 import React from "react";
 import { FiX } from "react-icons/fi";
 
+const TYPE_COLORS = {
+  Detection:      "text-[#FF6B35] ",
+  Segmentation:   "text-[#A3F755E1] ",
+  Classification: "text-[#06FBBE] ",
+  Quantification: "text-[#22C55E]",
+};
+
 function ModelCard({ model, selected, onSelect, onRemove }) {
   return (
     <div
@@ -19,7 +26,7 @@ function ModelCard({ model, selected, onSelect, onRemove }) {
           {model.name}
         </p>
 
-        <span className={`text-[11px] font-medium  text-white/70`}>
+        <span className={`text-[11px] font-medium  ${TYPE_COLORS[model.tag] ?? "text-white/70 bg-transparent"}`}>
           {model.tag}
         </span>
       </div>

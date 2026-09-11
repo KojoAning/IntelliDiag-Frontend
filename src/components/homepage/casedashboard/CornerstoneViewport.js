@@ -320,7 +320,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
           bindings: [{ mouseButton: MouseBindings.Wheel }],
         });
       }
-    })().catch(console.error);
+    })().catch(() => {});
 
     return () => {
       cancelled = true;
@@ -381,7 +381,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
           } catch (_) {}
         }
       })
-      .catch(console.error);
+      .catch(() => {});
   }, [imageIds]);
 
   // ── Switch active annotation tool ─────────────────────────────────────────

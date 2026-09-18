@@ -1192,9 +1192,15 @@ function WorkspaceViewer() {
               <div className="flex-col items-start justify-between px-7 pt-7 pb-5 gap-3">
                 <div>
                   <div className="flex items-center justify-between shrink-0">
-                    <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-                      <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
+                    <div>
+                      <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
+                        <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
+                      </div>
+                      <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
+                        <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
+                      </div>
                     </div>
+
                     <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
                       <FiX size={18} />
                     </button>

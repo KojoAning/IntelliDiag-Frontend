@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { FaBell } from "react-icons/fa";
 import { FiLogOut, FiChevronRight, FiCheck } from "react-icons/fi";
-import { HiUsers } from "react-icons/hi2";
+
 import { useNavigate, useLocation } from "react-router-dom";
 import { getNotifications, getUnreadCount, markNotificationRead, markAllNotificationsRead } from "../../../lib/api";
 
@@ -97,7 +97,6 @@ function getBreadcrumbs(pathname) {
 function Appbar() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
-  const [collabOpen, setCollabOpen] = useState(false);
   const collabRef = useRef(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef(null);
@@ -131,12 +130,13 @@ function Appbar() {
     }
   }, []);
 
-  // Fetch unread count once on mount
+  // Fetch unread count and notifications on mount
   useEffect(() => {
     fetchUnreadCount();
-  }, [fetchUnreadCount]);
+    fetchNotifications();
+  }, [fetchUnreadCount, fetchNotifications]);
 
-  // Fetch notifications when dropdown opens
+  // Refresh notifications when dropdown opens
   useEffect(() => {
     if (open) fetchNotifications();
   }, [open, fetchNotifications]);
@@ -163,7 +163,7 @@ function Appbar() {
   useEffect(() => {
     function handleClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-      if (collabRef.current && !collabRef.current.contains(e.target)) setCollabOpen(false);
+      // if (collabRef.current && !collabRef.current.contains(e.target)) setCollabOpen(false);
       if (profileRef.current && !profileRef.current.contains(e.target)) setProfileOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
@@ -171,7 +171,7 @@ function Appbar() {
   }, []);
 
   return (
-    <div className="bg-[#161616] px-[27px] py-[10px] w-full flex flex-row items-center justify-between box-border rounded-[15px] relative z-50">
+    <div className="bg-[#161616] px-[27px] py-[10px] w-full flex flex-row items-center justify-between box-border rounded-[15px] relative z-9999">
       <div className="flex items-center gap-3">
         <img src="/intellidiag.png" alt="IntelliDiag Logo" className="h-[23px] w-auto" />
 
@@ -286,7 +286,7 @@ function Appbar() {
           {/* Dropdown */}
           {open && (
             <div
-              className="absolute right-0 top-[calc(100%+10px)] w-[320px] rounded-[22px] overflow-hidden shadow-2xl"
+              className="absolute right-0 top-[calc(100%+10px)] w-[320px] rounded-[22px] overflow-hidden shadow-2xl z-[9999]"
               style={{
                 background: "rgba(30,30,30,0.72)",
                 backdropFilter: "blur(28px)",

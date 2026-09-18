@@ -199,7 +199,17 @@ export async function renderDicomThumbnail(file, thumbSize = 128) {
         ? new Int16Array(raw.buffer, 0, rows * cols)
         : new Uint16Array(raw.buffer, 0, rows * cols);
 
-    // Window / level — prefer embedded tags, fall back to min/max
+    // Apply Modality LUT (Rescale Slope / Intercept) to convert stored values → HU.
+    // WindowCenter/WindowWidth are in HU, so this must happen first.
+    // Typical CT: slope=1, intercept=-1024 → background (stored 0) = -1024 HU (air).
+    const slope     = parseFloat(ds.string("x00281053")) || 1;
+    const intercept = parseFloat(ds.string("x00281052")) || 0;
+    const huData = new Float32Array(rows * cols);
+    for (let i = 0; i < rows * cols; i++) {
+      huData[i] = pixelData[i] * slope + intercept;
+    }
+
+    // Window / level — prefer embedded tags (in HU), fall back to min/max of HU values
     let lo, hi;
     try {
       const wc = parseFloat(ds.string("x00281050"));
@@ -208,9 +218,9 @@ export async function renderDicomThumbnail(file, thumbSize = 128) {
     } catch {}
     if (lo == null) {
       let mn = Infinity, mx = -Infinity;
-      for (let i = 0; i < pixelData.length; i++) {
-        if (pixelData[i] < mn) mn = pixelData[i];
-        if (pixelData[i] > mx) mx = pixelData[i];
+      for (let i = 0; i < huData.length; i++) {
+        if (huData[i] < mn) mn = huData[i];
+        if (huData[i] > mx) mx = huData[i];
       }
       lo = mn; hi = mx;
     }
@@ -222,7 +232,7 @@ export async function renderDicomThumbnail(file, thumbSize = 128) {
     const ctx     = canvas.getContext("2d");
     const imgData = ctx.createImageData(cols, rows);
     for (let i = 0; i < rows * cols; i++) {
-      const g = Math.max(0, Math.min(255, Math.round(((pixelData[i] - lo) / range) * 255)));
+      const g = Math.max(0, Math.min(255, Math.round(((huData[i] - lo) / range) * 255)));
       imgData.data[i * 4]     = g;
       imgData.data[i * 4 + 1] = g;
       imgData.data[i * 4 + 2] = g;

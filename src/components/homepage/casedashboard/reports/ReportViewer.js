@@ -936,7 +936,7 @@ export default function ReportViewer() {
                         </div>
                       )} {activeReport?.ai_report
                         ? renderMarkdownDark(activeReport.ai_report)
-                        : <p className="text-[#6B6B6B] text-[12px] m-0 italic">No System Generated Report Availablr</p>}
+                        : <p className="text-[#6B6B6B] text-[12px] m-0 italic">No System Generated Report Available</p>}
 
                     </>
                   );

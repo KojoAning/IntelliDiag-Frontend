@@ -37,8 +37,12 @@ function WorkspaceViewer() {
   const [noModelDialog, setNoModelDialog] = useState(false);
   const [noTranslationModeDialog, setNoTranslationModeDialog] = useState(false);
   const [showExpandedAiReport, setshowExpandedAiReport] = useState(false);
+  const [expandedTab, setExpandedTab] = useState("system");
   const [selectedTranslationMode, setselectedTranslationMode] = useState(null);
   const [translationActive, setTranslationActive] = useState(false);
+  const [translationLoading, setTranslationLoading] = useState(false);
+  const [translationProgress, setTranslationProgress] = useState(null);
+  const [translationResult, setTranslationResult] = useState(null);
   const [jobFailedDialog, setJobFailedDialog] = useState(false);
   const [impression, setImpression] = useState("");
   const [caseId, setCaseId] = useState(activeStudy.case_id ?? null);
@@ -879,6 +883,91 @@ function WorkspaceViewer() {
       return;
     }
     setTranslationActive(true);
+    setTranslationLoading(true);
+    setTranslationProgress(0);
+    setTranslationResult(null);
+
+    const TRANSLATION_BASE = (process.env.REACT_APP_API_IMAGE_TRANSLATION_BASE || "").trim().replace(/\/$/, "");
+    const { from, to } = selectedTranslationMode;
+    const endpoint = from === "CT" && to === "MR"
+      ? `${TRANSLATION_BASE}/image_translation/ct_to_mri`
+      : `${TRANSLATION_BASE}/image_translation/mri_to_ct`;
+    const direction = from === "CT" ? "ct2mr" : "mri2ct";
+
+    try {
+      // Check for an existing translation job on this series
+      let activeJobId = null;
+      const jobsRes = await authFetch(`${API_BASE}/series/${activeSeries?.id}/jobs`);
+      if (jobsRes.ok) {
+        const jobs = await jobsRes.json();
+        const existing = jobs.find(j => String(j.model_id) === "10000011");
+        if (existing) {
+          activeJobId = existing.id;
+          // If already completed, fetch results immediately and bail out
+          if (existing.status === "completed") {
+            const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
+            if (resultsRes.ok) {
+              const results = await resultsRes.json();
+              setTranslationResult(results);
+              setTranslationLoading(false);
+              return;
+            }
+          }
+        }
+      }
+
+      // No completed job found — submit a new one
+      if (!activeJobId) {
+        const jobId = crypto.randomUUID();
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: jobId,
+            series_id: String(activeSeries?.id ?? ""),
+            user_id: localStorage.getItem("sub") ?? "",
+            user_email: localStorage.getItem("email") ?? "",
+            user_name: localStorage.getItem("name") ?? "",
+            model_id: 10000011,
+            view_plane: "axial",
+            user_token: localStorage.getItem("token") ?? "",
+            direction,
+          }),
+        });
+        if (!res.ok) {
+          const errText = await res.text().catch(() => "");
+          throw new Error(`Translation failed: ${res.status} — ${errText.slice(0, 200)}`);
+        }
+        const body = await res.json();
+        activeJobId = body.job_id || jobId;
+      }
+
+      // Poll until completed or failed
+      while (true) {
+        await new Promise(r => setTimeout(r, 2000));
+        const statusRes = await authFetch(`${API_BASE}/jobs/check_status/${activeJobId}`);
+        if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
+        const status = await statusRes.json();
+
+        if (status.status === "running") {
+          setTranslationProgress(Math.round(status.progress ?? 0));
+        } else if (status.status === "completed") {
+          setTranslationProgress(100);
+          const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
+          if (!resultsRes.ok) throw new Error(`Results fetch failed: ${resultsRes.status}`);
+          const results = await resultsRes.json();
+          setTranslationResult(results);
+          break;
+        } else if (status.status === "failed") {
+          throw new Error(status.message || "Translation job failed");
+        }
+      }
+    } catch (e) {
+      setTranslationActive(false);
+    } finally {
+      setTranslationLoading(false);
+      setTranslationProgress(null);
+    }
   }
 
   const [reportSaving, setReportSaving] = useState(false);
@@ -1189,60 +1278,66 @@ function WorkspaceViewer() {
               className="relative w-full max-w-[600px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden max-h-[700px]"
             >
               {/* Header */}
-              <div className="flex-col items-start justify-between px-7 pt-7 pb-5 gap-3">
-                <div>
-                  <div className="flex items-center justify-between shrink-0">
-                    <div>
-                      <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-                        <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
-                      </div>
-                      <div className="bg-[rgba(6,148,251,0.17)] rounded-full px-3 py-1.5 flex items-center gap-1.5">
-                        <p className="text-[#0694FB] text-[12px] font-medium m-0">System Generated Report</p>
-                      </div>
-                    </div>
-
-                    <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
-                      <FiX size={18} />
-                    </button>
-                  </div>
+              <div className="flex items-center justify-between px-7 pt-6 pb-4 shrink-0">
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setExpandedTab("system")}
+                    className={`px-3 py-1.5 rounded-full text-[12px] font-medium border-none cursor-pointer transition-all ${
+                      expandedTab === "system"
+                        ? "bg-[#0694FB] text-white"
+                        : "bg-[rgba(6,148,251,0.17)] text-[#0694FB] hover:bg-[rgba(6,148,251,0.25)]"
+                    }`}
+                  >
+                    System Generated Report
+                  </button>
+                  <button
+                    onClick={() => setExpandedTab("yours")}
+                    className={`px-3 py-1.5 rounded-full text-[12px] font-medium border-none cursor-pointer transition-all ${
+                      expandedTab === "yours"
+                        ? "bg-[#0694FB] text-white"
+                        : "bg-[rgba(6,148,251,0.17)] text-[#0694FB] hover:bg-[rgba(6,148,251,0.25)]"
+                    }`}
+                  >
+                    Your Report
+                  </button>
                 </div>
-
-
-              </div>
-              <div className="flex flex-col flex-1 overflow-y-auto px-7 pb-4" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
-                {renderReport(aiResponse)}
-              </div>
-
-              {/* Radiologist Impression */}
-              <div className="px-7 pb-4 flex flex-col gap-2 border-t border-[#1E1E1E] pt-4 shrink-0 h-[180px]">
-                <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0 shrink-0">Radiologist Impression</p>
-                <textarea
-                  value={impression}
-                  onChange={e => setImpression(e.target.value)}
-                  placeholder="Add your impression..."
-                  className="flex-1 min-h-0 w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none"
-                  style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
-                />
-              </div>
-
-              {/* Footer */}
-              <div className="px-7 pb-6 pt-4 shrink-0 border-t border-[#1E1E1E] flex justify-end">
-                <button
-                  onClick={() => handleSaveReport(impression)}
-                  disabled={reportSaving || (!aiResponse && !impression.trim())}
-                  className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {reportSaving ? (
-                    <>
-                      <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Saving…
-                    </>
-                  ) : "Save & Generate Report"}
+                <button onClick={() => setshowExpandedAiReport(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1">
+                  <FiX size={18} />
                 </button>
               </div>
+
+              {/* Tab content */}
+              {expandedTab === "system" ? (
+                <div className="flex flex-col flex-1 overflow-y-auto px-7 pb-6" style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}>
+                  {renderReport(aiResponse)}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-3 px-7 pb-6 flex-1 min-h-0">
+                  <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0 shrink-0">Radiologist Impression</p>
+                  <textarea
+                    value={impression}
+                    onChange={e => setImpression(e.target.value)}
+                    placeholder="Add your impression..."
+                    className="flex-1 min-h-0 w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none"
+                    style={{ scrollbarWidth: "thin", scrollbarColor: "#2a2a2a transparent" }}
+                  />
+                  <button
+                    onClick={() => handleSaveReport(impression)}
+                    disabled={reportSaving || (!aiResponse && !impression.trim())}
+                    className="w-full py-[10px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                  >
+                    {reportSaving ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Saving…
+                      </span>
+                    ) : "Save & Generate Report"}
+                  </button>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}
@@ -1335,8 +1430,11 @@ function WorkspaceViewer() {
                 onInferenceResult={(r) => updateCtx(currentModelId, { inferenceResult: r })}
                 onRunTranslation={runTranslation}
                 translationActive={translationActive}
+                translationLoading={translationLoading}
+                translationProgress={translationProgress}
+                translationResult={translationResult}
                 translationMode={selectedTranslationMode}
-                onCloseTranslation={() => setTranslationActive(false)}
+                onCloseTranslation={() => { setTranslationActive(false); setTranslationResult(null); setTranslationProgress(null); setTranslationLoading(false); }}
                 jobStatus={jobStatus}
                 onViewModeChange={(mode) => {
                   setInMprMode(mode !== "stack");

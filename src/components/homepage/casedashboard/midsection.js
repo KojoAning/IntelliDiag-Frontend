@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import CornerstoneViewport from "./CornerstoneViewport";
 import CornerstoneVolumeViewport from "./CornerstoneVolumeViewport";
@@ -125,7 +125,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationMode, onCloseTranslation, jobStatus, onViewModeChange }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -369,6 +369,24 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       setCurrentIndex(idx);
     }
   }, [images, onSelectImage]);
+
+  // Stable imageIds for the translation viewport — only recomputed when translationResult changes
+  const translationImageIds = useMemo(() => {
+    const slices = translationResult?.slices ?? [];
+    return slices.map(s => {
+      const url = s.image_url ?? s.url;
+      if (url) return `web:${url}`;
+      if (s.image) return `web:data:image/jpeg;base64,${s.image}`;
+      return null;
+    }).filter(Boolean);
+  }, [translationResult]);
+
+  // Keep translation viewport in sync with the main slice index
+  useEffect(() => {
+    if (translationResult && vpRef2.current?.setImageIndex) {
+      vpRef2.current.setImageIndex(currentIndex);
+    }
+  }, [currentIndex, translationResult]);
 
   useEffect(() => {
     const h = (e) => {
@@ -1130,15 +1148,38 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               </button>
             </div>
 
-            {/* Empty state */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-0 pointer-events-none">
-              <img src="/dimensions.png" alt="" className="w-10 h-10 object-contain opacity-10" />
-              <p className="text-[#2a2a2a] text-sm m-0">Translated image will appear here</p>
-            </div>
+            {/* Loading state */}
+            {translationLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-20 pointer-events-none">
+                <div className="flex flex-col items-center gap-2">
+                  <div className="w-8 h-8 border-2 border-[#A855F7] border-t-transparent rounded-full animate-spin" />
+                  <p className="text-[#A855F7] text-[12px] m-0">
+                    {translationProgress != null ? `Translating… ${translationProgress}%` : "Translating…"}
+                  </p>
+                </div>
+                {translationProgress != null && (
+                  <div className="w-40 h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
+                    <div className="h-full bg-[#A855F7] rounded-full transition-all duration-300" style={{ width: `${translationProgress}%` }} />
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* Empty Cornerstone viewport */}
+            {/* Empty state */}
+            {!translationLoading && !translationResult && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 z-0 pointer-events-none">
+                <img src="/dimensions.png" alt="" className="w-10 h-10 object-contain opacity-10" />
+                <p className="text-[#2a2a2a] text-sm m-0">Translated image will appear here</p>
+              </div>
+            )}
+
+            {/* Cornerstone viewport — fed with translated slices once ready */}
             <div className="absolute inset-0 z-10">
-              <CornerstoneViewport ref={vpRef2} imageIds={[]} activeTool={null} />
+              <CornerstoneViewport
+                ref={vpRef2}
+                imageIds={translationImageIds}
+                activeTool={null}
+              />
             </div>
           </div>
         )}

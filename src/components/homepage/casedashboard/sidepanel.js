@@ -51,7 +51,7 @@ function SliceThumb({ img, index, selected, onSelect, hasTumor }) {
   return (
     <div
       onClick={() => onSelect(img.blobUrl ?? img.url)}
-      className={`relative rounded-lg overflow-hidden border cursor-pointer transition-all duration-150 shrink-0 aspect-square ${
+      className={`relative rounded-lg overflow-hidden border bg-black cursor-pointer transition-all duration-150 shrink-0 aspect-square ${
         selected
           ? "border-[#0694FB] ring-1 ring-[#0694FB]"
           : "border-[#1E1E1E] hover:border-[#0694FB]/50"

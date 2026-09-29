@@ -4,7 +4,7 @@ import React, {
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { RenderingEngine, Enums } from "@cornerstonejs/core";
+import { RenderingEngine, Enums, metaData } from "@cornerstonejs/core";
 import { annotation as csAnnotation } from "@cornerstonejs/tools";
 import {
   ToolGroupManager,
@@ -40,6 +40,40 @@ const TOOL_MAP = {
 const ALL_ANNOTATION_TOOLS = Object.values(TOOL_MAP);
 
 let instanceCounter = 0;
+
+/**
+ * Apply window/level from the DICOM metadata of the given imageId.
+ *
+ * Priority:
+ *  1. DICOM's embedded WindowCenter / WindowWidth tags (voiLutModule)
+ *  2. CT modality fallback — soft-tissue window (WC 40, WW 400 HU)
+ *  3. Do nothing — let Cornerstone auto-compute from the pixel range
+ *     (better than resetProperties() which uses an internal default that
+ *      ignores the image's actual HU range)
+ */
+function applyVoi(viewport, imageId) {
+  try {
+    const voiLut = metaData.get('voiLutModule', imageId);
+    const wc = Array.isArray(voiLut?.windowCenter) ? voiLut.windowCenter[0] : voiLut?.windowCenter;
+    const ww = Array.isArray(voiLut?.windowWidth)  ? voiLut.windowWidth[0]  : voiLut?.windowWidth;
+
+    if (wc != null && ww != null && ww > 0) {
+      // Use the DICOM's embedded clinical window
+      viewport.setProperties({ voiRange: { lower: wc - ww / 2, upper: wc + ww / 2 } });
+      return;
+    }
+
+    // No VOI tags — apply a modality-appropriate fallback
+    const series = metaData.get('generalSeriesModule', imageId);
+    const modality = (series?.modality ?? '').toUpperCase();
+    if (modality === 'CT') {
+      // Soft-tissue window: WC=40 HU, WW=400 HU
+      // Better than the raw HU range (~4096) which renders everything grey
+      viewport.setProperties({ voiRange: { lower: -160, upper: 240 } });
+    }
+    // For MR and others, Cornerstone's auto-compute from pixel range is fine
+  } catch (_) {}
+}
 
 /**
  * CornerstoneViewport
@@ -92,7 +126,8 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       const vp = ctx.current.viewport;
       if (!vp) return;
       vp.resetCamera();
-      vp.resetProperties();
+      // Re-apply the DICOM window rather than resetting to Cornerstone's internal default
+      applyVoi(vp, vp.getCurrentImageId?.() ?? "");
       vp.render();
     },
     rotateCW()  { rotate(90); },
@@ -307,9 +342,8 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       // Load initial images
       if (imageIds.length) {
         await viewport.setStack(imageIds);
-        // Apply the image's native modality/VOI LUT (WindowCenter/Width) — without
-        // this, 16-bit signed pixels map to black until the user drags W/L.
-        try { viewport.resetProperties(); } catch (_) {}
+        // Apply the DICOM's embedded WindowCenter/Width so CT looks correct immediately.
+        applyVoi(viewport, imageIds[0]);
         viewport.render();
         // Store base parallelScale for zoom calculation and image center for mask alignment
         const initCam = viewport.getCamera();
@@ -366,7 +400,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     if (!vp || !imageIds.length) return;
     vp.setStack(imageIds)
       .then(() => {
-        try { vp.resetProperties(); } catch (_) {}
+        applyVoi(vp, imageIds[0]);
         vp.render();
         const updatedCam = vp.getCamera();
         ctx.current.baseScale = updatedCam.parallelScale ?? 1;

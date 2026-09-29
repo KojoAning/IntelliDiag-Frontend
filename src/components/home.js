@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useRef, useEffect } from "react";
+import ReactDOM from "react-dom";
 import {
   motion,
   AnimatePresence,
@@ -447,12 +448,6 @@ const ModalSelect = styled.select`
   }
 `;
 
-const ModalError = styled.p`
-  color: #ff4d4d;
-  font-size: 13px;
-  margin: 0;
-  text-align: center;
-`;
 
 const ModalSuccess = styled.p`
   color: #4dff91;
@@ -675,10 +670,24 @@ function ImmersiveOverlay({ close, size }) {
   const [fullName, setFullName] = useState("");
   const [signUpEmail, setSignUpEmail] = useState("");
   const [signUpPassword, setSignUpPassword] = useState("");
-  const [role, setRole] = useState("doctor");
   const [phone, setPhone] = useState("");
   const [institution, setInstitution] = useState("");
   const [licenseNumber, setLicenseNumber] = useState("");
+
+  // Sign-in validation
+  const [signInErrors, setSignInErrors] = useState({});
+  const [signInTouched, setSignInTouched] = useState({});
+
+  // Signup validation
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [touched, setTouched] = useState({});
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  // Verification state
+  const [otp, setOtp] = useState("");
+  const [resendCooldown, setResendCooldown] = useState(0);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -691,6 +700,13 @@ function ImmersiveOverlay({ close, size }) {
     return JSON.parse(decoded);
   }
 
+
+  const parseApiError = (data, fallback) => {
+    if (!data) return fallback;
+    const detail = data.detail ?? data.message;
+    if (Array.isArray(detail)) return detail.map(e => e.msg ?? String(e)).join(". ");
+    return detail || fallback;
+  };
 
   const handleSignIn = async (e) => {
     e.stopPropagation();
@@ -707,7 +723,7 @@ function ImmersiveOverlay({ close, size }) {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || data.message || "Invalid email or password");
+        throw new Error(parseApiError(data, "Invalid email or password"));
       }
       const data = await res.json();
       localStorage.setItem("token", data.access_token);
@@ -735,14 +751,13 @@ function ImmersiveOverlay({ close, size }) {
 
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const res = await fetch(`${baseURL}/users/create-user`, {
+      const res = await fetch(`${baseURL}/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: signUpEmail,
           full_name: fullName,
           password: signUpPassword,
-          role,
           phone,
           institution,
           license_number: licenseNumber,
@@ -751,21 +766,10 @@ function ImmersiveOverlay({ close, size }) {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || data.message || "Sign up failed");
+        throw new Error(parseApiError(data, "Sign up failed"));
       }
 
-      setSuccess("Account created! Please sign in.");
-      setFullName("");
-      setSignUpEmail("");
-      setSignUpPassword("");
-      setRole("doctor");
-      setPhone("");
-      setInstitution("");
-      setLicenseNumber("");
-      setTimeout(() => {
-        setSuccess("");
-        setView("signin");
-      }, 1500);
+      setView("verify");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -773,9 +777,107 @@ function ImmersiveOverlay({ close, size }) {
     }
   };
 
+  const handleVerify = async (e) => {
+    e.stopPropagation();
+    setError("");
+    setLoading(true);
+
+    try {
+      const baseURL = process.env.REACT_APP_API_URL || "";
+      const res = await fetch(`${baseURL}/auth/verify-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: signUpEmail, otp }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(parseApiError(data, "Verification failed"));
+      }
+
+      setSuccess("Email verified! You can now sign in.");
+      setOtp("");
+      setTimeout(() => { setSuccess(""); setView("signin"); }, 1500);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Signup validation ────────────────────────────────────────────────────
+  const validateField = (name, value) => {
+    switch (name) {
+      case "fullName":
+        return value.trim().length < 2 ? "Full name must be at least 2 characters" : "";
+      case "signUpEmail":
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? "" : "Enter a valid email address";
+      case "signUpPassword":
+        if (value.length < 8) return "Password must be at least 8 characters";
+        if (!/[A-Z]/.test(value)) return "Include at least one uppercase letter";
+        if (!/[0-9]/.test(value)) return "Include at least one number";
+        return "";
+      case "confirmPassword":
+        return value !== signUpPassword ? "Passwords do not match" : "";
+      case "licenseNumber":
+        return value.trim().length < 2 ? "License number is required" : "";
+      default:
+        return "";
+    }
+  };
+
+  const handleBlur = (name, value) => {
+    setTouched(prev => ({ ...prev, [name]: true }));
+    setFieldErrors(prev => ({ ...prev, [name]: validateField(name, value) }));
+  };
+
+  const passwordStrength = (pwd) => {
+    if (!pwd) return { score: 0, label: "", color: "" };
+    let score = 0;
+    if (pwd.length >= 8) score++;
+    if (pwd.length >= 12) score++;
+    if (/[A-Z]/.test(pwd)) score++;
+    if (/[0-9]/.test(pwd)) score++;
+    if (/[^A-Za-z0-9]/.test(pwd)) score++;
+    if (score <= 1) return { score, label: "Weak", color: "#ef4444" };
+    if (score <= 3) return { score, label: "Fair", color: "#f59e0b" };
+    return { score, label: "Strong", color: "#22c55e" };
+  };
+
+  const handleResendOtp = async (e) => {
+    e.stopPropagation();
+    if (resendCooldown > 0) return;
+    setError("");
+
+    try {
+      const baseURL = process.env.REACT_APP_API_URL || "";
+      await fetch(`${baseURL}/auth/resend-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: signUpEmail }),
+      });
+      setResendCooldown(60);
+      const timer = setInterval(() => {
+        setResendCooldown(prev => {
+          if (prev <= 1) { clearInterval(timer); return 0; }
+          return prev - 1;
+        });
+      }, 1000);
+    } catch {
+      setError("Could not resend code. Try again.");
+    }
+  };
+
   const switchView = (v) => {
     setError("");
     setSuccess("");
+    setFieldErrors({});
+    setTouched({});
+    setConfirmPassword("");
+    setShowPassword(false);
+    setShowConfirm(false);
+    setSignInErrors({});
+    setSignInTouched({});
     setView(v);
   };
 
@@ -805,6 +907,7 @@ function ImmersiveOverlay({ close, size }) {
   };
 
   return (
+    <>
     <OverlayRoot onClick={close}>
       <OverlayContent
         initial={{ opacity: 0 }}
@@ -825,7 +928,42 @@ function ImmersiveOverlay({ close, size }) {
             style={{ height: "24px", width: "auto" }}
           />
 
-          {view === "signin" ? (
+          {view === "verify" ? (
+            <>
+              <ModalHeader>
+                <ModalTitle>Check your email</ModalTitle>
+                <ModalSubtitle>
+                  We sent a 6-digit code to <strong style={{ color: "#f5f5f5" }}>{signUpEmail}</strong>. Enter it below to verify your account.
+                </ModalSubtitle>
+              </ModalHeader>
+
+              <ModalInputs>
+                <ModalInput
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="000000"
+                  maxLength={6}
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  style={{ letterSpacing: "0.3em", textAlign: "center", fontSize: "22px" }}
+                />
+              </ModalInputs>
+
+              {success ? <ModalSuccess>{success}</ModalSuccess> : null}
+
+              <ModalControls>
+                <ModalButton onClick={handleVerify} disabled={loading || otp.length < 6}>
+                  {loading ? "Verifying..." : "Verify Email"}
+                </ModalButton>
+                <ModalFooterText>
+                  Didn't receive a code?{" "}
+                  <ModalLink onClick={handleResendOtp} style={{ opacity: resendCooldown > 0 ? 0.5 : 1, cursor: resendCooldown > 0 ? "default" : "pointer" }}>
+                    {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : "Resend"}
+                  </ModalLink>
+                </ModalFooterText>
+              </ModalControls>
+            </>
+          ) : view === "signin" ? (
             <>
               <ModalHeader>
                 <ModalTitle>Sign In to your account</ModalTitle>
@@ -835,24 +973,45 @@ function ImmersiveOverlay({ close, size }) {
               </ModalHeader>
 
               <ModalInputs>
-                <ModalInput
-                  type="text"
-                  placeholder="Email"
-                  value={signInEmail}
-                  onChange={(e) => setSignInEmail(e.target.value)}
-                />
-                <ModalInput
-                  type="password"
-                  placeholder="Password"
-                  value={signInPassword}
-                  onChange={(e) => setSignInPassword(e.target.value)}
-                />
+                {/* Email */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <ModalInput
+                    type="text"
+                    placeholder="Email"
+                    value={signInEmail}
+                    onChange={(e) => { setSignInEmail(e.target.value); if (signInTouched.email) setSignInErrors(p => ({ ...p, email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.target.value) ? "" : "Enter a valid email address" })); }}
+                    onBlur={(e) => { setSignInTouched(p => ({ ...p, email: true })); setSignInErrors(p => ({ ...p, email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.target.value) ? "" : "Enter a valid email address" })); }}
+                    style={signInTouched.email && signInErrors.email ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {signInTouched.email && signInErrors.email && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{signInErrors.email}</span>}
+                </div>
+
+                {/* Password */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <ModalInput
+                    type="password"
+                    placeholder="Password"
+                    value={signInPassword}
+                    onChange={(e) => { setSignInPassword(e.target.value); if (signInTouched.password) setSignInErrors(p => ({ ...p, password: e.target.value ? "" : "Password is required" })); }}
+                    onBlur={(e) => { setSignInTouched(p => ({ ...p, password: true })); setSignInErrors(p => ({ ...p, password: e.target.value ? "" : "Password is required" })); }}
+                    style={signInTouched.password && signInErrors.password ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {signInTouched.password && signInErrors.password && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{signInErrors.password}</span>}
+                </div>
               </ModalInputs>
 
-              {error ? <ModalError>{error}</ModalError> : null}
-
               <ModalControls>
-                <ModalButton onClick={handleSignIn} disabled={loading} className="confirm">
+                <ModalButton
+                  disabled={loading}
+                  onClick={(e) => {
+                    const emailErr = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(signInEmail) ? "" : "Enter a valid email address";
+                    const passwordErr = signInPassword ? "" : "Password is required";
+                    setSignInErrors({ email: emailErr, password: passwordErr });
+                    setSignInTouched({ email: true, password: true });
+                    if (emailErr || passwordErr) return;
+                    handleSignIn(e);
+                  }}
+                >
                   {loading ? "Signing in..." : "Sign In"}
                 </ModalButton>
                 <ModalFooterText>
@@ -871,49 +1030,120 @@ function ImmersiveOverlay({ close, size }) {
               </ModalHeader>
 
               <ModalInputs>
-                <ModalInput
-                  type="text"
-                  placeholder="Full Name"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                />
-                <ModalInput
-                  type="email"
-                  placeholder="Email"
-                  value={signUpEmail}
-                  onChange={(e) => setSignUpEmail(e.target.value)}
-                />
-                <ModalInput
-                  type="password"
-                  placeholder="Password"
-                  value={signUpPassword}
-                  onChange={(e) => setSignUpPassword(e.target.value)}
-                />
+                {/* Full Name */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <ModalInput
+                    type="text"
+                    placeholder="Full Name"
+                    value={fullName}
+                    onChange={(e) => { setFullName(e.target.value); if (touched.fullName) setFieldErrors(p => ({ ...p, fullName: validateField("fullName", e.target.value) })); }}
+                    onBlur={(e) => handleBlur("fullName", e.target.value)}
+                    style={touched.fullName && fieldErrors.fullName ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {touched.fullName && fieldErrors.fullName && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.fullName}</span>}
+                </div>
+
+                {/* Email */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <ModalInput
+                    type="email"
+                    placeholder="Email"
+                    value={signUpEmail}
+                    onChange={(e) => { setSignUpEmail(e.target.value); if (touched.signUpEmail) setFieldErrors(p => ({ ...p, signUpEmail: validateField("signUpEmail", e.target.value) })); }}
+                    onBlur={(e) => handleBlur("signUpEmail", e.target.value)}
+                    style={touched.signUpEmail && fieldErrors.signUpEmail ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {touched.signUpEmail && fieldErrors.signUpEmail && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.signUpEmail}</span>}
+                </div>
+
+                {/* Password */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ position: "relative" }}>
+                    <ModalInput
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Password"
+                      value={signUpPassword}
+                      onChange={(e) => { setSignUpPassword(e.target.value); if (touched.signUpPassword) setFieldErrors(p => ({ ...p, signUpPassword: validateField("signUpPassword", e.target.value), confirmPassword: confirmPassword ? validateField("confirmPassword", confirmPassword) : p.confirmPassword })); }}
+                      onBlur={(e) => handleBlur("signUpPassword", e.target.value)}
+                      style={{ paddingRight: 44, ...(touched.signUpPassword && fieldErrors.signUpPassword ? { borderColor: "#ef4444" } : {}) }}
+                    />
+                    <button type="button" onClick={() => setShowPassword(p => !p)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#6b6b6b", fontSize: 13 }}>
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                  {signUpPassword && (() => { const s = passwordStrength(signUpPassword); return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1, height: 3, borderRadius: 99, background: "#1e1e1e", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${(s.score / 5) * 100}%`, background: s.color, borderRadius: 99, transition: "width 0.3s, background 0.3s" }} />
+                      </div>
+                      <span style={{ fontSize: 11, color: s.color, minWidth: 40 }}>{s.label}</span>
+                    </div>
+                  ); })()}
+                  {touched.signUpPassword && fieldErrors.signUpPassword && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.signUpPassword}</span>}
+                </div>
+
+                {/* Confirm Password */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ position: "relative" }}>
+                    <ModalInput
+                      type={showConfirm ? "text" : "password"}
+                      placeholder="Confirm Password"
+                      value={confirmPassword}
+                      onChange={(e) => { setConfirmPassword(e.target.value); if (touched.confirmPassword) setFieldErrors(p => ({ ...p, confirmPassword: e.target.value !== signUpPassword ? "Passwords do not match" : "" })); }}
+                      onBlur={(e) => handleBlur("confirmPassword", e.target.value)}
+                      style={{ paddingRight: 44, ...(touched.confirmPassword && fieldErrors.confirmPassword ? { borderColor: "#ef4444" } : touched.confirmPassword && confirmPassword && !fieldErrors.confirmPassword ? { borderColor: "#22c55e" } : {}) }}
+                    />
+                    <button type="button" onClick={() => setShowConfirm(p => !p)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#6b6b6b", fontSize: 13 }}>
+                      {showConfirm ? "Hide" : "Show"}
+                    </button>
+                  </div>
+                  {touched.confirmPassword && fieldErrors.confirmPassword && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.confirmPassword}</span>}
+                </div>
+
+                {/* Phone (optional) */}
                 <ModalInput
                   type="tel"
-                  placeholder="Phone Number"
+                  placeholder="Phone Number (optional)"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                 />
+
+                {/* Institution (optional) */}
                 <ModalInput
                   type="text"
-                  placeholder="Hospital / Institution Name"
+                  placeholder="Hospital / Institution (optional)"
                   value={institution}
                   onChange={(e) => setInstitution(e.target.value)}
                 />
-                <ModalInput
-                  type="text"
-                  placeholder="Medical License Number"
-                  value={licenseNumber}
-                  onChange={(e) => setLicenseNumber(e.target.value)}
-                />
+
+                {/* License Number */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <ModalInput
+                    type="text"
+                    placeholder="Medical License Number"
+                    value={licenseNumber}
+                    onChange={(e) => { setLicenseNumber(e.target.value); if (touched.licenseNumber) setFieldErrors(p => ({ ...p, licenseNumber: validateField("licenseNumber", e.target.value) })); }}
+                    onBlur={(e) => handleBlur("licenseNumber", e.target.value)}
+                    style={touched.licenseNumber && fieldErrors.licenseNumber ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {touched.licenseNumber && fieldErrors.licenseNumber && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.licenseNumber}</span>}
+                </div>
               </ModalInputs>
 
-              {error ? <ModalError>{error}</ModalError> : null}
-              {success ? <ModalSuccess>{success}</ModalSuccess> : null}
 
               <ModalControls>
-                <ModalButton onClick={handleSignUp} disabled={loading}>
+                <ModalButton
+                  onClick={(e) => {
+                    // Touch all required fields to show any missed errors
+                    const fields = { fullName, signUpEmail, signUpPassword, confirmPassword, licenseNumber };
+                    const errors = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, validateField(k, v)]));
+                    setFieldErrors(errors);
+                    setTouched({ fullName: true, signUpEmail: true, signUpPassword: true, confirmPassword: true, licenseNumber: true });
+                    if (Object.values(errors).some(Boolean)) return;
+                    handleSignUp(e);
+                  }}
+                  disabled={loading}
+                >
                   {loading ? "Creating account..." : "Sign Up"}
                 </ModalButton>
                 <ModalFooterText>
@@ -925,7 +1155,54 @@ function ImmersiveOverlay({ close, size }) {
           )}
         </ModalContent>
       </OverlayContent>
+
     </OverlayRoot>
+
+    {/* ── Error dialog — portalled to body to escape all stacking contexts ── */}
+    {ReactDOM.createPortal(
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            className="fixed inset-0 z-[9999] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setError("")}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border gap-5 border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              <div className="flex items-start justify-between px-7 pt-7">
+                <h2 className="text-white text-[17px] font-medium m-0">Something went wrong</h2>
+                <button onClick={() => setError("")} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              <p className="px-7 text-[#6B6B6B] text-[14px] m-0 leading-relaxed">{error}</p>
+              <div className="px-7 pb-6">
+                <button
+                  onClick={() => setError("")}
+                  className="w-full py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium cursor-pointer transition-colors border-none"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>,
+      document.body
+    )}
+    </>
   );
 }
 

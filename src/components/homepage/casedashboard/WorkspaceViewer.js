@@ -907,8 +907,11 @@ function WorkspaceViewer() {
           if (existing.status === "completed") {
             const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
             if (resultsRes.ok) {
-              const results = await resultsRes.json();
-              setTranslationResult(results);
+              const raw = await resultsRes.json();
+              const resolved = raw.url && !raw.slices
+                ? await (await fetch(raw.url)).json()
+                : raw;
+              setTranslationResult(resolved);
               setTranslationLoading(false);
               return;
             }
@@ -942,6 +945,16 @@ function WorkspaceViewer() {
         activeJobId = body.job_id || jobId;
       }
 
+      // Resolve results — handles both inline slices and a signed redirect URL
+      const resolveResults = async (raw) => {
+        if (raw.url && !raw.slices) {
+          const redirectRes = await fetch(raw.url);
+          if (!redirectRes.ok) throw new Error(`Results redirect fetch failed: ${redirectRes.status}`);
+          return redirectRes.json();
+        }
+        return raw;
+      };
+
       // Poll until completed or failed
       while (true) {
         await new Promise(r => setTimeout(r, 2000));
@@ -955,8 +968,8 @@ function WorkspaceViewer() {
           setTranslationProgress(100);
           const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
           if (!resultsRes.ok) throw new Error(`Results fetch failed: ${resultsRes.status}`);
-          const results = await resultsRes.json();
-          setTranslationResult(results);
+          const raw = await resultsRes.json();
+          setTranslationResult(await resolveResults(raw));
           break;
         } else if (status.status === "failed") {
           throw new Error(status.message || "Translation job failed");

@@ -746,6 +746,7 @@ function WorkspaceViewer() {
             user_email: localStorage.getItem("email"),
             user_name: localStorage.getItem("name"),
             model_id: String(selectedModel.id),
+            viewplane: "axial",
           }),
         });
         if (!response.ok) {

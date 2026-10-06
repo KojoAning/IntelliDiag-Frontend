@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FiPlus, FiTrash2, FiSave, FiChevronUp, FiChevronDown,
-  FiEye, FiEyeOff, FiEdit3, FiCheck, FiLayout,
+  FiPlus, FiTrash2, FiChevronUp, FiChevronDown,
+  FiEye, FiEyeOff, FiEdit3, FiCheck,
   FiRotateCcw, FiRotateCw, FiAlignLeft, FiAlignCenter,
   FiAlignRight, FiAlignJustify, FiMoreVertical,
 } from "react-icons/fi";
@@ -423,7 +423,7 @@ function PropertiesPanel({ template, selectedSectionId, onChange }) {
     );
   }
 
-  const { centerInfo, showSignatureArea, showPatientInfo } = template;
+  const { centerInfo } = template;
 
   return (
     <div className="flex flex-col gap-4 pt-2">

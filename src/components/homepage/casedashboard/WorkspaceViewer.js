@@ -631,7 +631,7 @@ function WorkspaceViewer() {
             user_email: localStorage.getItem("email"),
             user_name: localStorage.getItem("name"),
             model_id: 10000001,
-            view_plane: viewMode,
+            viewplane: viewMode,
           }),
         });
         if (!response.ok) {

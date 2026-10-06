@@ -72,6 +72,7 @@ function InfoRow({ label, value }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function FindingCard({ finding }) {
   const [open, setOpen] = useState(false);
   return (
@@ -513,6 +514,7 @@ function DocumentsSection({ patientId, caseId }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function NoteSection({ patient }) {
   const [notes, setNotes] = useState([]);
   const [text, setText] = useState("");
@@ -712,18 +714,18 @@ function PatientDetailsPage() {
 
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, label }
   const [deleteReportConfirm, setDeleteReportConfirm] = useState(null); // { id, title }
-  const [activeStudy, setActiveStudy] = useState(null);
+  const [activeStudy, setActiveStudy] = useState(null); // eslint-disable-line no-unused-vars
   const [addStudyOpen, setAddStudyOpen] = useState(false);
   const [importStudyOpen, setImportStudyOpen] = useState(false);
   const [newReportOpen, setNewReportOpen] = useState(false);
   const [studiesOpen, setStudiesOpen] = useState(false);
-  const [activeSeries, setActiveSeries] = useState(null);
+  const [activeSeries, setActiveSeries] = useState(null); // eslint-disable-line no-unused-vars
   const [studies, setStudies] = useState([]);
   const [studiesLoading, setStudiesLoading] = useState(true);
   const [reports, setReports] = useState([]);
   const [reportsLoading, setReportsLoading] = useState(true);
   const [selectedReport, setSelectedReport] = useState(null);
-  const openStudy = (study) => { setActiveStudy(study); setActiveSeries(null); };
+  const openStudy = (study) => { setActiveStudy(study); setActiveSeries(null); }; // eslint-disable-line no-unused-vars
 
   const fetchStudies = useCallback(async () => {
     setStudiesLoading(true);

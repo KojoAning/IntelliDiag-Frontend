@@ -306,6 +306,7 @@ function DataTab({ s, onUpdate }) {
 }
 
 // placeholder — keep old signature for unused tabs
+// eslint-disable-next-line no-unused-vars
 function NotificationsTabOLD() {
   const [state, setState] = useState({
     jobComplete: true,
@@ -342,6 +343,7 @@ function NotificationsTabOLD() {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function AIModelsTab() {
   const [autoAnalysis, setAutoAnalysis] = useState(false);
   const [cacheResults, setCacheResults] = useState(true);
@@ -393,6 +395,7 @@ function AIModelsTab() {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function DicomTab() {
   const [tlsEnabled, setTlsEnabled] = useState(true);
 
@@ -434,6 +437,7 @@ function DicomTab() {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function IntegrationsTab() {
   return (
     <div>

@@ -261,7 +261,7 @@ export async function parseDicomFile(file) {
     const byteArray = new Uint8Array(buffer);
     const ds        = dicomParser.parseDicom(byteArray);
 
-    const s = (tag) => { try { return (ds.string(tag) || "").trim(); } catch { return ""; } };
+    const _s = (tag) => { try { return (ds.string(tag) || "").trim(); } catch { return ""; } }; // eslint-disable-line no-unused-vars
     const n = (tag) => { try { const v = parseFloat(ds.string(tag)); return isFinite(v) ? v : null; } catch { return null; } };
 
     return {

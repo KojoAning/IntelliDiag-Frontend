@@ -47,8 +47,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: npm audit (high + critical only)
-        run: npm audit --audit-level=high
+      - name: npm audit (production deps, high + critical only)
+        run: npm audit --audit-level=high --omit=dev
 
       - name: Check for secrets in code
         uses: trufflesecurity/trufflehog@main

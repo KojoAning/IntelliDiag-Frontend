@@ -8,8 +8,8 @@ import ImportStudyModal from "./ImportStudyModal";
 import NewReportModal from "./NewReportModal";
 import ReportViewModal from "./ReportViewModal";
 import {
-  FiArrowLeft, FiDownload, FiMaximize2, FiSearch,
-  FiUser, FiFileText, FiChevronDown, FiChevronUp, FiFolder, FiX, FiUploadCloud, FiTrash2,
+  FiDownload, FiMaximize2, FiSearch,
+  FiFileText, FiChevronDown, FiChevronUp, FiX, FiTrash2,
 } from "react-icons/fi";
 import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, deleteDocument, getPatientById, deleteStudy, authFetch } from "../../../lib/api";
 
@@ -32,12 +32,6 @@ const categoryColors = {
 
 const fileIconColor = { PDF: "#FF6B35", DOCX: "#0694FB", PNG: "#22C55E", JPG: "#22C55E" };
 
-const urgencyStyles = {
-  Immediate: "bg-[rgba(255,107,53,0.2)] text-[#FF6B35]",
-  Emergency: "bg-[rgba(255,59,59,0.2)]  text-[#FF3B3B]",
-  "Less Urgent": "bg-[rgba(147,51,234,0.2)] text-[#A855F7]",
-  Routine: "bg-[rgba(6,148,251,0.2)]  text-[#0694FB]",
-};
 
 const modalityColors = {
   MR: "text-[#0694FB] bg-[rgba(6,148,251,0.15)]",
@@ -63,6 +57,7 @@ function SectionLabel({ children }) {
   );
 }
 
+// eslint-disable-next-line no-unused-vars
 function InfoRow({ label, value }) {
   return (
     <div className="flex flex-col gap-0.5">

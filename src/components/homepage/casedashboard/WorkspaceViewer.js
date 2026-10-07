@@ -738,7 +738,6 @@ function WorkspaceViewer() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            job_id: newJobId,
             series_id: activeSeries?.id,
             token: seriesToken,
             user_token: localStorage.getItem("token"),
@@ -746,7 +745,7 @@ function WorkspaceViewer() {
             user_email: localStorage.getItem("email"),
             user_name: localStorage.getItem("name"),
             model_id: String(selectedModel.id),
-            viewplane: "axial",
+            view_plane: "axial",
           }),
         });
         if (!response.ok) {
@@ -933,7 +932,7 @@ function WorkspaceViewer() {
             user_email: localStorage.getItem("email") ?? "",
             user_name: localStorage.getItem("name") ?? "",
             model_id: 10000011,
-            viewplane: "axial",
+            view_plane: "axial",
             user_token: localStorage.getItem("token") ?? "",
             direction,
           }),
@@ -1144,7 +1143,7 @@ function WorkspaceViewer() {
                   <div className="flex flex-row gap-2 "> <Info size={20} className="text-[#ffffff]" /><h2 className="text-white text-[17px] font-medium m-0">No Translation mode selected</h2></div>
 
                   <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
-                    Toggle a translation mode in order ti run an image tanslation.
+                    Toggle a translation mode in order to run an image tanslation.
                   </p>
                 </div>
                 <button onClick={() => setNoTranslationModeDialog(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">

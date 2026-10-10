@@ -10,6 +10,8 @@ import {
   useIsPresent,
 } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import { Info } from "lucide-react";
+import { FiX } from "react-icons/fi";
 import styled, { createGlobalStyle } from "styled-components";
 
 // Global styles for the overlay
@@ -685,6 +687,16 @@ function ImmersiveOverlay({ close, size }) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
+  // Forgot password state
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotEmailError, setForgotEmailError] = useState("");
+  const [forgotTouched, setForgotTouched] = useState(false);
+
+  // Reset password state
+  const [resetOtp, setResetOtp] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirm, setResetConfirm] = useState("");
+
   // Verification state
   const [otp, setOtp] = useState("");
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -736,6 +748,58 @@ function ImmersiveOverlay({ close, size }) {
       localStorage.setItem("email", signInEmail);
 
       navigate("/dashboard");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e) => {
+    e.stopPropagation();
+    const emailErr = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(forgotEmail) ? "" : "Enter a valid email address";
+    setForgotTouched(true);
+    setForgotEmailError(emailErr);
+    if (emailErr) return;
+
+    setError("");
+    setLoading(true);
+    try {
+      const baseURL = process.env.REACT_APP_API_URL || "";
+      await fetch(`${baseURL}/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail }),
+      });
+      setResetOtp(""); setResetPassword(""); setResetConfirm("");
+      setView("reset");
+    } catch {
+      setResetOtp(""); setResetPassword(""); setResetConfirm("");
+      setView("reset");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e) => {
+    e.stopPropagation();
+    if (resetPassword.length < 8) { setError("New password must be at least 8 characters."); return; }
+    if (resetPassword !== resetConfirm) { setError("Passwords do not match."); return; }
+    setError("");
+    setLoading(true);
+    try {
+      const baseURL = process.env.REACT_APP_API_URL || "";
+      const res = await fetch(`${baseURL}/auth/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: forgotEmail, otp: resetOtp, new_password: resetPassword }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(parseApiError(data, "Could not reset password."));
+      }
+      setSuccess("Password reset! You can now sign in.");
+      setTimeout(() => { setSuccess(""); switchView("signin"); }, 1800);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -819,6 +883,8 @@ function ImmersiveOverlay({ close, size }) {
         return "";
       case "confirmPassword":
         return value !== signUpPassword ? "Passwords do not match" : "";
+      case "phone":
+        return value.trim().length < 7 ? "Phone number is required" : "";
       case "licenseNumber":
         return value.trim().length < 2 ? "License number is required" : "";
       default:
@@ -877,7 +943,11 @@ function ImmersiveOverlay({ close, size }) {
     setShowPassword(false);
     setShowConfirm(false);
     setSignInErrors({});
+    setResetOtp(""); setResetPassword(""); setResetConfirm("");
     setSignInTouched({});
+    setForgotEmail("");
+    setForgotEmailError("");
+    setForgotTouched(false);
     setView(v);
   };
 
@@ -928,7 +998,87 @@ function ImmersiveOverlay({ close, size }) {
             style={{ height: "24px", width: "auto" }}
           />
 
-          {view === "verify" ? (
+          {view === "forgot" ? (
+            <>
+              <ModalHeader>
+                <ModalTitle>Reset your password</ModalTitle>
+                <ModalSubtitle>
+                  Enter your email address and we'll send you a 6-digit reset code.
+                </ModalSubtitle>
+              </ModalHeader>
+
+              <ModalInputs>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <ModalInput
+                    type="email"
+                    placeholder="Email"
+                    value={forgotEmail}
+                    onChange={(e) => { setForgotEmail(e.target.value); if (forgotTouched) setForgotEmailError(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.target.value) ? "" : "Enter a valid email address"); }}
+                    onBlur={(e) => { setForgotTouched(true); setForgotEmailError(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.target.value) ? "" : "Enter a valid email address"); }}
+                    style={forgotTouched && forgotEmailError ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {forgotTouched && forgotEmailError && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{forgotEmailError}</span>}
+                </div>
+              </ModalInputs>
+
+              {error ? <span style={{ color: "#ef4444", fontSize: 13 }}>{error}</span> : null}
+
+              <ModalControls>
+                <ModalButton onClick={handleForgotPassword} disabled={loading}>
+                  {loading ? "Sending..." : "Send reset code"}
+                </ModalButton>
+                <ModalFooterText>
+                  <ModalLink onClick={() => switchView("signin")}>Back to Sign In</ModalLink>
+                </ModalFooterText>
+              </ModalControls>
+            </>
+          ) : view === "reset" ? (
+            <>
+              <ModalHeader>
+                <ModalTitle>Enter your reset code</ModalTitle>
+                <ModalSubtitle>
+                  We sent a 6-digit code to <strong style={{ color: "#f5f5f5" }}>{forgotEmail}</strong>. Enter it below along with your new password.
+                </ModalSubtitle>
+              </ModalHeader>
+
+              <ModalInputs>
+                <ModalInput
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="000000"
+                  maxLength={6}
+                  value={resetOtp}
+                  onChange={(e) => setResetOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  style={{ letterSpacing: "0.3em", textAlign: "center", fontSize: "22px" }}
+                />
+                <ModalInput
+                  type="password"
+                  placeholder="New password (min 8 characters)"
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                />
+                <ModalInput
+                  type="password"
+                  placeholder="Confirm new password"
+                  value={resetConfirm}
+                  onChange={(e) => setResetConfirm(e.target.value)}
+                />
+              </ModalInputs>
+
+              {error ? <span style={{ color: "#ef4444", fontSize: 13 }}>{error}</span> : null}
+              {success ? <ModalSuccess>{success}</ModalSuccess> : null}
+
+              <ModalControls>
+                <ModalButton onClick={handleResetPassword} disabled={loading || resetOtp.length < 6 || !!success}>
+                  {loading ? "Resetting..." : "Reset password"}
+                </ModalButton>
+                <ModalFooterText>
+                  Didn't get a code?{" "}
+                  <ModalLink onClick={() => switchView("forgot")}>Try again</ModalLink>
+                </ModalFooterText>
+              </ModalControls>
+            </>
+          ) : view === "verify" ? (
             <>
               <ModalHeader>
                 <ModalTitle>Check your email</ModalTitle>
@@ -997,6 +1147,14 @@ function ImmersiveOverlay({ close, size }) {
                     style={signInTouched.password && signInErrors.password ? { borderColor: "#ef4444" } : {}}
                   />
                   {signInTouched.password && signInErrors.password && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{signInErrors.password}</span>}
+                  <span
+                    onClick={() => switchView("forgot")}
+                    style={{ alignSelf: "flex-end", fontSize: 12, color: "#6b6b6b", cursor: "pointer", paddingRight: 4 }}
+                    onMouseEnter={e => e.target.style.color = "#f5f5f5"}
+                    onMouseLeave={e => e.target.style.color = "#6b6b6b"}
+                  >
+                    Forgot password?
+                  </span>
                 </div>
               </ModalInputs>
 
@@ -1012,7 +1170,15 @@ function ImmersiveOverlay({ close, size }) {
                     handleSignIn(e);
                   }}
                 >
-                  {loading ? "Signing in..." : "Sign In"}
+                  {loading ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      Signing in...
+                    </span>
+                  ) : "Sign In"}
                 </ModalButton>
                 <ModalFooterText>
                   Don't have an account?{" "}
@@ -1100,13 +1266,21 @@ function ImmersiveOverlay({ close, size }) {
                   {touched.confirmPassword && fieldErrors.confirmPassword && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.confirmPassword}</span>}
                 </div>
 
-                {/* Phone (optional) */}
-                <ModalInput
-                  type="tel"
-                  placeholder="Phone Number (optional)"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                />
+                {/* Phone */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <label style={{ fontSize: 12, color: "#9ca3af", paddingLeft: 4 }}>
+                    Phone Number <span style={{ color: "#ef4444" }}>*</span>
+                  </label>
+                  <ModalInput
+                    type="tel"
+                    placeholder="Phone Number"
+                    value={phone}
+                    onChange={(e) => { setPhone(e.target.value); if (touched.phone) setFieldErrors(p => ({ ...p, phone: validateField("phone", e.target.value) })); }}
+                    onBlur={(e) => handleBlur("phone", e.target.value)}
+                    style={touched.phone && fieldErrors.phone ? { borderColor: "#ef4444" } : {}}
+                  />
+                  {touched.phone && fieldErrors.phone && <span style={{ color: "#ef4444", fontSize: 12, paddingLeft: 4 }}>{fieldErrors.phone}</span>}
+                </div>
 
                 {/* Institution (optional) */}
                 <ModalInput
@@ -1135,10 +1309,10 @@ function ImmersiveOverlay({ close, size }) {
                 <ModalButton
                   onClick={(e) => {
                     // Touch all required fields to show any missed errors
-                    const fields = { fullName, signUpEmail, signUpPassword, confirmPassword, licenseNumber };
+                    const fields = { fullName, signUpEmail, signUpPassword, confirmPassword, phone, licenseNumber };
                     const errors = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, validateField(k, v)]));
                     setFieldErrors(errors);
-                    setTouched({ fullName: true, signUpEmail: true, signUpPassword: true, confirmPassword: true, licenseNumber: true });
+                    setTouched({ fullName: true, signUpEmail: true, signUpPassword: true, confirmPassword: true, phone: true, licenseNumber: true });
                     if (Object.values(errors).some(Boolean)) return;
                     handleSignUp(e);
                   }}
@@ -1177,17 +1351,22 @@ function ImmersiveOverlay({ close, size }) {
               exit={{ y: 16, opacity: 0, scale: 0.97 }}
               transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full max-w-[400px] bg-[#161616] border gap-5 border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+              className="relative w-full max-w-[400px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
             >
-              <div className="flex items-start justify-between px-7 pt-7">
-                <h2 className="text-white text-[17px] font-medium m-0">Something went wrong</h2>
+              {/* Header */}
+              <div className="flex items-start justify-between px-7 pt-7 pb-5">
+                <div>
+                  <div className="flex flex-row gap-2 items-center">
+                    <Info size={20} className="text-white" />
+                    <h2 className="text-white text-[17px] font-medium m-0">Something went wrong</h2>
+                  </div>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">{error}</p>
+                </div>
                 <button onClick={() => setError("")} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
+                  <FiX size={18} />
                 </button>
               </div>
-              <p className="px-7 text-[#6B6B6B] text-[14px] m-0 leading-relaxed">{error}</p>
+              {/* Footer */}
               <div className="px-7 pb-6">
                 <button
                   onClick={() => setError("")}

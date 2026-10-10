@@ -613,10 +613,10 @@ function StudiesModal({ isOpen, onClose, scans, onOpen }) {
             exit={{ y: 16, opacity: 0, scale: 0.97 }}
             transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
             onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-[820px] max-h-[85vh] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            className="relative w-full max-w-[820px] max-h-[85vh] bg-[#0c0c0c] border border-[#0c0c0c] rounded-2xl flex flex-col overflow-hidden"
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-7 py-5 border-b border-[#1E1E1E] shrink-0">
+            <div className="flex items-center justify-between px-7 py-5 border-b border-[#0c0c0c] shrink-0">
               <div>
                 <h2 className="text-white text-[17px] font-medium m-0">Imaging Studies</h2>
                 <p className="text-[#6B6B6B] text-[12px] m-0 mt-0.5">{scans.length} {scans.length === 1 ? "study" : "studies"} associated with this patient</p>
@@ -723,26 +723,25 @@ function PatientDetailsPage() {
   const openStudy = (study) => { setActiveStudy(study); setActiveSeries(null); }; // eslint-disable-line no-unused-vars
 
   const fetchStudies = useCallback(async () => {
+    if (!caseId) return;
     setStudiesLoading(true);
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      const res = await authFetch(`${baseURL}/imaging-studies/?limit=100`);
+      const res = await authFetch(`${baseURL}/imaging-studies/case/${caseId}`);
       if (!res.ok) return;
       const data = await res.json();
       setStudies(
-        data
-          .filter((s) => s.case_id === caseId)
-          .map((s) => ({
-            id: s.id,
-            modality: s.modality,
-            label: s.study_name,
-            region: s.body_region ?? "",
-            accNumber: s.acc_number ?? "",
-            date: s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
-            studyId: s.id,
-            case_id: s.case_id,
-            flagged: s.flagged,
-          }))
+        data.map((s) => ({
+          id: s.id,
+          modality: s.modality,
+          label: s.study_name,
+          region: s.body_region ?? "",
+          accNumber: s.acc_number ?? "",
+          date: s.study_date ? new Date(s.study_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
+          studyId: s.id,
+          case_id: s.case_id,
+          flagged: s.flagged,
+        }))
       );
     } catch (_) { }
     finally { setStudiesLoading(false); }

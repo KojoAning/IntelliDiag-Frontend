@@ -281,16 +281,52 @@ export async function parseDicomFile(file) {
  * reconstruct the Study -> Series hierarchy on ingest. Returns null if the
  * file isn't valid DICOM or is missing the UIDs that define the hierarchy.
  */
+// Deterministic UID from a seed string — used when DICOM files lack proper UIDs.
+// Uses FNV-1a over two independent hash states so the 20-digit decimal is collision-resistant
+// enough for grouping within a single upload session.
+function makeSyntheticUid(seed) {
+  let h1 = 0x811c9dc5, h2 = 0x33333333;
+  for (let i = 0; i < seed.length; i++) {
+    const c = seed.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ (c * 31), 0x00000c35);
+  }
+  return `2.25.${h1 >>> 0}${h2 >>> 0}`;
+}
+
 export async function parseDicomForIngest(file) {
   try {
     const buffer    = await file.arrayBuffer();
     const byteArray = new Uint8Array(buffer);
-    const ds        = dicomParser.parseDicom(byteArray);
+    let ds;
+    try {
+      ds = dicomParser.parseDicom(byteArray);
+    } catch (parseErr) {
+      try {
+        ds = dicomParser.parseDicom(byteArray, { allowInvalidVRLength: true });
+      } catch {
+        console.debug(`[DICOM parse] ${file.name} — parseDicom threw: ${parseErr.message}`);
+        return null;
+      }
+    }
 
-    const studyUid  = str(ds, "x0020000d");
-    const seriesUid = str(ds, "x0020000e");
-    const sopUid    = str(ds, "x00080018");
-    if (!studyUid || !seriesUid || !sopUid) return null;  // not a filable instance
+    let studyUid  = str(ds, "x0020000d");
+    let seriesUid = str(ds, "x0020000e");
+    let sopUid    = str(ds, "x00080018");
+
+    // Non-conformant files (old/proprietary equipment) may lack UIDs entirely.
+    // Synthesize them from the folder path so files in the same folder are grouped
+    // into the same study/series, and each file gets a unique SOP UID.
+    if (!studyUid || !seriesUid || !sopUid) {
+      const relPath = file.webkitRelativePath || file.name;
+      const parts   = relPath.replace(/\\/g, "/").split("/");
+      const studyKey  = parts.length > 1 ? parts[0] : relPath;
+      const seriesKey = parts.length > 2 ? parts.slice(0, -1).join("/") : studyKey;
+      studyUid  = studyUid  || makeSyntheticUid("study:"  + studyKey);
+      seriesUid = seriesUid || makeSyntheticUid("series:" + seriesKey);
+      sopUid    = sopUid    || makeSyntheticUid("sop:"    + relPath);
+      console.debug(`[DICOM synthetic] ${file.name} — UIDs synthesized from path "${relPath}"`);
+    }
 
     const seriesNumberRaw = str(ds, "x00200011");
     const seriesNumber = seriesNumberRaw !== "" ? parseInt(seriesNumberRaw, 10) : null;

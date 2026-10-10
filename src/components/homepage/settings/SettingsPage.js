@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { FiCheck, FiX } from "react-icons/fi";
-import { motion } from "framer-motion";
-import { getSettings, patchProfileSettings, patchNotificationSettings, patchSecuritySettings, patchDataRetentionSettings } from "../../../lib/api";
+import { motion, AnimatePresence } from "framer-motion";
+import { getSettings, patchProfileSettings, patchNotificationSettings, patchSecuritySettings, patchDataRetentionSettings, getSessions, signOut, signOutAll, revokeSession, changePassword } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
@@ -221,8 +221,171 @@ function ProfileTab({ s, onUpdate }) {
   );
 }
 
+function ChangePasswordDialog({ onClose }) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(false);
+  const currentRef = useRef(null);
+
+  useEffect(() => { setTimeout(() => currentRef.current?.focus(), 50); }, []);
+
+  const handleSave = async () => {
+    setError(null);
+    if (!current) { setError("Enter your current password."); return; }
+    if (next.length < 8) { setError("New password must be at least 8 characters."); return; }
+    if (next !== confirm) { setError("Passwords do not match."); return; }
+    setSaving(true);
+    try {
+      await changePassword({ current_password: current, new_password: next });
+      setSuccess(true);
+      setTimeout(onClose, 1600);
+    } catch (err) {
+      setError(err.message || "Could not change password.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-[999] flex items-center justify-center"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      onClick={saving ? undefined : onClose}
+    >
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <motion.div
+        initial={{ y: 20, opacity: 0, scale: 0.97 }}
+        animate={{ y: 0, opacity: 1, scale: 1 }}
+        exit={{ y: 12, opacity: 0, scale: 0.97 }}
+        transition={{ duration: 0.22, ease: [0.32, 0.72, 0, 1] }}
+        onClick={e => e.stopPropagation()}
+        className="relative w-full max-w-[420px] bg-[#161616] border border-[#1E1E1E] rounded-2xl overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-7 pt-7 pb-5">
+          <div>
+            <h2 className="text-white text-[17px] font-medium m-0">Change Password</h2>
+            <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">Enter your current password to set a new one.</p>
+          </div>
+          <button onClick={onClose} disabled={saving}
+            className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5 disabled:opacity-30">
+            <FiX size={18} />
+          </button>
+        </div>
+
+        {/* Fields */}
+        <div className="px-7 pb-2 flex flex-col gap-3">
+          <div>
+            <label className="text-[12px] text-[#6B6B6B] mb-1.5 block">Current password</label>
+            <input
+              ref={currentRef}
+              type="password"
+              value={current}
+              onChange={e => setCurrent(e.target.value)}
+              disabled={saving || success}
+              className="bg-[#111] border border-[#1E1E1E] focus:border-[#0694FB]/50 text-white text-[14px] rounded-xl px-4 py-2.5 focus:outline-none w-full transition-colors disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="text-[12px] text-[#6B6B6B] mb-1.5 block">New password</label>
+            <input
+              type="password"
+              placeholder="Minimum 8 characters"
+              value={next}
+              onChange={e => setNext(e.target.value)}
+              disabled={saving || success}
+              className="bg-[#111] border border-[#1E1E1E] focus:border-[#0694FB]/50 text-white text-[14px] rounded-xl px-4 py-2.5 focus:outline-none w-full transition-colors disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="text-[12px] text-[#6B6B6B] mb-1.5 block">Confirm new password</label>
+            <input
+              type="password"
+              value={confirm}
+              onChange={e => setConfirm(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") onClose(); }}
+              disabled={saving || success}
+              className="bg-[#111] border border-[#1E1E1E] focus:border-[#0694FB]/50 text-white text-[14px] rounded-xl px-4 py-2.5 focus:outline-none w-full transition-colors disabled:opacity-50"
+            />
+          </div>
+
+          {error && (
+            <p className="m-0 text-[13px] text-red-400 flex items-center gap-1.5">
+              <FiX size={13} className="shrink-0" />{error}
+            </p>
+          )}
+          {success && (
+            <p className="m-0 text-[13px] text-emerald-400 flex items-center gap-1.5">
+              <FiCheck size={13} className="shrink-0" />Password changed successfully.
+            </p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-7 pt-4 pb-6 flex gap-3">
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 py-2.5 rounded-full bg-transparent border border-[#2a2a2a] text-[#6B6B6B] hover:text-white hover:border-[#3a3a3a] text-[13px] font-medium cursor-pointer transition-colors disabled:opacity-30">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving || success}
+            className="flex-1 py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 flex items-center justify-center gap-2">
+            {saving && <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin block" />}
+            {saving ? "Saving…" : "Save password"}
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function ChangePasswordRow() {
+  const [open, setOpen] = useState(false);
+  const [justChanged, setJustChanged] = useState(false);
+
+  const handleClose = () => {
+    setOpen(false);
+    setJustChanged(true);
+    setTimeout(() => setJustChanged(false), 3000);
+  };
+
+  return (
+    <>
+      <div className="flex items-center justify-between py-5 border-b border-[#1a1a1a] gap-6">
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-[15px] font-medium text-white/80">Password</p>
+          <p className={`m-0 text-[14px] mt-0 ${justChanged ? "text-emerald-400" : "text-[#6b6a6a]"}`}>
+            {justChanged ? "Password changed successfully." : "Update your account password."}
+          </p>
+        </div>
+        <button onClick={() => setOpen(true)}
+          className="text-[12px] font-medium px-3 py-1.5 rounded-full text-[#0694FB] hover:bg-[rgba(6,148,251,0.08)] bg-transparent cursor-pointer transition-colors">
+          Change
+        </button>
+      </div>
+
+      <AnimatePresence>
+        {open && <ChangePasswordDialog onClose={handleClose} />}
+      </AnimatePresence>
+    </>
+  );
+}
+
 function SecurityTab({ s, onUpdate }) {
   const [saving, setSaving] = useState({});
+  const [sessions, setSessions] = useState([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [revokingId, setRevokingId] = useState(null);
+  const [signOutAllLoading, setSignOutAllLoading] = useState(false);
+
+  useEffect(() => {
+    getSessions()
+      .then(setSessions)
+      .catch(() => setSessions([]))
+      .finally(() => setSessionsLoading(false));
+  }, []);
 
   const toggle = async (key, val) => {
     setSaving(p => ({ ...p, [key]: true }));
@@ -231,19 +394,79 @@ function SecurityTab({ s, onUpdate }) {
     setSaving(p => ({ ...p, [key]: false }));
   };
 
+  const handleRevokeSession = async (id) => {
+    setRevokingId(id);
+    try {
+      await revokeSession(id);
+      setSessions(prev => prev.filter(s => s.id !== id));
+    } catch { }
+    setRevokingId(null);
+  };
+
+  const handleSignOutAll = async () => {
+    setSignOutAllLoading(true);
+    try {
+      await signOutAll();
+      // Sign out locally too — all sessions including current are revoked
+      try { await signOut(); } catch { }
+      ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k));
+      window.location.href = "/";
+    } catch {
+      setSignOutAllLoading(false);
+    }
+  };
+
   return (
     <div>
       <SectionCard title="Authentication">
-        <SettingRow label="Password" description="Last changed 3 months ago." />
+        <ChangePasswordRow />
         <ToggleRow label="Two-factor authentication" description="Require a verification code at each login."
           checked={s.two_factor_enabled} onChange={v => toggle("two_factor_enabled", v)} saving={saving.two_factor_enabled} />
         <ToggleRow label="Login alerts" description="Email me when a new device signs into my account."
           checked={s.login_alerts} onChange={v => toggle("login_alerts", v)} saving={saving.login_alerts} />
       </SectionCard>
       <SectionCard title="Active Sessions">
-        <SettingRow label="Current session" description="Windows 11 · Chrome · Accra, Ghana"
-          badge={{ label: "Active", cls: " text-emerald-400 border-none" }} />
-        <SettingRow label="Sign out all other sessions" description="Force sign-out on all other devices." danger onDanger={() => { }} />
+        {sessionsLoading ? (
+          <p className="text-[14px] text-[#6b6a6a] py-4 m-0">Loading sessions…</p>
+        ) : sessions.length === 0 ? (
+          <p className="text-[14px] text-[#6b6a6a] py-4 m-0">No active sessions found.</p>
+        ) : (
+          sessions.map(session => (
+            <div key={session.id} className="flex items-center justify-between py-5 border-b border-[#1a1a1a] last:border-0 gap-6">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="m-0 text-[15px] font-medium text-white/80">
+                    {session.device_hint || "Unknown device"}
+                  </p>
+                  {session.is_current && (
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full text-emerald-400">
+                      Current
+                    </span>
+                  )}
+                </div>
+                <p className="m-0 text-[14px] text-[#6b6a6a]">
+                  {session.ip_address || "Unknown IP"} · Last active {new Date(session.last_active_at).toLocaleDateString()}
+                </p>
+              </div>
+              {!session.is_current && (
+                <button
+                  onClick={() => handleRevokeSession(session.id)}
+                  disabled={revokingId === session.id}
+                  className="text-[13px] text-red-400 hover:text-red-300 bg-transparent border-none cursor-pointer disabled:opacity-50 shrink-0"
+                >
+                  {revokingId === session.id ? "Revoking…" : "Revoke"}
+                </button>
+              )}
+            </div>
+          ))
+        )}
+        <SettingRow
+          label="Sign out all sessions"
+          description="Force sign-out on all devices including this one."
+          danger
+          onDanger={handleSignOutAll}
+          value={signOutAllLoading ? "Signing out…" : undefined}
+        />
       </SectionCard>
     </div>
   );

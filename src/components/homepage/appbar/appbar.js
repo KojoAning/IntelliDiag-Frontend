@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { FaBell } from "react-icons/fa";
-import { FiLogOut, FiChevronRight, FiCheck } from "react-icons/fi";
+import { FiChevronRight, FiCheck } from "react-icons/fi";
 
 import { useNavigate, useLocation } from "react-router-dom";
 import { getNotifications, getUnreadCount, markNotificationRead, markAllNotificationsRead } from "../../../lib/api";
@@ -98,8 +98,6 @@ function Appbar() {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const collabRef = useRef(null);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const profileRef = useRef(null);
   const navigate = useNavigate();
   const { pathname, state: locationState } = useLocation();
   const breadcrumbs = getBreadcrumbs(pathname);
@@ -164,7 +162,6 @@ function Appbar() {
     function handleClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
       // if (collabRef.current && !collabRef.current.contains(e.target)) setCollabOpen(false);
-      if (profileRef.current && !profileRef.current.contains(e.target)) setProfileOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -339,55 +336,16 @@ function Appbar() {
         </div>
 
         {/* User */}
-        <div ref={profileRef} className="relative">
-          <button
-            onClick={() => setProfileOpen(v => !v)}
-            className="inline-flex justify-start items-center gap-3 bg-transparent border-none cursor-pointer rounded-xl px-2 py-1 hover:bg-white/5 transition-colors"
-          >
-            <img
-              className="w-11 h-11 rounded-full"
-              src={`https://api.dicebear.com/9.x/initials/jpg?seed=${encodeURIComponent(userName)}&scale=70`}
-              alt="avatar"
-            />
-            <div className="inline-flex flex-col justify-start items-start">
-              <div className="text-white/50 text-[10px] font-medium uppercase font-[Inter]">{userRole}</div>
-              <div className="text-white/80 text-sm font-medium font-[Inter]">{userName}</div>
-            </div>
-          </button>
-
-          {/* Profile popover */}
-          {profileOpen && (
-            <div
-              className="absolute right-0 top-[calc(100%+10px)] w-[200px] rounded-[18px] overflow-hidden shadow-2xl"
-              style={{
-                background: "rgba(30,30,30,0.85)",
-                backdropFilter: "blur(28px)",
-                WebkitBackdropFilter: "blur(28px)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                animation: "notifFadeIn 0.15s ease forwards",
-              }}
-            >
-              {/* Profile header */}
-              <div className="flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]">
-                <img className="w-9 h-9 rounded-full shrink-0" src="https://placehold.co/44x44" alt="avatar" />
-                <div>
-                  <p className="text-white text-[13px] font-medium m-0">{userName}</p>
-                  <p className="text-white/40 text-[11px] m-0">{userRole}</p>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="px-2 py-2">
-                <button
-                  onClick={() => { ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k)); setProfileOpen(false); navigate("/"); }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[#FF6B6B] hover:bg-[rgba(255,107,107,0.1)] bg-transparent border-none cursor-pointer transition-colors text-[13px]"
-                >
-                  <FiLogOut size={14} />
-                  <span>Sign out</span>
-                </button>
-              </div>
-            </div>
-          )}
+        <div className="inline-flex justify-start items-center gap-3 rounded-xl px-2 py-1">
+          <img
+            className="w-11 h-11 rounded-full"
+            src={`https://api.dicebear.com/9.x/initials/jpg?seed=${encodeURIComponent(userName)}&scale=70`}
+            alt="avatar"
+          />
+          <div className="inline-flex flex-col justify-start items-start">
+            <div className="text-white/50 text-[10px] font-medium uppercase font-[Inter]">{userRole}</div>
+            <div className="text-white/80 text-sm font-medium font-[Inter]">{userName}</div>
+          </div>
         </div>
       </div>
 

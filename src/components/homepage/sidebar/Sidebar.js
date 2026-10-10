@@ -4,6 +4,7 @@ import { HiLogout } from "react-icons/hi";
 import { FiX } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
+import { signOut } from "../../../lib/api";
 
 const menuItems = [
   { name: "Home",             icon: <HiHome size={20} />,         path: "/dashboard" },
@@ -18,7 +19,8 @@ function Sidebar({ activePage = "Home" }) {
   const navigate = useNavigate();
   const [logoutConfirm, setLogoutConfirm] = useState(false);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try { await signOut(); } catch { /* session may already be expired */ }
     ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k));
     navigate("/");
   };

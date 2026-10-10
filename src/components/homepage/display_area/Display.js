@@ -88,7 +88,7 @@ function SectionLabel({ children }) {
 }
 
 function EmptyRow({ text }) {
-  return <p className="text-[#2a2a2a] text-xs font-mono py-2 m-0">{text}</p>;
+  return <p className="text-[#5e5e5e] text-sm py-2 m-0 text-center">{text}</p>;
 }
 
 function ActivityTable({ headers, children }) {

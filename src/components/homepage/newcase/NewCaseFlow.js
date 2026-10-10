@@ -79,11 +79,11 @@ function StepPatientInfo({ data, onChange }) {
         <input type="text" placeholder="e.g. 6864558" value={data.mrn || ""} onChange={(e) => onChange("mrn", e.target.value)} className={inputCls} />
       </div>
       <div>
-        <label className={labelCls}>Phone</label>
+        <label className={labelCls}>Phone <span className="text-[#FF4A4A]">*</span></label>
         <input type="tel" placeholder="+1 555 000 0000" value={data.phone || ""} onChange={(e) => onChange("phone", e.target.value)} className={inputCls} />
       </div>
       <div className="col-span-2">
-        <label className={labelCls}>Email</label>
+        <label className={labelCls}>Email <span className="text-[#FF4A4A]">*</span></label>
         <input type="email" placeholder="patient@example.com" value={data.email || ""} onChange={(e) => onChange("email", e.target.value)} className={inputCls} />
       </div>
     </div>

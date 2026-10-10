@@ -6,6 +6,7 @@ import App from './App';
 posthog.init(process.env.REACT_APP_POSTHOG_KEY, {
   api_host: process.env.REACT_APP_POSTHOG_HOST || 'https://us.i.posthog.com',
   person_profiles: 'identified_only',
+  on_xhr_error: () => {}, // suppress console noise when ad blockers block the request
 });
 
 const root = ReactDOM.createRoot(document.getElementById('root'));

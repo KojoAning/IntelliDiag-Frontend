@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { FiX, FiUploadCloud, FiLoader, FiFolder, FiLayers } from "react-icons/fi";
+import { FiX, FiUploadCloud, FiLoader, FiFolder, FiLayers, FiAlertCircle } from "react-icons/fi";
 import { ingestDicom } from "../../../lib/api";
 import { parseDicomForIngest } from "../../../lib/dicomUtils";
 
@@ -9,16 +9,16 @@ import { parseDicomForIngest } from "../../../lib/dicomUtils";
 const CONCURRENCY = 4;
 
 const modalityColors = {
-  MR:         "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
-  CT:         "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]",
-  "X-Ray":    "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
+  MR: "text-[#0694FB] bg-[rgba(6,148,251,0.12)]",
+  CT: "text-[#F59E0B] bg-[rgba(245,158,11,0.12)]",
+  "X-Ray": "text-[#22C55E] bg-[rgba(34,197,94,0.12)]",
   Ultrasound: "text-[#A855F7] bg-[rgba(168,85,247,0.12)]",
 };
 
 /** "YYYYMMDD" -> "DD Mon YYYY" */
 function fmtDicomDate(raw) {
   if (!raw || raw.length < 8) return "";
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return `${raw.slice(6, 8)} ${months[parseInt(raw.slice(4, 6), 10) - 1] ?? ""} ${raw.slice(0, 4)}`;
 }
 
@@ -57,6 +57,39 @@ function buildTree(parsed) {
   }));
 }
 
+const NON_DICOM_EXTENSIONS = new Set([
+  "xml", "json", "txt", "html", "htm", "css", "js", "ts", "csv", "log", "ini", "cfg",
+  "png", "jpg", "jpeg", "gif", "bmp", "svg", "webp", "tiff", "tif",
+  "pdf", "zip", "tar", "gz", "7z", "rar",
+  "mp4", "mov", "avi", "mkv", "mp3", "wav",
+  "db", "sqlite", "exe", "dll", "sys", "DS_Store", "lnk",
+]);
+
+/** Returns true only if the file looks like DICOM (magic bytes "DICM" at offset 128). */
+async function looksLikeDicom(file) {
+  if (file.size < 132) {
+    console.debug(`[DICOM skip] ${file.name} — too small (${file.size} bytes)`);
+    return false;
+  }
+  const ext = file.name.split(".").pop().toLowerCase();
+  if (file.name.includes(".") && NON_DICOM_EXTENSIONS.has(ext)) {
+    console.debug(`[DICOM skip] ${file.name} — non-DICOM extension (.${ext})`);
+    return false;
+  }
+  try {
+    const buf = await file.slice(128, 132).arrayBuffer();
+    const magic = new TextDecoder().decode(buf);
+    if (magic !== "DICM") {
+      console.debug(`[DICOM skip] ${file.name} — missing DICM preamble (got "${magic}")`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.debug(`[DICOM skip] ${file.name} — could not read preamble: ${err.message}`);
+    return false;
+  }
+}
+
 function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
@@ -87,12 +120,20 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
     if (!files.length) return;
     setParsing(true);
     setError(null);
+    setSkippedNonDicom(0); // reset on each new selection
     let nonDicom = 0;
     const results = [];
     for (const file of files) {
+      // Silently skip obvious non-DICOM files (XML, images, etc.) — don't count them
+      const candidate = await looksLikeDicom(file);
+      if (!candidate) continue;
+      // Only count as skipped if the file looked like DICOM but couldn't be parsed
       const meta = await parseDicomForIngest(file);
       if (meta) results.push({ file, meta });
-      else nonDicom += 1;
+      else {
+        console.debug(`[DICOM skip] ${file.name} — passed preamble check but missing required UIDs (studyUid / seriesUid / sopUid)`);
+        nonDicom += 1;
+      }
     }
     // De-dupe by SOP UID in case the same file was added twice
     setParsed(prev => {
@@ -103,7 +144,7 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
       }
       return merged;
     });
-    setSkippedNonDicom(n => n + nonDicom);
+    setSkippedNonDicom(nonDicom);
     setParsing(false);
   };
 
@@ -121,16 +162,17 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
     setProgress({ ...counters });
 
     const queue = [...parsed];
+    const failed = [];
     const worker = async () => {
       while (queue.length) {
-        const { file } = queue.shift();
+        const item = queue.shift();
         try {
-          await ingestDicom(caseId, file);
+          await ingestDicom(caseId, item.file);
           counters.done += 1;
         } catch (err) {
           // 409 = instance already on the server; treat as a skip, not a failure
           if (/already been uploaded/i.test(err.message)) counters.skipped += 1;
-          else counters.errors += 1;
+          else { counters.errors += 1; failed.push(item); }
         }
         setProgress({ ...counters });
       }
@@ -140,7 +182,8 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
     setUploading(false);
 
     if (counters.errors > 0) {
-      setError(`${counters.errors} file${counters.errors !== 1 ? "s" : ""} failed to import.`);
+      setError(`${counters.errors} file${counters.errors !== 1 ? "s" : ""} failed to import. Retry or select new files.`);
+      setParsed(failed);
     }
     onCreated?.();
     if (counters.errors === 0) onClose();
@@ -170,9 +213,12 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
             {/* Header */}
             <div className="flex items-start justify-between px-7 pt-7 pb-5 shrink-0">
               <div>
-                <h2 className="text-white text-[16px] font-medium m-0">Import DICOM Study</h2>
-                <p className="text-[#6B6B6B] text-[14px] m-0 mt-0.5">
-                  Drop a study's .dcm files. Studies &amp; series are detected automatically
+                <div className="flex flex-row gap-2 items-center">
+                  <FiUploadCloud size={20} className="text-white shrink-0" />
+                  <h2 className="text-white text-[17px] font-medium m-0">Import DICOM Study</h2>
+                </div>
+                <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
+                  Drop a study's .dcm files. Studies &amp; series are detected automatically.
                 </p>
               </div>
               <button
@@ -192,11 +238,10 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
                 onDragLeave={() => setDragging(false)}
                 onDrop={onDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className={`w-full rounded-xl border border-dashed flex flex-col items-center justify-center gap-2 py-7 cursor-pointer transition-all duration-200 ${
-                  dragging
-                    ? "border-[#0694FB] bg-[rgba(6,148,251,0.06)]"
-                    : "border-[#2a2a2a] bg-[#0d0d0d] hover:border-[#0694FB]/50 hover:bg-[rgba(6,148,251,0.03)]"
-                }`}
+                className={`w-full rounded-xl border border-dashed flex flex-col items-center justify-center gap-2 py-7 cursor-pointer transition-all duration-200 ${dragging
+                  ? "border-[#0694FB] bg-[rgba(6,148,251,0.06)]"
+                  : "border-[#2a2a2a] bg-[#0d0d0d] hover:border-[#0694FB]/50 hover:bg-[rgba(6,148,251,0.03)]"
+                  }`}
               >
                 <FiUploadCloud size={22} color={dragging ? "#0694FB" : "#3a3a3a"} />
                 <p className={`text-[13px] m-0 transition-colors ${dragging ? "text-[#0694FB]" : "text-[#4a4a4a]"}`}>
@@ -229,13 +274,14 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
               />
 
               {parsing && (
-                <p className="text-[#6B6B6B] text-[11px] mt-3 flex items-center gap-2">
-                  <FiLoader size={12} className="animate-spin" /> Reading DICOM headers…
+                <p className="text-[#6B6B6B] text-[14px] mt-3 flex items-center gap-2">
+                  <FiLoader size={14} className="animate-spin" /> Reading DICOM headers…
                 </p>
               )}
 
               {skippedNonDicom > 0 && (
-                <p className="text-[#F59E0B] text-[11px] mt-3 m-0">
+                <p className="text-[#F59E0B] text-[14px] mt-3 m-0 flex items-center gap-1.5">
+                  <FiAlertCircle size={14} className="shrink-0" />
                   {skippedNonDicom} file{skippedNonDicom !== 1 ? "s" : ""} skipped (not valid DICOM)
                 </p>
               )}
@@ -288,8 +334,11 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
             {uploading && (
               <div className="mx-7 mb-3 mt-2">
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[#6B6B6B] text-[11px]">Importing…</span>
-                  <span className="text-white/60 text-[11px] font-mono">
+                  <span className="flex items-center gap-1.5 text-[#b8b8b8] text-[13px]">
+                    <FiLoader size={13} className="animate-spin" />
+                    Importing…
+                  </span>
+                  <span className="text-white/60 text-[13px] font-mono">
                     {progress.done + progress.skipped + progress.errors} / {progress.total}
                   </span>
                 </div>
@@ -310,31 +359,28 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
             )}
 
             {error && (
-              <div className="mx-7 mb-3 px-4 py-2.5 rounded-xl bg-[rgba(255,74,74,0.08)] border border-[rgba(255,74,74,0.2)]">
-                <p className="text-[#FF4A4A] text-xs m-0">{error}</p>
+              <div className="mx-7 mb-3 px-4 py-2.5 rounded-xl bg-[rgba(255,74,74,0.06)] border border-[rgba(255,74,74,0.15)] flex items-start gap-2">
+                <FiX size={13} className="text-[#FF4A4A] mt-0.5 shrink-0" />
+                <p className="text-[#FF4A4A] text-[12px] m-0">{error}</p>
               </div>
             )}
 
             {/* Footer */}
-            <div className="flex items-center justify-between px-7 py-5 border-t border-[#1E1E1E] shrink-0">
+            <div className="px-7 pb-6 pt-4 flex gap-3 shrink-0">
               <button
                 onClick={onClose}
                 disabled={uploading}
-                className="px-4 py-2 rounded-xl border border-[#1E1E1E] text-[#6B6B6B] text-sm bg-transparent hover:border-[#2a2a2a] hover:text-white cursor-pointer transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                className="flex-1 py-2.5 rounded-full bg-transparent border border-[#2a2a2a] text-[#6B6B6B] hover:text-white hover:border-[#3a3a3a] text-[13px] font-medium cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {error ? "Close" : "Cancel"}
               </button>
               <button
                 onClick={handleImport}
                 disabled={uploading || parsing || parsed.length === 0}
-                className={`px-5 py-2 rounded-md text-sm font-medium border-none transition-all duration-200 flex items-center gap-2 ${
-                  !uploading && !parsing && parsed.length > 0
-                    ? "bg-[#0694FB] text-white cursor-pointer hover:bg-[#0578d1]"
-                    : "bg-[#1a1a1a] text-[#3a3a3a] cursor-not-allowed"
-                }`}
+                className="flex-1 py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {uploading && <FiLoader size={13} className="animate-spin" />}
-                {uploading ? "Importing…" : `Import`}
+                {uploading ? "Importing…" : "Import"}
               </button>
             </div>
           </motion.div>

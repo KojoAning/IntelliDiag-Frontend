@@ -614,10 +614,11 @@ function WorkspaceViewer() {
       const existingJob = jobs.find(j => String(j.model_id) === '10000001');
 
       let job_id;
-      if (existingJob) {
+      if (existingJob && existingJob.status !== "failed") {
         job_id = existingJob.id;
       } else {
-
+        // Previous attempt failed — retire that job record and submit a fresh one.
+        if (existingJob) await deprecateJob(existingJob.id);
         const newJobId = crypto.randomUUID();
         const response = await fetch(`${process.env.REACT_APP_API_IMAGE_ENHANCEMENT_BASE}/bm3d/enhance`, {
           method: "POST",
@@ -631,7 +632,7 @@ function WorkspaceViewer() {
             user_email: localStorage.getItem("email"),
             user_name: localStorage.getItem("name"),
             model_id: 10000001,
-            viewplane: viewMode,
+            viewplane: viewMode === "mpr" ? "axial" : viewMode,
           }),
         });
         if (!response.ok) {
@@ -702,6 +703,21 @@ function WorkspaceViewer() {
     return data.token;
   };
 
+  // Marks a dead (failed) job record as deprecated so it stops being treated as "the"
+  // job for this series+model. Best-effort — a failure here shouldn't block the retry
+  // that's about to happen under a new job id.
+  const deprecateJob = async (jobId) => {
+    try {
+      await authFetch(`${API_BASE}/jobs/update/${jobId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deprecated: true }),
+      });
+    } catch (err) {
+      console.warn(`Failed to deprecate job ${jobId}:`, err);
+    }
+  };
+
 
   const runAnalysis2 = async () => {
     if (aiLoading) return;
@@ -728,16 +744,21 @@ function WorkspaceViewer() {
 
       const existingJob = jobs.find(j => String(j.model_id) === String(selectedModel?.id));
 
-      // Step 2: Use existing job id or submit a new job
+      // Step 2: Use existing job id or submit a new job — but only reuse a job that's
+      // still alive. A previously-failed job is a dead end server-side; reusing its id
+      // would just re-poll the same stale "failed" status without ever re-running inference.
       let job_id;
-      if (existingJob) {
+      if (existingJob && existingJob.status !== "failed") {
         job_id = existingJob.id;
       } else {
+        // Previous attempt failed — retire that job record and submit a fresh one.
+        if (existingJob) await deprecateJob(existingJob.id);
         const newJobId = crypto.randomUUID();
         const response = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}${selectedModel.endpoint_url}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            job_id: newJobId,
             series_id: activeSeries?.id,
             token: seriesToken,
             user_token: localStorage.getItem("token"),

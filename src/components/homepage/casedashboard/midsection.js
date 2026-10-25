@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import CornerstoneViewport from "./CornerstoneViewport";
 import CornerstoneVolumeViewport from "./CornerstoneVolumeViewport";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
-import { annotation as csAnnotation, Enums as csToolsEnums } from "@cornerstonejs/tools";
+import { annotation as csAnnotation, Enums as csToolsEnums, CrosshairsTool } from "@cornerstonejs/tools";
 import {
   FiZoomIn, FiZoomOut, FiMaximize2, FiRotateCw, FiRotateCcw,
   FiChevronLeft, FiChevronRight,
@@ -130,8 +130,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
 
-  // View mode: "stack" (2D), "axial", "sagittal", "coronal" (MPR)
+  // View mode: "stack" (2D) or "mpr" (3-pane axial/sagittal/coronal, crosshair-linked)
   const [viewMode, setViewMode] = useState("stack");
+  const [activePlane, setActivePlane] = useState("axial");
 
   const switchViewMode = (mode) => {
     setViewMode(mode);
@@ -302,7 +303,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   useEffect(() => {
     const onSelectionChange = () => {
       const selected = csAnnotation.selection.getAnnotationsSelected?.() ?? [];
-      setHasSelection(selected.length > 0);
+      // Crosshairs' own reference-line annotation shouldn't count as a user selection
+      const real = selected.filter(uid => {
+        try { return csAnnotation.state.getAnnotation(uid)?.metadata?.toolName !== CrosshairsTool.toolName; }
+        catch (_) { return true; }
+      });
+      setHasSelection(real.length > 0);
     };
     const el = document.querySelector("[data-viewport-uid]") ?? window;
     // Cornerstone fires this event on the element; fall back to window
@@ -320,6 +326,17 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     });
     return () => { cancelled = true; };
   }, [images]);
+
+  // Per-slice segmentation masks, in the same order as imageIds — fed to the MPR
+  // viewport as a 3D labelmap so the mask reslices correctly on all 3 planes.
+  // GradCAM heatmaps are per-class saliency, not a coherent 3D object, so they're excluded
+  // (they stay on the flat 2D overlay in stack mode — see the overlay below).
+  const segmentationMaskSlices = useMemo(() => {
+    if (!inferenceResult?.slices?.length) return null;
+    const isGradCam = inferenceResult.slices.some(s => s.predicted_class != null);
+    if (isGradCam) return null;
+    return inferenceResult.slices.map(s => s.mask || null);
+  }, [inferenceResult]);
 
   // Extract DICOM metadata from the first DICOM image in the series.
   // Only use the local blob URL — never hit the stream endpoint for metadata.
@@ -562,10 +579,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 }`}
             >
               <TbView360 size={15} />
-              {viewMode === "stack" ? "MPR" : viewMode.toUpperCase()}
+              {viewMode === "stack" ? "MPR" : `MPR · ${activePlane.toUpperCase()}`}
             </button>
             {mprMenuOpen && (
-              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[130px]">
+              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[150px]">
                 <button
                   onClick={() => { switchViewMode("stack"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "stack" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
@@ -573,22 +590,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   2D Stack
                 </button>
                 <button
-                  onClick={() => { switchViewMode("axial"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
-                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "axial" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                  onClick={() => { switchViewMode("mpr"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "mpr" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
-                  Axial
-                </button>
-                <button
-                  onClick={() => { switchViewMode("sagittal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
-                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "sagittal" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
-                >
-                  Sagittal
-                </button>
-                <button
-                  onClick={() => { switchViewMode("coronal"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
-                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "coronal" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
-                >
-                  Coronal
+                  MPR (3-pane + crosshairs)
                 </button>
               </div>
             )}
@@ -745,13 +750,45 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               <CornerstoneVolumeViewport
                 ref={volumeVpRef}
                 imageIds={imageIds}
-                viewMode={viewMode}
                 activeTool={activeTool}
                 windowLevel={wlActive}
                 onArrowTextRequest={handleArrowTextRequest}
+                onActivePlaneChange={setActivePlane}
+                maskSlices={segmentationMaskSlices}
+                maskOpacity={maskOpacity}
               />
             )}
           </div>
+
+          {/* ── MPR segmentation opacity control — the 2D overlay's slider card only
+            renders in stack mode, but the mask is a real labelmap volume here too,
+            so give it an equivalent (lighter) control. ── */}
+          {viewMode !== "stack" && segmentationMaskSlices && (
+            <div className="absolute top-3 right-3 z-30 w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg">
+              <div className="px-3 py-2 flex items-center gap-2">
+                <span className="text-[12px] font-semibold text-white flex-1">Segmentation</span>
+                <button
+                  onClick={() => onInferenceResult(null)}
+                  className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0"
+                  title="Hide segmentation"
+                >✕</button>
+              </div>
+              <div className="border-t border-[#1E1E1E] bg-[#111]/60 px-3 py-2 flex items-center gap-2">
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={maskOpacity}
+                  onChange={e => setMaskOpacity(Number(e.target.value))}
+                  className="flex-1 min-w-0 h-1 accent-[#0694FB] cursor-pointer"
+                />
+                <span className="text-[#FFFFFF] text-[12px] w-[26px] text-right shrink-0">
+                  {Math.round(maskOpacity * 100)}%
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* DICOM corner overlays */}
           {imageIds.length > 0 && (

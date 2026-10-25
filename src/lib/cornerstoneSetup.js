@@ -14,6 +14,7 @@ import {
   ProbeTool,
   PlanarFreehandROITool,
   StackScrollTool,
+  CrosshairsTool,
 } from "@cornerstonejs/tools";
 import * as dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core";
@@ -66,6 +67,7 @@ export async function initCornerstone() {
       ProbeTool,
       PlanarFreehandROITool,
       StackScrollTool,
+      CrosshairsTool,
     ].forEach((T) => {
       try { addTool(T); } catch (_) { /* already added */ }
     });

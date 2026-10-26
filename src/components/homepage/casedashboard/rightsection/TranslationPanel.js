@@ -1,16 +1,19 @@
 import React, { useState } from "react";
 import { FiArrowRight } from "react-icons/fi";
 
-const MODALITIES = ["CT", "MR"];
 
 const PAIRS = [
   { from: "CT", to: "MR", description: "Synthesize MR contrast from CT scan" },
   { from: "MR", to: "CT", description: "Generate CT equivalent from MR scan" },
 ];
 
-function TranslationPanel({ onTranslate }) {
+function TranslationPanel({ onTranslate, modality }) {
   const [selected, setSelected] = useState(null); // { from, to }
   const [running, setRunning] = useState(false);
+
+  // Only offer the translation that starts from this series' modality ("MRI" counts as MR)
+  const normalized = (modality || "").toUpperCase().replace(/^MRI$/, "MR");
+  const pairs = PAIRS.filter(pair => pair.from === normalized);
 
   const handleRun = async () => {
     if (!selected || running) return;
@@ -18,6 +21,8 @@ function TranslationPanel({ onTranslate }) {
     await onTranslate?.(selected);
     setRunning(false);
   };
+
+  if (!pairs.length) return null;
 
   return (
     <div className="bg-[#161616] rounded-[15px] p-[18px] box-border flex flex-col gap-4 shrink-0">
@@ -28,7 +33,7 @@ function TranslationPanel({ onTranslate }) {
 
       {/* Pair selector */}
       <div className="flex flex-col gap-2">
-        {PAIRS.map(pair => {
+        {pairs.map(pair => {
           const isSelected = selected?.from === pair.from && selected?.to === pair.to;
           return (
             <button

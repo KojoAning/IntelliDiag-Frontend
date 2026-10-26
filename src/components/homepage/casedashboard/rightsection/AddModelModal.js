@@ -46,6 +46,7 @@ function ModalityPill({ label }) {
   );
 }
 
+
 function CatalogueCard({ model, added, onAdd, onRemove }) {
   return (
     <div className="bg-[#161616] border border-[#161616] rounded-[20px] px-6 py-4 flex flex-col gap-2 hover:border-[#2a2a2a] transition-colors">

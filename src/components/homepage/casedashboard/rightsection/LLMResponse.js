@@ -73,9 +73,12 @@ function renderInline(text) {
 // Height below which we collapse to the compact "View Report" button
 const COLLAPSE_THRESHOLD = 260;
 
-function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving, impression = "", onImpressionChange }) {
+function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving, impression = "", onImpressionChange, patientHistory = "", onPatientHistoryChange, activeTab: controlledTab, onTabChange }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState("system");
+  // Tab can be driven from outside (the "no patient history" prompt jumps straight to it)
+  const [localTab, setLocalTab] = useState("system");
+  const activeTab = controlledTab ?? localTab;
+  const setActiveTab = onTabChange ?? setLocalTab;
   const observerRef = useRef(null);
 
   // Callback ref — only re-attaches the ResizeObserver when a new DOM element mounts
@@ -136,7 +139,7 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
     >
       {/* Tabs */}
       <div className="flex items-center justify-between shrink-0">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setActiveTab("system")}
             className={`px-3 py-1.5 rounded-full text-[12px] font-medium border-none cursor-pointer transition-all ${
@@ -156,6 +159,16 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
             }`}
           >
             Your Report
+          </button>
+          <button
+            onClick={() => setActiveTab("history")}
+            className={`px-3 py-1.5 rounded-full text-[12px] font-medium border-none cursor-pointer transition-all ${
+              activeTab === "history"
+                ? "bg-[#0694FB] text-white"
+                : "bg-[rgba(6,148,251,0.17)] text-[#0694FB] hover:bg-[rgba(6,148,251,0.25)]"
+            }`}
+          >
+            Patient History
           </button>
         </div>
         {activeTab === "system" && response && (
@@ -192,6 +205,18 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
               </div>
             </div>
           )}
+        </div>
+      ) : activeTab === "history" ? (
+        <div className="flex flex-col gap-2 flex-1 min-h-[200px]">
+          <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0 shrink-0">Clinical History</p>
+          <textarea
+            value={patientHistory}
+            onChange={(e) => onPatientHistoryChange?.(e.target.value)}
+            placeholder="Symptoms, relevant history, prior findings, reason for the scan..."
+            style={{ minHeight: "240px", maxHeight: "240px", scrollbarWidth: "thin", scrollbarColor: "#303030 transparent" }}
+            className="w-full bg-[#111] border border-[#1E1E1E] rounded-xl px-3 py-2.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB] transition-colors resize-none overflow-y-auto"
+          />
+          <p className="text-[#6B6B6B] text-[11px] m-0">Used as context when the AI writes the report.</p>
         </div>
       ) : (
         <div className="flex flex-col gap-2 flex-1 min-h-[200px]">

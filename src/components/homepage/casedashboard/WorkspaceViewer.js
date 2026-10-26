@@ -6,9 +6,8 @@ import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
-import { getImagesForStudy, uploadDicom, getModels, authFetch } from "../../../lib/api";
-import { renderDicomThumbnail, parseMultipartBody, parseDicomInstanceInfo, getDicomMetadata } from "../../../lib/dicomUtils";
-import { thumbCache } from "./sidepanel";
+import { getSeriesForStudy, uploadDicom, getModels, authFetch } from "../../../lib/api";
+import { loadSeries, invalidateSeries, prefetchSeriesInBackground, PROJECTION_MODALITIES } from "../../../lib/seriesCache";
 import { Info, } from "lucide-react";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
@@ -31,7 +30,11 @@ function WorkspaceViewer() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [modelContexts, setModelContexts] = useState({}); // keyed by model id
   const [selectedModel, setSelectedModel] = useState(null);
-  const [inMprMode, setInMprMode] = useState(false);
+  // Carried across series switches (the viewer remounts per series — see the default export)
+  const [patientHistory, setPatientHistory] = useState(navState?.patient_history ?? "");
+  const [seriesList, setSeriesList] = useState(activeStudy.series ?? []);
+  const [noHistoryDialog, setNoHistoryDialog] = useState(false);
+  const [reportTab, setReportTab] = useState("system");
   const [viewMode, setViewMode] = useState("stack");
   const [dicomMetadata, setDicomMetadata] = useState(null);
   const [noModelDialog, setNoModelDialog] = useState(false);
@@ -68,6 +71,43 @@ function WorkspaceViewer() {
       })
       .catch(() => { });
   }, [activeSeries?.id, caseId, studyId]);
+
+  // Every series in the study, for the side panel's series cards
+  useEffect(() => {
+    if (!studyId) return;
+    let cancelled = false;
+    getSeriesForStudy(studyId)
+      .then(data => {
+        if (cancelled) return;
+        setSeriesList((data ?? []).map(s => ({
+          id: s.id,
+          name: s.series_name,
+          description: s.description ?? "",
+          modality: s.modality ?? "",
+          image_count: s.image_count ?? 0,
+        })));
+      })
+      .catch(() => { });
+    return () => { cancelled = true; };
+  }, [studyId]);
+
+  const handleSelectSeries = (series) => {
+    if (!series || String(series.id) === String(activeSeries?.id)) return;
+    navigate("/case-workspace/viewer", {
+      replace: true,
+      state: {
+        ...navState,
+        study: { ...activeStudy, study_id: studyId ?? activeStudy.study_id, series: seriesList },
+        series,
+        case_id: caseId ?? navState?.case_id,
+        // The jobs-page entry state belongs to the series the user arrived on
+        from_jobs: false,
+        job_id: null,
+        initial_status: null,
+        patient_history: patientHistory,
+      },
+    });
+  };
 
   const fileInputRef = useRef(null);
 
@@ -188,6 +228,10 @@ function WorkspaceViewer() {
         // Stream the report
         const slices = Array.isArray(results.slices) ? results.slices : [];
         const isGradCam = slices.some(s => s.predicted_class != null);
+        // Classification bundles name their own classes; anatomy bundles report structure
+        // volumes rather than "abnormality detected"
+        const isClassification = Array.isArray(results.class_labels);
+        const isAnatomy = results.class_volumes_cm3 != null;
         const detectedSlices = slices.filter(s => s.detected);
         const meanConf = slices.length ? slices.reduce((a, s) => a + (s.confidence ?? 0), 0) / slices.length : 0;
         const meanCoverage = slices.length ? slices.reduce((a, s) => a + (s.coverage_pct ?? 0), 0) / slices.length : 0;
@@ -199,10 +243,12 @@ function WorkspaceViewer() {
           body: JSON.stringify({
             metadata: null,
             patient_context: null,
-            model_type: isGradCam ? "gradcam" : "segmentation",
-            detected: detectedSlices.length > 0,
-            predicted_class: isGradCam ? (slices[0]?.predicted_class ?? null) : null,
-            scores: isGradCam ? (slices[0]?.scores ?? null) : null,
+            model_type: isClassification ? "classification" : isGradCam ? "gradcam" : "segmentation",
+            detected: isAnatomy || isClassification ? null : detectedSlices.length > 0,
+            predicted_class: isGradCam ? (results.predicted_class ?? slices[0]?.predicted_class ?? null) : null,
+            scores: isGradCam ? (results.scores ?? slices[0]?.scores ?? null) : null,
+            class_labels: results.class_labels ?? null,
+            class_volumes_cm3: results.class_volumes_cm3 ?? null,
             mean_confidence: meanConf,
             mean_coverage_pct: meanCoverage,
             total_slices: results.slice_count ?? slices.length,
@@ -401,97 +447,9 @@ function WorkspaceViewer() {
     }
   }, [selectedImage, currentModelId, images, getCachedInference, updateCtx]);
 
-  // Fetch all uploaded images for a series.
-  // Constructs stream URLs directly (1 API call instead of N).
-  const fetchImages = useCallback(async (seriesId) => {
-    const records = await getImagesForStudy(seriesId);
-    const uploaded = (records ?? []).filter(r => r.status === "uploaded");
-    return uploaded.map((record) => {
-      const fname = record.filename ?? "";
-      const isStandardImage = /\.(jpe?g|png|gif|bmp|webp|tiff?)$/i.test(fname);
-      const isDicom = isStandardImage
-        ? false
-        : (record.image_type ?? "dicom") === "dicom";
-      const fallbackName = isDicom ? `${record.id}.dcm` : `${record.id}.img`;
-      return {
-        id: record.id,
-        url: `${process.env.REACT_APP_API_BASE}/dicom/${record.id}/stream`,
-        thumbnailUrl: `${process.env.REACT_APP_API_BASE}/dicom/${record.id}/rendered?quality=jpeg`,
-        name: fname || fallbackName,
-        type: isDicom ? "application/dicom" : "image",
-        file: null,
-      };
-    });
-  }, []);
-
-  // Single bulk DICOM fetch for the whole series.
-  // Returns the imgs array with blobUrl attached to each entry, and pre-populates thumbCache.
-  // The viewer only receives images AFTER this resolves — Cornerstone never touches /stream.
-  const prefetchBulk = useCallback(async (seriesId, imgs) => {
-    const token = await getSeriesToken(seriesId);
-    const res = await fetch(
-      `${process.env.REACT_APP_API_BASE}/dicom/series/${seriesId}/bulk`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`Bulk fetch failed: ${res.status} — ${body.slice(0, 200)}`);
-    }
-
-    const contentType = res.headers.get("content-type") ?? "";
-    // Boundary may be quoted: boundary="abc" or unquoted: boundary=abc
-    const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^\s;]+))/);
-    const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
-    if (!boundary) throw new Error(`No multipart boundary in bulk response. content-type: ${contentType}`);
-
-    const buffer = await res.arrayBuffer();
-    const parts = parseMultipartBody(buffer, boundary);
-    ;
-
-    // Parse instance numbers and sort clinically. Wrapped in try/catch so a
-    // parse failure degrades to original order rather than aborting the bulk fetch.
-    let orderedParts = parts;
-    try {
-      const annotated = parts.map(part => {
-        const { instanceNumber } = parseDicomInstanceInfo(part);
-        return { part, instanceNumber };
-      });
-      if (annotated.some(a => a.instanceNumber != null)) {
-        annotated.sort((a, b) => {
-          if (a.instanceNumber != null && b.instanceNumber != null) return a.instanceNumber - b.instanceNumber;
-          if (a.instanceNumber != null) return -1;
-          if (b.instanceNumber != null) return 1;
-          return 0;
-        });
-        orderedParts = annotated.map(a => a.part);
-      }
-    } catch (sortErr) {
-      // instance sort failed, using original order
-    }
-
-    const blobUrls = new Array(imgs.length).fill(null);
-    await Promise.all(orderedParts.map(async (part, i) => {
-      if (!imgs[i]) return;
-      const blob = new Blob([part], { type: "application/dicom" });
-      const blobUrl = URL.createObjectURL(blob);
-      blobUrls[i] = blobUrl;
-
-      if (!thumbCache.has(imgs[i].id)) {
-        const src = await renderDicomThumbnail(blob);
-        if (src) thumbCache.set(imgs[i].id, src);
-      }
-    }));
-
-    const result = imgs.map((img, i) => blobUrls[i] ? { ...img, blobUrl: blobUrls[i] } : img);
-    const missing = result.filter(img => !img.blobUrl).length;
-
-    // Extract DICOM metadata from the first available slice
-    const firstBlobUrl = blobUrls.find(Boolean);
-    const metadata = firstBlobUrl ? await getDicomMetadata(firstBlobUrl).catch(() => null) : null;
-
-    return { images: result, metadata };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
+  // Load the open series from the shared cache (instant if it was already downloaded in
+  // the background). The viewer only receives images once the bulk blobs are ready, so
+  // Cornerstone never needs to hit /stream.
   useEffect(() => {
     const seriesId = activeSeries?.id;
     if (!seriesId) return;
@@ -500,27 +458,24 @@ function WorkspaceViewer() {
     setImagesLoading(true);
     setImages([]);
 
-    fetchImages(seriesId)
-      .then(async imgs => {
+    loadSeries(seriesId, { renderThumbs: PROJECTION_MODALITIES.has((activeSeries?.modality || "").toUpperCase()) })
+      .then(({ images: imgs, metadata }) => {
         if (cancelled) return;
-        // Sidebar gets the image list immediately (shows slice count + spinners)
-        // but we hold off setting full images until bulk blobs are ready so
-        // Cornerstone never needs to hit /stream.
-        try {
-          const { images: imgsWithBlobs, metadata } = await prefetchBulk(seriesId, imgs);
-          if (!cancelled) {
-            setImages(imgsWithBlobs);
-            setDicomMetadata(metadata);
-          }
-        } catch (bulkErr) {
-          if (!cancelled) setImages(imgs);
-        }
+        setImages(imgs);
+        if (metadata) setDicomMetadata(metadata);
       })
       .catch(() => { })
       .finally(() => { if (!cancelled) setImagesLoading(false); });
 
     return () => { cancelled = true; };
-  }, [activeSeries?.id, fetchImages, prefetchBulk]);
+  }, [activeSeries?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Once the open series is in, download the rest of the study in the background
+  // so every series stays viewable offline.
+  useEffect(() => {
+    if (imagesLoading || !seriesList.length) return;
+    prefetchSeriesInBackground(seriesList.filter(s => String(s.id) !== String(activeSeries?.id)));
+  }, [imagesLoading, seriesList, activeSeries?.id]);
 
   // Upload selected DICOM files to the active series, then reload from backend.
   const handleImageUpload = async (e) => {
@@ -549,8 +504,12 @@ function WorkspaceViewer() {
       }
     }
 
+    // The cached copy no longer has every image — drop it and download the series again
+    invalidateSeries(seriesId);
     try {
-      setImages(await fetchImages(seriesId));
+      const { images: imgs, metadata } = await loadSeries(seriesId, { renderThumbs: PROJECTION_MODALITIES.has((activeSeries?.modality || "").toUpperCase()) });
+      setImages(imgs);
+      if (metadata) setDicomMetadata(metadata);
     } catch (err) {
       // ignore reload error
     }
@@ -692,7 +651,7 @@ function WorkspaceViewer() {
 
 
   // Fetches a short-lived series-scoped token from the main backend.
-  // Used by both prefetchBulk (for DICOM retrieval) and runAnalysis (for inference).
+  // Used by runAnalysis (for inference); the series cache fetches its own for DICOM retrieval.
   const getSeriesToken = async (seriesId) => {
     const id = seriesId ?? activeSeries?.id;
     const res = await authFetch(`${process.env.REACT_APP_API_BASE}/series/${id}/inference-token`, {
@@ -719,10 +678,15 @@ function WorkspaceViewer() {
   };
 
 
-  const runAnalysis2 = async () => {
+  const runAnalysis2 = async ({ skipHistoryCheck = false } = {}) => {
     if (aiLoading) return;
     if (!selectedModel) {
       setNoModelDialog(true);
+      return;
+    }
+    // Nudge for clinical history before running — the user can still continue without it
+    if (!skipHistoryCheck && !patientHistory.trim()) {
+      setNoHistoryDialog(true);
       return;
     }
     const capturedModelId = selectedModel.id;
@@ -767,6 +731,8 @@ function WorkspaceViewer() {
             user_name: localStorage.getItem("name"),
             model_id: String(selectedModel.id),
             view_plane: "axial",
+            // Lets the inference service reject the wrong modality and find related MR sequences
+            modality: dicomMetadata?.modality || activeSeries?.modality || null,
           }),
         });
         if (!response.ok) {
@@ -823,6 +789,10 @@ function WorkspaceViewer() {
       {
         const slices = Array.isArray(results.slices) ? results.slices : [];
         const isGradCam = slices.some(s => s.predicted_class != null);
+        // Classification bundles name their own classes; anatomy bundles report structure
+        // volumes rather than "abnormality detected"
+        const isClassification = Array.isArray(results.class_labels);
+        const isAnatomy = results.class_volumes_cm3 != null;
         const detectedSlices = slices.filter(s => s.detected);
         const meanConf = slices.length ? slices.reduce((a, s) => a + (s.confidence ?? 0), 0) / slices.length : 0;
         const meanCoverage = slices.length ? slices.reduce((a, s) => a + (s.coverage_pct ?? 0), 0) / slices.length : 0;
@@ -841,19 +811,22 @@ function WorkspaceViewer() {
               rows: dicomMetadata.rows ?? null,
               columns: dicomMetadata.columns ?? null,
             } : null),
-            patient_context: dicomMetadata ? [
-              dicomMetadata.patientName && `Patient: ${dicomMetadata.patientName}`,
-              dicomMetadata.patientDob && `DOB: ${dicomMetadata.patientDob}`,
-              dicomMetadata.patientSex && `Sex: ${dicomMetadata.patientSex}`,
-              dicomMetadata.studyDate && `Study date: ${dicomMetadata.studyDate}`,
-              dicomMetadata.studyDescription && `Study: ${dicomMetadata.studyDescription}`,
-              dicomMetadata.institution && `Institution: ${dicomMetadata.institution}`,
-              dicomMetadata.modality && `Modality: ${dicomMetadata.modality}`,
-            ].filter(Boolean).join(". ") || null : null,
-            model_type: isGradCam ? "gradcam" : "segmentation",
-            detected: detectedSlices.length > 0,
-            predicted_class: isGradCam ? (slices[0]?.predicted_class ?? null) : null,
-            scores: isGradCam ? (slices[0]?.scores ?? null) : null,
+            patient_context: [
+              dicomMetadata?.patientName && `Patient: ${dicomMetadata.patientName}`,
+              dicomMetadata?.patientDob && `DOB: ${dicomMetadata.patientDob}`,
+              dicomMetadata?.patientSex && `Sex: ${dicomMetadata.patientSex}`,
+              dicomMetadata?.studyDate && `Study date: ${dicomMetadata.studyDate}`,
+              dicomMetadata?.studyDescription && `Study: ${dicomMetadata.studyDescription}`,
+              dicomMetadata?.institution && `Institution: ${dicomMetadata.institution}`,
+              dicomMetadata?.modality && `Modality: ${dicomMetadata.modality}`,
+              patientHistory.trim() && `Clinical history: ${patientHistory.trim()}`,
+            ].filter(Boolean).join(". ") || null,
+            model_type: isClassification ? "classification" : isGradCam ? "gradcam" : "segmentation",
+            detected: isAnatomy || isClassification ? null : detectedSlices.length > 0,
+            predicted_class: isGradCam ? (results.predicted_class ?? slices[0]?.predicted_class ?? null) : null,
+            scores: isGradCam ? (results.scores ?? slices[0]?.scores ?? null) : null,
+            class_labels: results.class_labels ?? null,
+            class_volumes_cm3: results.class_volumes_cm3 ?? null,
             mean_confidence: meanConf,
             mean_coverage_pct: meanCoverage,
             total_slices: results.slice_count ?? slices.length,
@@ -1134,6 +1107,54 @@ function WorkspaceViewer() {
                   className="w-full py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"
                 >
                   Got it
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+        {noHistoryDialog && (
+          <motion.div
+            className="fixed inset-0 z-[999] flex items-center justify-center"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={() => setNoHistoryDialog(false)}
+          >
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+            <motion.div
+              initial={{ y: 24, opacity: 0, scale: 0.97 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: 16, opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+              onClick={e => e.stopPropagation()}
+              className="relative w-full max-w-[400px] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+            >
+              {/* Header */}
+              <div className="flex items-start justify-between px-7 pt-7 pb-5">
+                <div>
+                  <div className="flex flex-row gap-2 "> <Info size={20} className="text-[#ffffff]" /><h2 className="text-white text-[17px] font-medium m-0">No patient history</h2></div>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
+                    Adding the patient's clinical history helps the AI write a more accurate report. You can still continue without it.
+                  </p>
+                </div>
+                <button onClick={() => setNoHistoryDialog(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                  <FiX size={18} />
+                </button>
+              </div>
+              {/* Footer */}
+              <div className="px-7 pb-6 flex flex-col gap-2">
+                <button
+                  onClick={() => { setNoHistoryDialog(false); setReportTab("history"); }}
+                  className="w-full py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"
+                >
+                  Add history
+                </button>
+                <button
+                  onClick={() => { setNoHistoryDialog(false); runAnalysis2({ skipHistoryCheck: true }); }}
+                  className="w-full py-2.5 rounded-full bg-transparent hover:bg-[#1E1E1E] text-[#CCCCCC] text-[13px] font-medium border border-[#2a2a2a] cursor-pointer transition-colors"
+                >
+                  Continue without history
                 </button>
               </div>
             </motion.div>
@@ -1446,6 +1467,9 @@ function WorkspaceViewer() {
                 selectedImage={selectedImage}
                 loading={imagesLoading || uploading}
                 inferenceResult={inferenceResult}
+                seriesList={seriesList}
+                activeSeries={activeSeries}
+                onSelectSeries={handleSelectSeries}
               />
               <Midsection
                 selectedImage={selectedImage}
@@ -1470,13 +1494,10 @@ function WorkspaceViewer() {
                 translationMode={selectedTranslationMode}
                 onCloseTranslation={() => { setTranslationActive(false); setTranslationResult(null); setTranslationProgress(null); setTranslationLoading(false); }}
                 jobStatus={jobStatus}
-                onViewModeChange={(mode) => {
-                  setInMprMode(mode !== "stack");
-                  setViewMode(mode);
-                }}
+                onViewModeChange={setViewMode}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} inMprMode={inMprMode} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={setPatientHistory} reportTab={reportTab} onReportTabChange={setReportTab} />
               </div>
             </div>
 
@@ -1489,4 +1510,11 @@ function WorkspaceViewer() {
   );
 }
 
-export default WorkspaceViewer;
+// Remount the whole workspace when the series changes, so inference results, masks,
+// translation and the loaded volume from one series never leak into another.
+function WorkspaceViewerRoute() {
+  const { state } = useLocation();
+  return <WorkspaceViewer key={state?.series?.id ?? "none"} />;
+}
+
+export default WorkspaceViewerRoute;

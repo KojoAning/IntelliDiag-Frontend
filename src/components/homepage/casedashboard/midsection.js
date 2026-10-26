@@ -138,6 +138,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     setViewMode(mode);
     onViewModeChange?.(mode);
   };
+
+  // Translation splits the screen into a side-by-side 2D comparison, so drop out of MPR first
+  useEffect(() => {
+    if (translationActive && viewMode !== "stack") switchViewMode("stack");
+  }, [translationActive]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mprMenuOpen, setMprMenuOpen] = useState(false);
   const [enhancementActive, setEnhancementActive] = useState(false);
   const [enhancementDone, setEnhancementDone] = useState(false);
@@ -337,6 +342,16 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     if (isGradCam) return null;
     return inferenceResult.slices.map(s => s.mask || null);
   }, [inferenceResult]);
+
+  // Per-slice confidence (only where the model found something) and the colour legend,
+  // so clicking a finding in MPR can report the same confidence + label as the 2D card.
+  const segmentationConfidences = useMemo(() => {
+    if (!segmentationMaskSlices) return null;
+    return inferenceResult.slices.map(s => (s.detected && s.confidence != null ? s.confidence : null));
+  }, [inferenceResult, segmentationMaskSlices]);
+  const segmentationLegend = inferenceResult?.label_legend ?? null;
+  // Anatomy bundles (structure volumes, no lesion stats) show each structure in its own legend colour
+  const segmentationIsAnatomy = inferenceResult?.class_volumes_cm3 != null;
 
   // Extract DICOM metadata from the first DICOM image in the series.
   // Only use the local blob URL — never hit the stream endpoint for metadata.
@@ -755,6 +770,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onArrowTextRequest={handleArrowTextRequest}
                 onActivePlaneChange={setActivePlane}
                 maskSlices={segmentationMaskSlices}
+                maskConfidences={segmentationConfidences}
+                maskLegend={segmentationLegend}
+                colorByClass={segmentationIsAnatomy}
                 maskOpacity={maskOpacity}
               />
             )}
@@ -986,9 +1004,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {inferenceResult && viewMode === "stack" && (() => {
             const sliceData = inferenceResult.slices?.[currentIndex];
             const overlay = sliceData?.mask;
-            if (!overlay) return null;
-            const isBase64 = !overlay.startsWith("http") && !overlay.startsWith("data:");
-            const overlaySrc = isBase64 ? `data:image/png;base64,${overlay}` : overlay;
+            // Classification results (e.g. breast density) have no mask but still get the card
+            if (!overlay && sliceData?.predicted_class == null) return null;
+            const isBase64 = overlay && !overlay.startsWith("http") && !overlay.startsWith("data:");
+            const overlaySrc = !overlay ? null : isBase64 ? `data:image/png;base64,${overlay}` : overlay;
 
             // GradCAM: predicted_class / scores are non-null; segmentation: both null
             const isGradCam = sliceData?.predicted_class != null;
@@ -1000,7 +1019,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             if (isGradCam) {
               const confStr = `${(conf * 100).toFixed(0)}%`;
               const topScore = sliceData.scores ? ` with a top score of ${(Math.max(...sliceData.scores) * 100).toFixed(0)}%` : "";
-              badgeSentence = `Predicted class ${sliceData.predicted_class} at ${confStr} confidence${topScore}.`;
+              const className = inferenceResult.class_labels?.[sliceData.predicted_class];
+              badgeSentence = className
+                ? `Predicted ${className} at ${confStr} confidence.`
+                : `Predicted class ${sliceData.predicted_class} at ${confStr} confidence${topScore}.`;
               badgeColor = "text-[#0694FB]";
               overlayLabel = "GradCAM";
             } else {
@@ -1017,13 +1039,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               <>
                 {/* Overlay image — screen blend so white regions light up over the DICOM,
                   coloured orange-red via CSS filter for clinical clarity */}
-                <img
+                {overlaySrc && <img
                   src={overlaySrc}
                   alt="inference overlay"
                   style={{
                     opacity: maskOpacity,
-                    mixBlendMode: "screen",
-                    filter: "sepia(1) saturate(8) hue-rotate(320deg)",
+                    // Anatomy masks already carry one colour per structure — show them as-is
+                    mixBlendMode: segmentationIsAnatomy ? "normal" : "screen",
+                    filter: segmentationIsAnatomy ? "none" : "sepia(1) saturate(8) hue-rotate(320deg)",
                     transformOrigin: "center center",
                     transform: [
                       `translate(${maskTransform.panX}px, ${maskTransform.panY}px)`,
@@ -1034,7 +1057,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                     ].filter(Boolean).join(" "),
                   }}
                   className="absolute inset-0 w-full h-full object-contain z-20 pointer-events-none"
-                />
+                />}
 
                 {/* Overlay controls — recommendation-card style */}
                 {(() => {

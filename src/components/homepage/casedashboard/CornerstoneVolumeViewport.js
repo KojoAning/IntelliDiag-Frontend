@@ -42,10 +42,30 @@ const PLANES = [
   { key: "coronal",  orientation: Enums.OrientationAxis.CORONAL,  color: "#F59E0B", label: "CORONAL" },
 ];
 
+// Same orange-red the 2D overlay tints its mask with, so a finding reads the same in both views.
+const AI_FINDING_COLOR = [255, 77, 64, 255];
+// Manually-drawn polygons stay blue so they're never mistaken for a model prediction.
+const MANUAL_ROI_COLOR = [6, 148, 251, 255];
+
+// Map a mask pixel to a class id: 0 = background, otherwise 1 + its index in the result's
+// label_legend. Single-class legends (and results with no legend) mark every hit as 1;
+// multi-class ones (BraTS) pick the nearest legend colour.
+function classifyMaskPixel(r, g, b, legend) {
+  if (!legend || legend.length < 2) return 1;
+  let best = 0;
+  let bestDist = Infinity;
+  legend.forEach((entry, idx) => {
+    const [lr, lg, lb] = entry.rgb ?? [255, 255, 255];
+    const dist = (r - lr) ** 2 + (g - lg) ** 2 + (b - lb) ** 2;
+    if (dist < bestDist) { bestDist = dist; best = idx; }
+  });
+  return best + 1;
+}
+
 // Decode a single slice's mask PNG (base64, data URL, or http URL — same three
-// shapes the 2D overlay accepts) into a flat 0/1 label array sized to the volume's
-// in-plane dimensions (resampled if the mask's native size differs).
-function decodeMaskToLabels(src, width, height) {
+// shapes the 2D overlay accepts) into a flat class-id array (see classifyMaskPixel) sized
+// to the volume's in-plane dimensions (resampled if the mask's native size differs).
+function decodeMaskToLabels(src, width, height, legend) {
   return new Promise((resolve) => {
     const isRemoteUrl = src.startsWith("http");
     const img = new Image();
@@ -56,13 +76,27 @@ function decodeMaskToLabels(src, width, height) {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.imageSmoothingEnabled = false; // resampling must not blend class colours at edges
         ctx.drawImage(img, 0, 0, width, height);
         const { data } = ctx.getImageData(0, 0, width, height);
         const labels = new Uint8Array(width * height);
+        // Class per distinct colour, filled lazily — legends can hold 100+ colours (whole-body
+        // CT), so a nearest-colour search for every pixel would be far too slow.
+        const classByColor = new Map();
         for (let i = 0, p = 0; i < data.length; i += 4, p++) {
           const alpha = data[i + 3];
           const luminance = data[i] + data[i + 1] + data[i + 2];
-          labels[p] = alpha > 10 && luminance > 10 ? 1 : 0;
+          if (alpha <= 10 || luminance <= 10) {
+            labels[p] = 0;
+            continue;
+          }
+          const key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+          let cls = classByColor.get(key);
+          if (cls === undefined) {
+            cls = classifyMaskPixel(data[i], data[i + 1], data[i + 2], legend);
+            classByColor.set(key, cls);
+          }
+          labels[p] = cls;
         }
         resolve(labels);
       } catch (err) {
@@ -95,20 +129,24 @@ function labelConnectedComponents(binary, w, h, d, spacingMm, minVoxels = 8) {
   let droppedAsNoise = 0;
 
   for (let seed = 0; seed < total; seed++) {
-    if (binary[seed] !== 1 || labels[seed] !== 0) continue;
+    if (!binary[seed] || labels[seed] !== 0) continue;
     if (nextLabel >= 254) break;
 
     const queue = [seed];
     labels[seed] = PENDING;
     let qi = 0;
+    let kMin = Infinity;
+    let kMax = -Infinity;
     while (qi < queue.length) {
       const cur = queue[qi++];
       const k = Math.floor(cur / sliceSize);
+      if (k < kMin) kMin = k;
+      if (k > kMax) kMax = k;
       const rem = cur - k * sliceSize;
       const j = Math.floor(rem / w);
       const i = rem - j * w;
       const tryPush = (n) => {
-        if (binary[n] === 1 && labels[n] === 0) {
+        if (binary[n] && labels[n] === 0) {
           labels[n] = PENDING;
           queue.push(n);
         }
@@ -130,7 +168,7 @@ function labelConnectedComponents(binary, w, h, d, spacingMm, minVoxels = 8) {
     nextLabel++;
     const label = nextLabel;
     queue.forEach(idx => { labels[idx] = label; });
-    stats.set(label, { voxelCount, volumeCm3: voxelCount * voxelVolumeCm3 });
+    stats.set(label, { voxelCount, volumeCm3: voxelCount * voxelVolumeCm3, kMin, kMax });
   }
 
   if (droppedAsNoise > 0) {
@@ -138,6 +176,29 @@ function labelConnectedComponents(binary, w, h, d, spacingMm, minVoxels = 8) {
   }
 
   return { labels, stats };
+}
+
+// Anatomy results: one segment per structure (segment index = class id) rather than per
+// connected blob, so touching organs stay separate and each keeps its legend colour.
+function labelByClass(classes, w, h, d, spacingMm) {
+  const sliceSize = w * h;
+  const voxelVolumeCm3 = (spacingMm[0] * spacingMm[1] * spacingMm[2]) / 1000;
+  const stats = new Map();
+  for (let idx = 0; idx < classes.length; idx++) {
+    const c = classes[idx];
+    if (!c) continue;
+    const k = Math.floor(idx / sliceSize);
+    let stat = stats.get(c);
+    if (!stat) {
+      stat = { voxelCount: 0, volumeCm3: 0, kMin: k, kMax: k }; // idx only grows, so the first hit is kMin
+      stats.set(c, stat);
+    }
+    stat.voxelCount++;
+    stat.kMax = k;
+  }
+  stats.forEach(stat => { stat.volumeCm3 = stat.voxelCount * voxelVolumeCm3; });
+  // A copy — manual ROIs get written into the label array, the class array stays as decoded
+  return { labels: classes.slice(), stats };
 }
 
 // Even-odd point-in-polygon test (ray casting), used to rasterize a manually-drawn
@@ -157,7 +218,7 @@ function pointInPolygon2D(x, y, poly) {
 let instanceCounter = 0;
 
 const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
-  { imageIds = [], activeTool = null, windowLevel = false, onArrowTextRequest, onActivePlaneChange, maskSlices = null, maskOpacity = 0.5 },
+  { imageIds = [], activeTool = null, windowLevel = false, onArrowTextRequest, onActivePlaneChange, maskSlices = null, maskConfidences = null, maskLegend = null, colorByClass = false, maskOpacity = 0.5 },
   ref
 ) {
   const containerRef = useRef(null); // outer grid — click position is measured relative to this
@@ -176,6 +237,14 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   const manualLabelCounterRef = useRef(0); // next "Polygon N" number to hand out
   const rebuildingSegmentationRef = useRef(false); // true while Step 2b is (re)building the AI segmentation — manual draws during this window would land on a volume about to be discarded
   const [selectedLesion, setSelectedLesion] = useState(null); // { label, voxelCount, volumeCm3 }
+  const classArrayRef = useRef(null);  // per-voxel class id from the mask colours (see classifyMaskPixel)
+  const kToMaskIdxRef = useRef(null);  // volume slice k -> index into maskSlices / maskConfidences
+  const maskConfidencesRef = useRef(maskConfidences);
+  maskConfidencesRef.current = maskConfidences;
+  const maskLegendRef = useRef(maskLegend);
+  maskLegendRef.current = maskLegend;
+  const colorByClassRef = useRef(colorByClass);
+  colorByClassRef.current = colorByClass;
   const instanceId = useRef(++instanceCounter);
   const arrowTextCbRef = useRef(onArrowTextRequest);
   arrowTextCbRef.current = onArrowTextRequest;
@@ -470,7 +539,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       setVolumeLoaded(false);
 
       try {
-        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds });
+        // Pass a copy — for wadouri ids Cornerstone reverses the array it's given in place,
+        // which would silently flip our imageIds prop (and the mask-to-slice mapping with it).
+        const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: [...imageIds] });
         volumeIdRef.current = volumeId;
 
         if (cancelled) return;
@@ -559,17 +630,25 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         const labelmapVolume = volumeLoader.createAndCacheDerivedLabelmapVolume(mainVolumeId, { volumeId: labelmapVolumeId });
         const [w, h, d] = labelmapVolume.dimensions;
 
+        // maskSlices follows the imageIds prop (InstanceNumber order), but Cornerstone
+        // re-sorts the volume's slices by ImagePositionPatient — so map each mask to
+        // the volume slice that holds its imageId, not to the same array index.
+        const volumeImageIds = csCache.getVolume(mainVolumeId)?.imageIds || imageIds;
+        const maskIndexByImageId = new Map(imageIds.map((id, i) => [id, i]));
+
         const scalarData = new Uint8Array(w * h * d);
+        const kToMaskIdx = new Array(d);
         let decodedAny = false;
-        const sliceCount = Math.min(maskSlices.length, d);
-        for (let i = 0; i < sliceCount; i++) {
+        for (let k = 0; k < d; k++) {
           if (cancelled) return;
-          const src = maskSlices[i];
+          const maskIdx = maskIndexByImageId.get(volumeImageIds[k]) ?? k;
+          kToMaskIdx[k] = maskIdx;
+          const src = maskSlices[maskIdx];
           if (!src) continue;
-          const labels = await decodeMaskToLabels(src, w, h);
+          const labels = await decodeMaskToLabels(src, w, h, maskLegendRef.current);
           if (cancelled) return;
           if (labels) {
-            scalarData.set(labels, i * w * h);
+            scalarData.set(labels, k * w * h);
             decodedAny = true;
           }
         }
@@ -581,10 +660,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         }
 
         // Give each connected blob its own id/color so individual findings can be
-        // clicked and measured separately, instead of one flat binary mask.
-        const { labels: componentLabels, stats: lesionStats } = labelConnectedComponents(
-          scalarData, w, h, d, labelmapVolume.spacing
-        );
+        // clicked and measured separately, instead of one flat binary mask. Anatomy
+        // results are split by structure instead (see labelByClass).
+        const { labels: componentLabels, stats: lesionStats } = colorByClassRef.current
+          ? labelByClass(scalarData, w, h, d, labelmapVolume.spacing)
+          : labelConnectedComponents(scalarData, w, h, d, labelmapVolume.spacing);
 
         // Carry forward any manually-drawn ROIs from before this rebuild — otherwise a
         // model switch silently wipes everything the user drew. AI voxels win where the
@@ -593,7 +673,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         const carriedManualLabelNumbers = new Map();
         if (priorLabelArray && priorManualLabels?.size && priorLabelArray.length === componentLabels.length) {
           const remap = new Map(); // old label -> new label
-          let nextLabel = lesionStats.size;
+          let nextLabel = Math.max(0, ...lesionStats.keys());
           for (let voxelIdx = 0; voxelIdx < priorLabelArray.length; voxelIdx++) {
             const oldLabel = priorLabelArray[voxelIdx];
             if (!oldLabel || !priorManualLabels.has(oldLabel) || componentLabels[voxelIdx] !== 0) continue;
@@ -615,10 +695,12 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
         labelmapVolumeRef.current = labelmapVolume;
         labelArrayRef.current = componentLabels;
+        classArrayRef.current = scalarData;
+        kToMaskIdxRef.current = kToMaskIdx;
         labelDimsRef.current = { w, h, d };
         lesionStatsRef.current = lesionStats;
         manualLabelNumberRef.current = carriedManualLabelNumbers; // manualLabelCounterRef is left as-is so future polygons keep counting up
-        nextLesionLabelRef.current = Math.max(lesionStats.size, ...carriedManualLabels, 0);
+        nextLesionLabelRef.current = Math.max(0, ...lesionStats.keys(), ...carriedManualLabels);
         manualLabelsRef.current = carriedManualLabels;
         setSelectedLesion(null);
 
@@ -646,6 +728,20 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
             segmentationId,
             type: csToolsEnums.SegmentationRepresentations.Labelmap,
           }]);
+        });
+
+        // AI findings take the 2D overlay's colour — per structure for anatomy results,
+        // one orange-red otherwise; manual ROIs keep their own.
+        const legend = maskLegendRef.current;
+        const colorFor = (label) => {
+          if (carriedManualLabels.has(label)) return MANUAL_ROI_COLOR;
+          const rgb = colorByClassRef.current && legend?.[label - 1]?.rgb;
+          return rgb ? [...rgb, 255] : AI_FINDING_COLOR;
+        };
+        viewportIds.forEach(viewportId => {
+          lesionStats.forEach((_, label) => {
+            csSegmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, label, colorFor(label));
+          });
         });
 
         // Carried-forward manual ROIs lost their per-segment style when the old
@@ -856,6 +952,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           { segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap, segmentIndex: label },
           { outlineWidth: 3, outlineOpacity: 1 }, false
         );
+        viewportIds.forEach(viewportId => {
+          csSegmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, label, MANUAL_ROI_COLOR);
+        });
 
         labelmapVolume.voxelManager.setCompleteScalarDataArray(labelArray);
         csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId);
@@ -932,14 +1031,32 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   }, []);
 
   // Manually-drawn ROIs are "Polygon N" (yours, deletable); AI findings stay "Finding N" (read-only).
-  const buildSelectedLesion = (label, stat, pos) => {
+  // AI findings also carry the model's confidence (mean over the slices the finding spans,
+  // same per-slice numbers the 2D card shows) and the predicted region type at the click.
+  const buildSelectedLesion = (label, stat, pos, regionName = null) => {
     const isManual = manualLabelsRef.current.has(label);
+    let confidence = null;
+    const confidences = maskConfidencesRef.current;
+    const kToMaskIdx = kToMaskIdxRef.current;
+    if (!isManual && confidences && kToMaskIdx && stat.kMin != null) {
+      let sum = 0;
+      let n = 0;
+      for (let k = stat.kMin; k <= stat.kMax; k++) {
+        const c = confidences[kToMaskIdx[k]];
+        if (c != null) { sum += c; n++; }
+      }
+      if (n) confidence = sum / n;
+    }
     return {
       label,
       ...stat,
       ...pos,
       isManual,
       polygonNumber: isManual ? manualLabelNumberRef.current.get(label) : null,
+      confidence,
+      regionName: isManual ? null : regionName,
+      // Anatomy segment = one whole structure, so its name is the title, not a detail
+      isStructure: !isManual && colorByClassRef.current,
     };
   };
 
@@ -970,11 +1087,14 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       return;
     }
 
-    const label = labelArray[k * w * h + j * w + i];
+    const voxelIdx = k * w * h + j * w + i;
+    const label = labelArray[voxelIdx];
     if (!label) {
       setSelectedLesion(null);
       return;
     }
+    const classId = classArrayRef.current?.[voxelIdx];
+    const regionName = classId ? maskLegendRef.current?.[classId - 1]?.name ?? null : null;
     const stat = lesionStatsRef.current?.get(label);
     if (!stat) {
       setSelectedLesion(null);
@@ -993,7 +1113,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       };
     }
 
-    setSelectedLesion(buildSelectedLesion(label, stat, pos));
+    setSelectedLesion(buildSelectedLesion(label, stat, pos, regionName));
   };
 
   // Erases a manually-drawn region from the segmentation entirely. AI findings aren't
@@ -1131,7 +1251,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           <div className="overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] shadow-lg pointer-events-auto">
             <div className="px-3 py-2 flex items-center gap-3 whitespace-nowrap">
               <span className="text-[12px] font-semibold text-white">
-                {selectedLesion.isManual ? `Polygon ${selectedLesion.polygonNumber}` : `Finding ${selectedLesion.label}`}
+                {selectedLesion.isManual
+                  ? `Polygon ${selectedLesion.polygonNumber}`
+                  : selectedLesion.isStructure && selectedLesion.regionName
+                    ? selectedLesion.regionName
+                    : `Finding ${selectedLesion.label}`}
               </span>
               <span className="text-[12px] text-[#0694FB] font-mono">
                 {selectedLesion.volumeCm3.toFixed(2)} cm³
@@ -1152,6 +1276,31 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
                 title="Deselect"
               >✕</button>
             </div>
+            {!selectedLesion.isManual && ((selectedLesion.regionName && !selectedLesion.isStructure) || selectedLesion.confidence != null) && (() => {
+              const conf = selectedLesion.confidence;
+              const signal = conf == null ? 0 : conf >= 0.75 ? 3 : conf >= 0.4 ? 2 : conf > 0 ? 1 : 0;
+              const signalLabel = conf == null ? null : conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
+              return (
+                <div className="border-t border-[#1E1E1E] bg-[#111]/60 px-3 py-2 flex items-center gap-3 whitespace-nowrap">
+                  {selectedLesion.regionName && !selectedLesion.isStructure && (
+                    <span className="text-[12px] font-medium text-red-400">{selectedLesion.regionName}</span>
+                  )}
+                  {conf != null && (
+                    <span className="flex items-center gap-2">
+                      <span className="flex items-end gap-0.5">
+                        {[0, 1, 2, 3].map(bar => (
+                          <span
+                            key={bar}
+                            style={{ display: "inline-block", width: 3, height: 12, borderRadius: 2, background: bar < signal ? "#f87171" : "#2a2a2a" }}
+                          />
+                        ))}
+                      </span>
+                      <span className="text-[11px] text-[#949494]">{`${(conf * 100).toFixed(0)}% · ${signalLabel}`}</span>
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           {/* Pointer tail toward the clicked point */}
           <div

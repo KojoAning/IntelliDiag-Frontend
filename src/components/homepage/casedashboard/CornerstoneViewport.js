@@ -380,13 +380,22 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       });
       toolGroup.addViewport(viewportId, engineId);
 
-      // Arrow and text labels ask for their text in the app's own dialog, not prompt()
+      // Arrow and text labels ask for their text in the app's own dialog, not prompt() —
+      // when drawn, and when double-clicked to edit (pre-filled with the current text)
       [ArrowAnnotateTool, LabelTool].map(T => toolGroup.getToolInstance(T.toolName)).filter(Boolean).forEach(textTool => {
         textTool.configuration.getTextCallback = (doneChangingTextCallback) => {
           if (arrowTextCbRef.current) {
             arrowTextCbRef.current(doneChangingTextCallback);
           } else {
             doneChangingTextCallback(prompt("Enter your annotation:"));
+          }
+        };
+        textTool.configuration.changeTextCallback = (annotation, _evt, doneChangingTextCallback) => {
+          const current = annotation?.data?.label ?? "";
+          if (arrowTextCbRef.current) {
+            arrowTextCbRef.current(doneChangingTextCallback, current);
+          } else {
+            doneChangingTextCallback(prompt("Edit your annotation:", current) ?? current);
           }
         };
       });

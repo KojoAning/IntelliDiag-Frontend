@@ -6,6 +6,7 @@ import SliceScrubber from "./SliceScrubber";
 import DicomTagPanel from "./DicomTagPanel";
 import RecistPanel from "./RecistPanel";
 import SeriesPane, { EmptyPane } from "./SeriesPane";
+import { translationPairsFor } from "./rightsection/TranslationPanel";
 import { LAYOUTS, SERIES_DRAG_TYPE, normalizeLayout, resizeLayout, placeSeries, clearPane, activatePane } from "../../../lib/viewerLayout";
 import { readSlicePositions, matchSlice, canLink } from "../../../lib/slicePositions";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
@@ -74,6 +75,48 @@ function ToolBtn({ icon, label, active, onClick }) {
 }
 
 function HDivider() { return <div className="w-6 h-px bg-[#1E1E1E]" />; }
+
+// Colour key for anatomy segmentations (one colour per structure): only the structures the
+// model found, largest first, with their volumes. Whole-body results can list 100+, so it
+// scrolls and can be filtered.
+function SegmentationLegend({ legend, volumes }) {
+  const [query, setQuery] = useState("");
+  const rows = useMemo(() => {
+    const rgbByName = new Map((legend ?? []).map(entry => [entry.name, entry.rgb]));
+    return Object.entries(volumes ?? {})
+      .filter(([name]) => rgbByName.has(name))
+      .map(([name, volume]) => ({ name, volume, rgb: rgbByName.get(name) }))
+      .sort((a, b) => b.volume - a.volume);
+  }, [legend, volumes]);
+  if (!rows.length) return null;
+  const q = query.trim().toLowerCase();
+  const shown = q ? rows.filter(r => r.name.toLowerCase().replace(/_/g, " ").includes(q)) : rows;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-[#868686]">{`${rows.length} structure${rows.length === 1 ? "" : "s"}`}</span>
+        {rows.length > 8 && (
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Filter"
+            className="w-[100px] bg-[#111] border border-[#1E1E1E] focus:border-[#0694FB] rounded-md px-1.5 py-0.5 text-white text-[11px] outline-none placeholder-[#4a4a4a]"
+          />
+        )}
+      </div>
+      <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}>
+        {shown.map(r => (
+          <div key={r.name} className="flex items-center gap-2 text-[11px]">
+            <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: `rgb(${r.rgb.join(",")})` }} />
+            <span className="flex-1 min-w-0 truncate text-[#CCCCCC] capitalize" title={r.name}>{r.name.replace(/_/g, " ")}</span>
+            <span className="text-[#6B6B6B] font-mono shrink-0">{`${r.volume} cm³`}</span>
+          </div>
+        ))}
+        {!shown.length && <span className="text-[11px] text-[#6B6B6B]">No match</span>}
+      </div>
+    </div>
+  );
+}
 
 // Tiny picture of a viewer grid, for the layout menu
 function LayoutGlyph({ cols, rows }) {
@@ -348,13 +391,13 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [hasSelection, setHasSelection] = useState(false);
 
   // Arrow annotation custom dialog
-  const [arrowDialog, setArrowDialog] = useState(null); // { resolve: (label) => void }
+  const [arrowDialog, setArrowDialog] = useState(null); // { resolve: (label) => void, initial } — initial is the text being edited, "" for a new label
   const [arrowLabel, setArrowLabel] = useState("");
   const arrowInputRef = useRef(null);
 
-  const handleArrowTextRequest = useCallback((doneCallback) => {
-    setArrowLabel("");
-    setArrowDialog({ resolve: doneCallback });
+  const handleArrowTextRequest = useCallback((doneCallback, initial = "") => {
+    setArrowLabel(initial);
+    setArrowDialog({ resolve: doneCallback, initial });
   }, []);
 
   const submitArrowLabel = useCallback(() => {
@@ -367,7 +410,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   const cancelArrowLabel = useCallback(() => {
     if (arrowDialog) {
-      arrowDialog.resolve("");
+      arrowDialog.resolve(arrowDialog.initial); // cancelling an edit keeps the old text
       setArrowDialog(null);
       setArrowLabel("");
     }
@@ -1152,7 +1195,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               )
             ) : <>Run Analysis</>}
           </button>
-          <button
+          {(translationActive || translationPairsFor(dicomMeta?.modality || activeSeries?.modality).length > 0) && <button
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
             className={`flex items-center gap-2.5 px-4 py-[8px] rounded-full text-[13px] cursor-pointer transition-all border-none ${translationActive
               ? "bg-[#A855F7] text-white"
@@ -1164,7 +1207,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-200 shrink-0 ${translationActive ? "bg-white/80" : "bg-[#6e6e6e]"}`}>
               <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-200 ${translationActive ? "left-[18px]" : "left-0.5"}`} />
             </span>
-          </button>
+          </button>}
           {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors">
             Sign Report
           </button> */}
@@ -1229,7 +1272,13 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* Clear all annotations */}
           <ToolBtn icon={<FiTrash2 size={15} />} label="Clear all annotations" onClick={() => {
-            try { csAnnotation.state.removeAllAnnotations(); } catch (_) { }
+            // This series' measurements only: not the layout's other viewers, and never
+            // Crosshairs' own annotations (removing those breaks the MPR crosshairs). In MPR a
+            // measurement off the acquisition plane has no image reference, so it counts too.
+            const onSeries = new Set(imageIds);
+            (csAnnotation.state.getAllAnnotations() ?? [])
+              .filter(a => SAVED_TOOL_NAMES.has(a.metadata?.toolName) && (!a.metadata.referencedImageId || onSeries.has(a.metadata.referencedImageId)))
+              .forEach(a => { try { csAnnotation.state.removeAnnotation(a.annotationUID); } catch (_) { } });
             setHasSelection(false);
             activeVp.current?.render?.();
           }} />
@@ -1322,6 +1371,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   {Math.round(maskOpacity * 100)}%
                 </span>
               </div>
+              {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult?.class_volumes_cm3} />}
             </div>
           )}
 
@@ -1582,6 +1632,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                           >✕</button>
                         </span>
                       </div>
+                      {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} />}
                     </div>
                   );
                 })()}
@@ -1953,8 +2004,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               {/* Header */}
               <div className="flex items-start justify-between px-7 pt-7 pb-5">
                 <div>
-                  <h2 className="text-white text-[17px] font-medium m-0">Annotation Label</h2>
-                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">Enter a label for this annotation</p>
+                  <h2 className="text-white text-[17px] font-medium m-0">{arrowDialog.initial ? "Edit Label" : "Annotation Label"}</h2>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">{arrowDialog.initial ? "Change this annotation's label" : "Enter a label for this annotation"}</p>
                 </div>
                 <button onClick={cancelArrowLabel} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
                   <FiX size={18} />
@@ -1987,7 +2038,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   onClick={submitArrowLabel}
                   className="flex-1 py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"
                 >
-                  Add Label
+                  {arrowDialog.initial ? "Save" : "Add Label"}
                 </button>
               </div>
             </motion.div>

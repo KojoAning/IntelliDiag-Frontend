@@ -592,13 +592,22 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         bindings: [{ mouseButton: MouseBindings.Wheel }],
       });
 
-      // Arrow and text labels ask for their text in the app's own dialog, not prompt()
+      // Arrow and text labels ask for their text in the app's own dialog, not prompt() —
+      // when drawn, and when double-clicked to edit (pre-filled with the current text)
       [ArrowAnnotateTool, LabelTool].map(T => toolGroup.getToolInstance(T.toolName)).filter(Boolean).forEach(textTool => {
         textTool.configuration.getTextCallback = (doneChangingTextCallback) => {
           if (arrowTextCbRef.current) {
             arrowTextCbRef.current(doneChangingTextCallback);
           } else {
             doneChangingTextCallback(prompt("Enter your annotation:"));
+          }
+        };
+        textTool.configuration.changeTextCallback = (annotation, _evt, doneChangingTextCallback) => {
+          const current = annotation?.data?.label ?? "";
+          if (arrowTextCbRef.current) {
+            arrowTextCbRef.current(doneChangingTextCallback, current);
+          } else {
+            doneChangingTextCallback(prompt("Edit your annotation:", current) ?? current);
           }
         };
       });
@@ -1145,17 +1154,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
         // Surface the new region's volume right away, same popover as a clicked finding.
         try {
-          const vp = getVp();
-          const containerRect = containerRef.current?.getBoundingClientRect();
-          const paneRect = divRefs.current[activePlaneRef.current]?.getBoundingClientRect();
           const stat = lesionStatsRef.current.get(label) ?? { voxelCount, volumeCm3 };
-          if (centroidWorld && vp && containerRect && paneRect) {
-            const [cx, cy] = vp.worldToCanvas(centroidWorld);
-            const halfCardW = 110;
-            setSelectedLesion(buildSelectedLesion(label, stat, {
-              x: Math.min(Math.max(paneRect.left - containerRect.left + cx, halfCardW), containerRect.width - halfCardW),
-              y: Math.max(paneRect.top - containerRect.top + cy, 44),
-            }));
+          const anchor = centroidWorld && { plane: activePlaneRef.current, world: centroidWorld };
+          const pos = anchor && popoverPosition(anchor);
+          if (pos) {
+            setSelectedLesion(buildSelectedLesion(label, stat, { ...pos, anchor }));
           } else {
             setSelectedLesion(buildSelectedLesion(label, stat, { x: 110, y: 44 }));
           }
@@ -1248,20 +1251,26 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       return;
     }
 
-    // Position the popover at the click point, relative to the whole 3-pane grid
-    // (clamped so it doesn't render off the edge of the grid).
-    const containerRect = containerRef.current?.getBoundingClientRect();
-    let pos = { x: e.clientX, y: e.clientY };
-    if (containerRect) {
-      const halfCardW = 110;
-      pos = {
-        x: Math.min(Math.max(e.clientX - containerRect.left, halfCardW), containerRect.width - halfCardW),
-        y: Math.max(e.clientY - containerRect.top, 44),
-      };
-    }
-
-    setSelectedLesion(buildSelectedLesion(label, stat, pos, regionName));
+    // Popover at the click point; anchored there, so it follows when the panes resize
+    const anchor = { plane: planeKey, world: worldPos };
+    const pos = popoverPosition(anchor) ?? { x: e.clientX, y: e.clientY };
+    setSelectedLesion(buildSelectedLesion(label, stat, { ...pos, anchor }, regionName));
   };
+
+  // Where the region popover goes for a point on a pane, relative to the whole 3-pane grid
+  // (clamped so it doesn't render off the edge of the grid), or null if it can't be placed
+  function popoverPosition({ plane, world }) {
+    const vp = getVp(plane);
+    const containerRect = containerRef.current?.getBoundingClientRect();
+    const paneRect = divRefs.current[plane]?.getBoundingClientRect();
+    if (!vp || !containerRect || !paneRect) return null;
+    const [cx, cy] = vp.worldToCanvas(world);
+    const halfCardW = 110;
+    return {
+      x: Math.min(Math.max(paneRect.left - containerRect.left + cx, halfCardW), containerRect.width - halfCardW),
+      y: Math.max(paneRect.top - containerRect.top + cy, 44),
+    };
+  }
 
   // Erases a manually-drawn region from the segmentation entirely. AI findings aren't
   // deletable this way — they're not yours to remove, only to inspect.
@@ -1504,11 +1513,24 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let frame = null;
     const ro = new ResizeObserver(() => {
       try { engineRef.current?.resize(true, true); } catch (_) {}
+      // The open region popover follows its point (after the canvases have resized)
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        setSelectedLesion(prev => {
+          if (!prev?.anchor) return prev;
+          try {
+            const pos = popoverPosition(prev.anchor);
+            return pos ? { ...prev, ...pos } : prev;
+          } catch (_) { return prev; }
+        });
+      });
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { cancelAnimationFrame(frame); ro.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Named ROIs here too (see lib/roiVolume): ellipse/circle/rectangle contours get a name

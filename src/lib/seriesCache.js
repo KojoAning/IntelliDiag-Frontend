@@ -56,6 +56,7 @@ export async function fetchSeriesImages(seriesId) {
       name: fname || fallbackName,
       type: isDicom ? "application/dicom" : "image",
       file: null,
+      sopInstanceUid: record.sop_instance_uid ?? null, // pairs the record with its file in the bulk download
     };
   });
 }
@@ -68,6 +69,33 @@ async function getSeriesToken(seriesId) {
   if (!res.ok) throw new Error("Failed to get inference token");
   const data = await res.json();
   return data.token;
+}
+
+// Which downloaded file belongs to which image record: matched on SOP Instance UID, so a
+// series with repeated or missing instance numbers, plain JPEG/PNG records (no file in the
+// download) or files of since-deleted images still pairs correctly. Records without a UID
+// fall back to the leftover files in instance-number order. Returns one part (or null) per record.
+export function pairPartsWithImages(parts, imgs) {
+  const infos = parts.map(part => {
+    try { return { part, ...parseDicomInstanceInfo(part) }; }
+    catch { return { part, instanceNumber: null, sopUid: null }; }
+  });
+  const byUid = new Map(infos.filter(info => info.sopUid).map(info => [info.sopUid, info]));
+  const used = new Set();
+  const paired = imgs.map(img => {
+    const info = img.sopInstanceUid && byUid.get(img.sopInstanceUid);
+    if (!info || used.has(info)) return null;
+    used.add(info);
+    return info.part;
+  });
+  const leftover = infos
+    .filter(info => !used.has(info))
+    .sort((a, b) => (a.instanceNumber ?? Infinity) - (b.instanceNumber ?? Infinity));
+  imgs.forEach((img, i) => {
+    if (paired[i] || img.sopInstanceUid || img.type !== "application/dicom" || !leftover.length) return;
+    paired[i] = leftover.shift().part;
+  });
+  return paired;
 }
 
 // Single bulk DICOM fetch for the whole series. Returns the imgs array with blobUrl
@@ -92,45 +120,23 @@ async function fetchSeriesBulk(seriesId, imgs, { renderThumbs }) {
   const buffer = await res.arrayBuffer();
   const parts = parseMultipartBody(buffer, boundary);
 
-  // Parse instance numbers and sort clinically. Wrapped in try/catch so a
-  // parse failure degrades to original order rather than aborting the bulk fetch.
-  let orderedParts = parts;
-  try {
-    const annotated = parts.map(part => {
-      const { instanceNumber } = parseDicomInstanceInfo(part);
-      return { part, instanceNumber };
-    });
-    if (annotated.some(a => a.instanceNumber != null)) {
-      annotated.sort((a, b) => {
-        if (a.instanceNumber != null && b.instanceNumber != null) return a.instanceNumber - b.instanceNumber;
-        if (a.instanceNumber != null) return -1;
-        if (b.instanceNumber != null) return 1;
-        return 0;
-      });
-      orderedParts = annotated.map(a => a.part);
-    }
-  } catch (sortErr) {
-    // instance sort failed, using original order
-  }
+  const blobs = pairPartsWithImages(parts, imgs).map(part => part && new Blob([part], { type: "application/dicom" }));
+  const blobUrls = blobs.map(blob => blob && URL.createObjectURL(blob));
 
-  const middle = Math.floor(orderedParts.length / 2);
-  const blobUrls = new Array(imgs.length).fill(null);
-  await Promise.all(orderedParts.map(async (part, i) => {
-    if (!imgs[i]) return;
-    const blob = new Blob([part], { type: "application/dicom" });
-    blobUrls[i] = URL.createObjectURL(blob);
-
-    // Per-image thumbnails only where the side panel shows them; the middle slice
-    // always becomes the series card's thumbnail so it renders offline too.
-    if (renderThumbs && !thumbCache.has(imgs[i].id)) {
-      const src = await renderDicomThumbnail(blob);
-      if (src) thumbCache.set(imgs[i].id, src);
-    }
-    if (i === middle && !thumbCache.has(`series:${seriesId}`)) {
-      const src = thumbCache.get(imgs[i].id) ?? await renderDicomThumbnail(blob);
-      if (src) thumbCache.set(`series:${seriesId}`, src);
+  // Per-image thumbnails only where the side panel shows them; the middle slice
+  // always becomes the series card's thumbnail so it renders offline too.
+  const middle = Math.floor(imgs.length / 2);
+  await Promise.all(imgs.map(async (img, i) => {
+    if (blobs[i] && renderThumbs && !thumbCache.has(img.id)) {
+      const src = await renderDicomThumbnail(blobs[i]);
+      if (src) thumbCache.set(img.id, src);
     }
   }));
+  const thumbIndex = blobs[middle] ? middle : blobs.findIndex(Boolean);
+  if (thumbIndex >= 0 && !thumbCache.has(`series:${seriesId}`)) {
+    const src = thumbCache.get(imgs[thumbIndex].id) ?? await renderDicomThumbnail(blobs[thumbIndex]);
+    if (src) thumbCache.set(`series:${seriesId}`, src);
+  }
 
   const images = imgs.map((img, i) => blobUrls[i] ? { ...img, blobUrl: blobUrls[i] } : img);
 

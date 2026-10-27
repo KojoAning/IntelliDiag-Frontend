@@ -1,4 +1,15 @@
+import { clearSeriesStore } from "./seriesStore";
+
 const BASE = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+
+// ── Ending the session on this device ───────────────────────────────────────
+// Drops the stored credentials and the on-disk copy of downloaded series (lib/seriesStore),
+// so no patient images stay behind. Waits (briefly) for the store to clear, since callers
+// usually navigate away straight after.
+export async function clearLocalSession() {
+  ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k));
+  await Promise.race([clearSeriesStore().catch(() => {}), new Promise(resolve => setTimeout(resolve, 1500))]);
+}
 
 // ── Token refresh ────────────────────────────────────────────────────────────
 let refreshPromise = null;
@@ -19,7 +30,7 @@ async function tryRefreshToken() {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) {
-        ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k));
+        await clearLocalSession();
         window.location.href = "/login";
         return false;
       }
@@ -28,7 +39,7 @@ async function tryRefreshToken() {
       localStorage.setItem("refresh_token", data.refresh_token);
       return true;
     } catch {
-      ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k));
+      await clearLocalSession();
       window.location.href = "/login";
       return false;
     } finally {

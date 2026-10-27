@@ -1,4 +1,4 @@
-import { init as csInit, imageLoader, eventTarget, Enums as csEnums } from "@cornerstonejs/core";
+import { init as csInit, imageLoader, eventTarget, Enums as csEnums, getRenderingEngines } from "@cornerstonejs/core";
 import {
   init as csToolsInit,
   annotation as csAnnotation,
@@ -28,6 +28,33 @@ import loadWebImage from "./webImageLoader";
 let initialized = false;
 let initPromise = null;
 
+// Measurement labels: by default they only show for the annotation being hovered,
+// drawn/edited or selected, so a slice with several measurements doesn't fill up with text
+// boxes; the reader can choose to keep them all on (remembered in this browser). Arrows
+// always keep theirs — the label is the arrow's whole point.
+const LABELS_KEY = "viewer.labelsAlwaysOn";
+export function getLabelsAlwaysOn() {
+  try { return localStorage.getItem(LABELS_KEY) === "1"; } catch { return false; }
+}
+function applyLabelVisibility() {
+  const styles = csAnnotation.config.style.getDefaultToolStyles();
+  csAnnotation.config.style.setDefaultToolStyles({
+    ...styles,
+    global: {
+      ...styles.global,
+      textBoxVisibility: getLabelsAlwaysOn(),
+      textBoxVisibilityHighlighted: true,
+      textBoxVisibilitySelected: true,
+    },
+    [ArrowAnnotateTool.toolName]: { ...styles[ArrowAnnotateTool.toolName], textBoxVisibility: true },
+  });
+}
+export function setLabelsAlwaysOn(on) {
+  try { localStorage.setItem(LABELS_KEY, on ? "1" : "0"); } catch { }
+  applyLabelVisibility();
+  getRenderingEngines()?.forEach(engine => { try { engine.render(); } catch (_) { } });
+}
+
 export async function initCornerstone() {
   if (initialized) return;
   if (initPromise) return initPromise;
@@ -36,20 +63,7 @@ export async function initCornerstone() {
     await csInit();
     csToolsInit();
 
-    // Measurement labels only show for the annotation being hovered, drawn/edited or
-    // selected, so a slice with several measurements doesn't fill up with text boxes.
-    // Arrows keep theirs — the label is the arrow's whole point.
-    const styles = csAnnotation.config.style.getDefaultToolStyles();
-    csAnnotation.config.style.setDefaultToolStyles({
-      ...styles,
-      global: {
-        ...styles.global,
-        textBoxVisibility: false,
-        textBoxVisibilityHighlighted: true,
-        textBoxVisibilitySelected: true,
-      },
-      [ArrowAnnotateTool.toolName]: { ...styles[ArrowAnnotateTool.toolName], textBoxVisibility: true },
-    });
+    applyLabelVisibility();
 
     // Initialize the DICOM image loader (wado-uri scheme handles blob:/http: DICOM).
     // beforeSend returns headers that are merged onto the XHR — inject the JWT so

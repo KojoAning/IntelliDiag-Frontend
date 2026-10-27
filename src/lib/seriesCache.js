@@ -4,7 +4,10 @@
 // one series at a time, so a radiologist can keep switching series and scrolling slices
 // after the network drops. Each series is held as raw DICOM blobs only — decoding into
 // a volume still happens on open, and Cornerstone's own cache bounds that part.
+// Downloads are also kept on disk (lib/seriesStore), so a reload reuses them instead of
+// downloading again, as long as the series' image list hasn't changed.
 import { authFetch, getImagesForStudy } from "./api";
+import { readStoredSeries, writeStoredSeries, deleteStoredSeries, sameRecords } from "./seriesStore";
 import { renderDicomThumbnail, parseMultipartBody, parseDicomInstanceInfo, getDicomMetadata } from "./dicomUtils";
 
 // Rendered thumbnails, keyed by image id, or `series:<id>` for a series card.
@@ -98,9 +101,8 @@ export function pairPartsWithImages(parts, imgs) {
   return paired;
 }
 
-// Single bulk DICOM fetch for the whole series. Returns the imgs array with blobUrl
-// attached to each entry, so Cornerstone never touches /stream.
-async function fetchSeriesBulk(seriesId, imgs, { renderThumbs }) {
+// Single bulk DICOM fetch for the whole series: one Blob (or null) per image record
+async function fetchSeriesBulk(seriesId, imgs) {
   const token = await getSeriesToken(seriesId);
   const res = await fetch(
     `${process.env.REACT_APP_API_BASE}/dicom/series/${seriesId}/bulk`,
@@ -119,8 +121,14 @@ async function fetchSeriesBulk(seriesId, imgs, { renderThumbs }) {
 
   const buffer = await res.arrayBuffer();
   const parts = parseMultipartBody(buffer, boundary);
-
   const blobs = pairPartsWithImages(parts, imgs).map(part => part && new Blob([part], { type: "application/dicom" }));
+  return { blobs, bytes: buffer.byteLength };
+}
+
+// The viewer's image list from the records and their blobs (downloaded or from disk): a
+// blobUrl on each image that has one, so Cornerstone never touches /stream; thumbnails;
+// and the series' DICOM metadata from its first slice.
+async function finishSeries(seriesId, imgs, blobs, { renderThumbs }) {
   const blobUrls = blobs.map(blob => blob && URL.createObjectURL(blob));
 
   // Per-image thumbnails only where the side panel shows them; the middle slice
@@ -139,12 +147,9 @@ async function fetchSeriesBulk(seriesId, imgs, { renderThumbs }) {
   }
 
   const images = imgs.map((img, i) => blobUrls[i] ? { ...img, blobUrl: blobUrls[i] } : img);
-
-  // Extract DICOM metadata from the first available slice
   const firstBlobUrl = blobUrls.find(Boolean);
   const metadata = firstBlobUrl ? await getDicomMetadata(firstBlobUrl).catch(() => null) : null;
-
-  return { images, metadata, bytes: buffer.byteLength };
+  return { images, metadata };
 }
 
 // Load a series, or return the in-flight / finished load. Resolves to { images, metadata };
@@ -157,8 +162,22 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
   const promise = (async () => {
     let imgs = [];
     try {
-      imgs = await fetchSeriesImages(id);
-      const { images, metadata, bytes } = await fetchSeriesBulk(id, imgs, { renderThumbs });
+      const stored = await readStoredSeries(id).catch(() => null);
+      try {
+        imgs = await fetchSeriesImages(id);
+      } catch (err) {
+        if (!stored) throw err;
+        imgs = stored.records; // offline: open the last downloaded copy
+      }
+      let blobs, bytes;
+      if (stored && sameRecords(stored.records, imgs)) {
+        ({ blobs, bytes } = stored);
+      } else {
+        ({ blobs, bytes } = await fetchSeriesBulk(id, imgs));
+        writeStoredSeries(id, { records: imgs, blobs, bytes })
+          .catch(err => console.warn("[Series] couldn't keep the download on this device:", err));
+      }
+      const { images, metadata } = await finishSeries(id, imgs, blobs, { renderThumbs });
       bytesHeld += bytes;
       setEntry(id, { status: "ready", images, metadata, bytes });
       return { images, metadata };
@@ -175,6 +194,7 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
 // Drop a series (e.g. after new images were uploaded to it) so the next load refetches.
 export function invalidateSeries(seriesId) {
   const id = String(seriesId);
+  deleteStoredSeries(id).catch(() => {});
   const entry = entries.get(id);
   if (!entry) return;
   entry.images?.forEach(img => img.blobUrl && URL.revokeObjectURL(img.blobUrl));

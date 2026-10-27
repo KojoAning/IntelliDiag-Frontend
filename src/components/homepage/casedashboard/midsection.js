@@ -7,6 +7,7 @@ import DicomTagPanel from "./DicomTagPanel";
 import RecistPanel from "./RecistPanel";
 import SeriesPane, { EmptyPane } from "./SeriesPane";
 import { translationPairsFor } from "./rightsection/TranslationPanel";
+import { getLabelsAlwaysOn, setLabelsAlwaysOn } from "../../../lib/cornerstoneSetup";
 import { LAYOUTS, SERIES_DRAG_TYPE, normalizeLayout, resizeLayout, placeSeries, clearPane, activatePane } from "../../../lib/viewerLayout";
 import { readSlicePositions, matchSlice, canLink } from "../../../lib/slicePositions";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
@@ -35,7 +36,7 @@ import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
 import { PiPolygonLight, PiSparkleFill } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
-import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff } from "react-icons/tb";
+import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 import { Sparkle } from "lucide-react";
 
@@ -253,7 +254,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const playRef = useRef(null);
 
   useEffect(() => {
-    if (!playing || images.length <= 1) {
+    if (!playing || frameCount <= 1) {
       clearInterval(playRef.current);
       playRef.current = null;
       return;
@@ -261,13 +262,15 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     syncDriverRef.current = "active"; // linked viewers follow the cine
     playRef.current = setInterval(() => {
       setCurrentIndex(prev => {
-        const next = prev + 1 >= images.length ? 0 : prev + 1;
-        onSelectImage?.(images[next]?.blobUrl ?? images[next]?.url);
+        const next = prev + 1 >= frameCountRef.current ? 0 : prev + 1;
+        const src = fileSrcOfFrameRef.current(next);
+        if (src) onSelectImage?.(src);
         vpRef.current?.setImageIndex(next);
         return next;
       });
     }, 1000 / fps);
     return () => clearInterval(playRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, fps, images, onSelectImage]);
 
   // Stop cine when images change
@@ -319,6 +322,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [, setGeometryVersion] = useState(0); // re-render when positions arrive (link badges)
   const syncDriverRef = useRef("active");
   const currentIndexRef = useRef(0);
+  const frameCountRef = useRef(0);       // for the cine interval
+  const fileSrcOfFrameRef = useRef(() => null);
 
   // Mask overlay opacity (0–1) — controlled by the user slider
   const [maskOpacity, setMaskOpacity] = useState(0.5);
@@ -332,6 +337,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const keyImagesRef = useRef(keyImages);
   keyImagesRef.current = keyImages;
   const [tagPanelOpen, setTagPanelOpen] = useState(false); // DICOM tag browser
+  const [labelsAlwaysOn, setLabelsAlwaysOnState] = useState(getLabelsAlwaysOn); // measurement text on every annotation, not just hovered/selected
+  const toggleLabels = () => { setLabelsAlwaysOn(!labelsAlwaysOn); setLabelsAlwaysOnState(!labelsAlwaysOn); };
   // RECIST panel, and the earlier studies' sums typed into it ({ baseline, nadir, newLesion }), saved with the series
   const [recistPanelOpen, setRecistPanelOpen] = useState(false);
   const [recistReference, setRecistReference] = useState(null);
@@ -451,6 +458,24 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     return () => { cancelled = true; };
   }, [images]);
 
+  // Slice positions are frames (imageIds), but images, the side panel's selection and the
+  // AI / enhancement / translation results have one entry per file. A multi-frame file
+  // makes the two differ, so everything navigates by frame and maps to the file here.
+  const frameMap = useMemo(() => {
+    const fileBySrc = new Map(images.map((img, j) => [img.blobUrl ?? img.url, j]));
+    const fileOfFrame = imageIds.map(id => fileBySrc.get(id.replace(/^(wadouri|web):/, "").replace(/[?&]frame=\d+$/, "")) ?? -1);
+    const firstFrameOfFile = new Array(images.length).fill(-1);
+    fileOfFrame.forEach((j, i) => { if (j >= 0 && firstFrameOfFile[j] < 0) firstFrameOfFile[j] = i; });
+    return { fileOfFrame, firstFrameOfFile };
+  }, [images, imageIds]);
+  const frameCount = imageIds.length;
+  const fileOfFrame = (i) => (frameMap.fileOfFrame[i] >= 0 ? frameMap.fileOfFrame[i] : i);
+  const fileSrcOfFrame = (i) => { const img = images[fileOfFrame(i)]; return img ? img.blobUrl ?? img.url : null; };
+  // A result list's entry for a frame: per-file lists are mapped, per-frame ones pass through
+  const resultForFrame = (list, i) => list?.[list.length === frameCount ? i : fileOfFrame(i)];
+  frameCountRef.current = frameCount;
+  fileSrcOfFrameRef.current = fileSrcOfFrame;
+
   // ── Which slices carry measurements, for the scrubber's marks ──
   const [measuredSlices, setMeasuredSlices] = useState(null);
   useEffect(() => {
@@ -563,14 +588,19 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     if (!inferenceResult?.slices?.length) return null;
     const isGradCam = inferenceResult.slices.some(s => s.predicted_class != null);
     if (isGradCam) return null;
-    return inferenceResult.slices.map(s => s.mask || null);
-  }, [inferenceResult]);
+    return Array.from({ length: frameCount }, (_, i) => resultForFrame(inferenceResult.slices, i)?.mask || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inferenceResult, frameMap]);
 
   // Per-slice confidence (only where the model found something) and the colour legend,
   // so clicking a finding in MPR can report the same confidence + label as the 2D card.
   const segmentationConfidences = useMemo(() => {
     if (!segmentationMaskSlices) return null;
-    return inferenceResult.slices.map(s => (s.detected && s.confidence != null ? s.confidence : null));
+    return Array.from({ length: frameCount }, (_, i) => {
+      const s = resultForFrame(inferenceResult.slices, i);
+      return s?.detected && s.confidence != null ? s.confidence : null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inferenceResult, segmentationMaskSlices]);
   const segmentationLegend = inferenceResult?.label_legend ?? null;
   // Anatomy bundles (structure volumes, no lesion stats) show each structure in its own legend colour
@@ -607,24 +637,27 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Guard: only call setImageIndex if the viewport isn't already on that index —
   // otherwise the IMAGE_RENDERED → onSelectImage → setImageIndex loop blanks the viewport.
   useEffect(() => {
-    const idx = images.findIndex(img => (img.blobUrl ?? img.url) === selectedImage);
-    if (idx >= 0) {
-      if (vpRef.current?.getCurrentIndex?.() !== idx) {
-        vpRef.current?.setImageIndex(idx);
-      }
-      setCurrentIndex(idx);
-    }
-  }, [selectedImage, images]);
+    const file = images.findIndex(img => (img.blobUrl ?? img.url) === selectedImage);
+    if (file < 0) return;
+    const onFrame = vpRef.current?.getCurrentIndex?.() ?? currentIndexRef.current;
+    if (fileOfFrame(onFrame) === file) { setCurrentIndex(onFrame); return; }
+    const frame = frameMap.firstFrameOfFile[file] >= 0 ? frameMap.firstFrameOfFile[file] : file;
+    vpRef.current?.setImageIndex(frame);
+    setCurrentIndex(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedImage, images, frameMap]);
 
   // Slice navigation
   const goTo = useCallback((idx) => {
-    if (idx >= 0 && idx < images.length) {
+    if (idx >= 0 && idx < frameCount) {
       syncDriverRef.current = "active"; // keys, scrubber and panels drive the active viewer
-      onSelectImage?.(images[idx].blobUrl ?? images[idx].url);
+      const src = fileSrcOfFrame(idx);
+      if (src) onSelectImage?.(src);
       vpRef.current?.setImageIndex(idx);
       setCurrentIndex(idx);
     }
-  }, [images, onSelectImage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images, frameMap, frameCount, onSelectImage]);
 
   // Stable imageIds for the translation viewport — only recomputed when translationResult changes
   const translationImageIds = useMemo(() => {
@@ -640,8 +673,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Keep translation viewport in sync with the main slice index
   useEffect(() => {
     if (translationResult && vpRef2.current?.setImageIndex) {
-      vpRef2.current.setImageIndex(currentIndex);
+      vpRef2.current.setImageIndex((translationResult.slices?.length ?? 0) === frameCount ? currentIndex : fileOfFrame(currentIndex));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, translationResult]);
 
 
@@ -710,7 +744,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         return;
       }
 
-      const last = images.length - 1;
+      const last = frameCount - 1;
       switch (e.key) {
         case "ArrowUp": case "ArrowLeft": goTo(currentIndex - 1); return;
         case "ArrowDown": case "ArrowRight": goTo(currentIndex + 1); return;
@@ -718,7 +752,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         case "PageDown": e.preventDefault(); goTo(Math.min(last, currentIndex + 10)); return;
         case "Home": e.preventDefault(); goTo(0); return;
         case "End": e.preventDefault(); goTo(last); return;
-        case " ": if (images.length > 1) { e.preventDefault(); setPlaying(p => !p); } return;
+        case " ": if (frameCount > 1) { e.preventDefault(); setPlaying(p => !p); } return;
         case "Escape": setActiveTool(null); setPresetMenuOpen(false); setShortcutsOpen(false); setLayoutMenuOpen(false); return;
         case "?": setShortcutsOpen(o => !o); return;
         default: break;
@@ -760,7 +794,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, goTo, images.length, isCT, viewMode, imageIds, keyImages]);
+  }, [currentIndex, goTo, frameCount, isCT, viewMode, imageIds, keyImages]);
 
   const imageEnhancement = () => {
     if (enhancementLoading) return;
@@ -908,9 +942,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── Always visible: slice nav ── */}
           <ViewBtn icon={<FiChevronLeft size={16} />} label="Prev slice" disabled={currentIndex <= 0} onClick={() => goTo(currentIndex - 1)} />
           <span className="text-[#6B6B6B] text-[13px] font-mono w-[60px] text-center shrink-0">
-            {images.length > 0 ? `${currentIndex + 1} / ${images.length}` : "— / —"}
+            {frameCount > 0 ? `${currentIndex + 1} / ${frameCount}` : "— / —"}
           </span>
-          <ViewBtn icon={<FiChevronRight size={16} />} label="Next slice" disabled={currentIndex >= images.length - 1} onClick={() => goTo(currentIndex + 1)} />
+          <ViewBtn icon={<FiChevronRight size={16} />} label="Next slice" disabled={currentIndex >= frameCount - 1} onClick={() => goTo(currentIndex + 1)} />
 
           <VDivider />
 
@@ -1257,6 +1291,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* DICOM tag browser */}
           <ToolBtn icon={<TbTags size={17} />} label="DICOM tags (Shift+I)" active={tagPanelOpen} onClick={() => setTagPanelOpen(o => !o)} />
 
+          {/* Measurement labels: always on, or only on the hovered/selected annotation */}
+          <ToolBtn icon={<TbTextCaption size={17} />} label={labelsAlwaysOn ? "Labels always on — click to show only on hover/select" : "Labels on hover/select — click to always show them"} active={labelsAlwaysOn} onClick={toggleLabels} />
+
           <HDivider />
 
           {/* Delete selected annotation */}
@@ -1315,8 +1352,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 leftTool={leftTool}
                 onIndexChange={(idx) => {
                   setCurrentIndex(idx);
-                  const img = images[idx];
-                  if (img) onSelectImage?.(img.blobUrl ?? img.url);
+                  const src = fileSrcOfFrame(idx);
+                  if (src) onSelectImage?.(src);
                   syncFrom("active", idx);
                 }}
                 onArrowTextRequest={handleArrowTextRequest}
@@ -1472,7 +1509,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* ── Enhancement overlay (sits between DICOM and segmentation) ── */}
           {enhancementResult && enhancementActive && viewMode === "stack" && (() => {
-            const eSlice = enhancementResult.slices?.[currentIndex];
+            const eSlice = resultForFrame(enhancementResult.slices, currentIndex);
             const eOverlay = eSlice?.enhanced_image;
             if (!eOverlay) return null;
             const eSrc = eOverlay.startsWith("data:") ? eOverlay : `data:image/png;base64,${eOverlay}`;
@@ -1499,7 +1536,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* ── Segmentation mask overlay ── */}
           {inferenceResult && viewMode === "stack" && (() => {
-            const sliceData = inferenceResult.slices?.[currentIndex];
+            const sliceData = resultForFrame(inferenceResult.slices, currentIndex);
             const overlay = sliceData?.mask;
             // Classification results (e.g. breast density) have no mask but still get the card
             if (!overlay && sliceData?.predicted_class == null) return null;
@@ -1581,7 +1618,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                       {/* Body */}
                       <div className="px-3 pb-2.5">
                         <span className="text-[13px] font-semibold text-white">
-                          {`Slice ${currentIndex + 1} of ${inferenceResult.slices?.length ?? "—"}`}
+                          {`Slice ${currentIndex + 1} of ${frameCount || "—"}`}
                         </span>
                         <p className={`mt-1.5 text-[12px] leading-relaxed m-0 ${badgeColor}`}>
                           {badgeSentence}
@@ -1909,7 +1946,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       </div>
 
       {/* ── Cine / slice bar — docked under the viewer (as in Horos) so it never covers the image ── */}
-      {images.length > 1 && (
+      {frameCount > 1 && (
         <div className="shrink-0 bg-[#161616] rounded-xl px-4 py-2 flex items-center gap-3 select-none">
           {/* Skip to first */}
           <button
@@ -1934,7 +1971,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* Skip to last */}
           <button
-            onClick={() => { setPlaying(false); goTo(images.length - 1); }}
+            onClick={() => { setPlaying(false); goTo(frameCount - 1); }}
             title="Last slice"
             className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
           >
@@ -1946,17 +1983,17 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* Scrubber */}
           <SliceScrubber
-            count={images.length}
+            count={frameCount}
             index={currentIndex}
             onSeek={(i) => { setPlaying(false); goTo(i); }}
-            detected={inferenceResult?.slices?.map(sl => !!sl.detected)}
+            detected={inferenceResult?.slices ? Array.from({ length: frameCount }, (_, i) => !!resultForFrame(inferenceResult.slices, i)?.detected) : null}
             measured={measuredSlices}
             keyed={keyImages.size ? imageIds.map(id => keyImages.has(id)) : null}
           />
 
           {/* Frame counter */}
           <span className="text-[#6B6B6B] text-[11px] font-mono w-[50px] text-center shrink-0">
-            {currentIndex + 1}/{images.length}
+            {currentIndex + 1}/{frameCount}
           </span>
 
           {/* Divider */}

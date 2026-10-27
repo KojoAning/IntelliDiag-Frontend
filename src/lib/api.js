@@ -115,6 +115,8 @@ export const getPatientById = (id)       => request("GET", `/patients/${id}`);
 export const getCases       = (qs = "")  => request("GET", `/cases/${qs}`);
 export const getStudies     = (qs = "")  => request("GET", `/imaging-studies/${qs}`);
 export const deleteStudy    = (studyId)  => request("DELETE", `/imaging-studies/${studyId}`);
+export const getStudy       = (studyId)  => request("GET", `/imaging-studies/${studyId}`);
+export const updateStudy    = (studyId, body) => request("PATCH", `/imaging-studies/${studyId}`, body);
 export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
 export const getReports     = (qs = "")  => request("GET", `/reports/${qs}`);
 export const getRecentJobs  = ()         => request("GET", `/jobs/recent`);
@@ -139,6 +141,16 @@ export const getDicomDownloadUrl = async (imageId) => {
  */
 export function getSeriesForStudy(studyId) {
   return request("GET", `/series/study/${studyId}`);
+}
+
+/**
+ * GET / PUT /series/{series_id}/annotations — viewer measurements saved with the series
+ */
+export function getSeriesAnnotations(seriesId) {
+  return request("GET", `/series/${seriesId}/annotations`);
+}
+export function saveSeriesAnnotations(seriesId, annotations) {
+  return request("PUT", `/series/${seriesId}/annotations`, { annotations });
 }
 
 /**

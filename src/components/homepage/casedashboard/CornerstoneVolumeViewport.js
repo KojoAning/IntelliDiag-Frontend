@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } f
 import { RenderingEngine, Enums, volumeLoader, setVolumesForViewports, cache as csCache, eventTarget as csEventTarget } from "@cornerstonejs/core";
 import {
   ToolGroupManager,
+  utilities as csToolsUtilities,
   annotation as csAnnotation,
   segmentation as csSegmentation,
   PanTool,
@@ -17,9 +18,29 @@ import {
   ProbeTool,
   PlanarFreehandROITool,
   CrosshairsTool,
+  BidirectionalTool,
+  CobbAngleTool,
+  LabelTool,
   Enums as csToolsEnums,
 } from "@cornerstonejs/tools";
 import { initCornerstone } from "../../../lib/cornerstoneSetup";
+import { applyHorosMouseBindings } from "../../../lib/mouseBindings";
+import { PENCIL_TOOL_NAME } from "../../../lib/annotationPersistence";
+import { probePixel, mmPerCanvasPixel, formatPixelValue } from "../../../lib/viewportReadouts";
+import OrientationMarkers, { getOrientationMarkers } from "./OrientationMarkers";
+import ScaleBar from "./ScaleBar";
+import {
+  roiContoursInWorld, contourCrossSection, roiColor,
+  listRois, suggestRoiName, roiFirstContour, AREA_ROI_TOOL_NAMES,
+} from "../../../lib/roiVolume";
+import { growRegionThroughSlices } from "../../../lib/regionGrow";
+import { uid } from "../../../lib/uid";
+
+// Starting intensity window for growing a drawn region (mean ± this many SDs); the popup's
+// −/+ buttons tighten or loosen it within these bounds.
+const DEFAULT_GROW_TOLERANCE = 2;
+const MIN_GROW_TOLERANCE = 0.5;
+const MAX_GROW_TOLERANCE = 5;
 
 const TOOL_MAP = {
   circle:   CircleROITool.toolName,
@@ -29,6 +50,10 @@ const TOOL_MAP = {
   angle:    AngleTool.toolName,
   marker:   ProbeTool.toolName,
   polygon:  PlanarFreehandROITool.toolName,
+  bidirectional: BidirectionalTool.toolName,
+  cobb:     CobbAngleTool.toolName,
+  text:     LabelTool.toolName,
+  pencil:   PENCIL_TOOL_NAME,
 };
 
 const ALL_ANNOTATION_TOOLS = Object.values(TOOL_MAP);
@@ -218,7 +243,7 @@ function pointInPolygon2D(x, y, poly) {
 let instanceCounter = 0;
 
 const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
-  { imageIds = [], activeTool = null, windowLevel = false, onArrowTextRequest, onActivePlaneChange, maskSlices = null, maskConfidences = null, maskLegend = null, colorByClass = false, maskOpacity = 0.5 },
+  { imageIds = [], activeTool = null, leftTool = "wl", onArrowTextRequest, onActivePlaneChange, maskSlices = null, maskConfidences = null, maskLegend = null, colorByClass = false, maskOpacity = 0.5, onRoisChange, savedRegions = null, onRegionsChange },
   ref
 ) {
   const containerRef = useRef(null); // outer grid — click position is measured relative to this
@@ -233,6 +258,14 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   const lesionStatsRef = useRef(null); // Map<label, { voxelCount, volumeCm3 }>
   const nextLesionLabelRef = useRef(0); // highest label index used so far (AI + manual ROIs share the id space)
   const manualLabelsRef = useRef(new Set()); // labels that came from a drawn ROI, not AI — these get a heavier base outline since they're often only 1 voxel thick edge-on
+  const growSeedsRef = useRef(new Map());     // manual label -> { seed, fixedAxis, fixedValue, varyingAxes, tolerance } it was grown from
+  const volumeScalarsRef = useRef({ volumeId: null, data: null }); // cached voxel values for region growing
+  const defaultVoiRef = useRef({});   // viewportId -> voiRange it loaded with (for resetWindow)
+  const [orientationByPlane, setOrientationByPlane] = useState({}); // plane key -> edge letters
+  const [scaleByPlane, setScaleByPlane] = useState({});             // plane key -> { mmPerPixel, height } for the scale bar
+  const [pixelReadout, setPixelReadout] = useState(null);           // { key, value, unit } under the mouse
+  const pointerRef = useRef(null);                                  // { key, point } last mouse position on a pane
+  const [roiCrossSections, setRoiCrossSections] = useState({});     // plane key -> { bands, labels }
   const manualLabelNumberRef = useRef(new Map()); // internal label -> user-facing "Polygon N" number
   const manualLabelCounterRef = useRef(0); // next "Polygon N" number to hand out
   const rebuildingSegmentationRef = useRef(false); // true while Step 2b is (re)building the AI segmentation — manual draws during this window would land on a volume about to be discarded
@@ -245,6 +278,30 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   maskLegendRef.current = maskLegend;
   const colorByClassRef = useRef(colorByClass);
   colorByClassRef.current = colorByClass;
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
+  const imageIdsPropRef = useRef(imageIds);
+  imageIdsPropRef.current = imageIds;
+  const onRoisChangeCbRef = useRef(onRoisChange);
+  onRoisChangeCbRef.current = onRoisChange;
+  const bakeDrawnRegionRef = useRef(null); // the polygon-completed handler — "Grow to 3D" reuses it
+  const onRegionsChangeCbRef = useRef(onRegionsChange);
+  onRegionsChangeCbRef.current = onRegionsChange;
+  const leftToolRef = useRef(leftTool);
+  leftToolRef.current = leftTool;
+
+  // pointer: left button does nothing to the image — only grabs crosshair lines / measurements
+  const LEFT_TOOLS = { wl: WindowLevelTool.toolName, pan: PanTool.toolName, crosshairs: CrosshairsTool.toolName, pointer: null };
+  const applyBindings = (toolGroup = toolGroupRef.current) => {
+    if (!toolGroup) return;
+    applyHorosMouseBindings(toolGroup, {
+      primary: TOOL_MAP[activeToolRef.current]
+        ?? (leftToolRef.current in LEFT_TOOLS ? LEFT_TOOLS[leftToolRef.current] : WindowLevelTool.toolName),
+      // Crosshair lines stay draggable (Passive) whatever is on the left button
+      interactiveTools: [...ALL_ANNOTATION_TOOLS, CrosshairsTool.toolName],
+      extraBindings: { [PanTool.toolName]: [{ mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }] },
+    });
+  };
   const instanceId = useRef(++instanceCounter);
   const arrowTextCbRef = useRef(onArrowTextRequest);
   arrowTextCbRef.current = onArrowTextRequest;
@@ -372,6 +429,23 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       vp.setCamera({ flipVertical: !cam.flipVertical });
       vp.render();
     },
+    // Window presets apply to all 3 panes together, like Horos's synced MPR. The window
+    // each pane loaded with is remembered on first change so "0" can restore it.
+    setWindow(center, width) {
+      getAllVps().forEach(vp => {
+        if (!defaultVoiRef.current[vp.id]) defaultVoiRef.current[vp.id] = vp.getProperties().voiRange;
+        vp.setProperties({ voiRange: { lower: center - width / 2, upper: center + width / 2 } });
+        vp.render();
+      });
+    },
+    resetWindow() {
+      getAllVps().forEach(vp => {
+        const voiRange = defaultVoiRef.current[vp.id];
+        if (!voiRange) return;
+        vp.setProperties({ voiRange });
+        vp.render();
+      });
+    },
     toggleInvert() {
       const vp = getVp();
       if (!vp) return;
@@ -412,6 +486,28 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       if (removedAny) reinitializeCrosshairs();
       getAllVps().forEach(vp => vp.render());
       return removedAny;
+    },
+    // ROI list: centre the crosshairs on an ROI's first contour
+    focusRoi(name) {
+      const roi = roiFirstContour(imageIdsPropRef.current, name);
+      const crosshairs = toolGroupRef.current?.getToolInstance(CrosshairsTool.toolName);
+      if (!roi || !crosshairs) return;
+      try { crosshairs.setToolCenter(roi.centroid); } catch (err) { console.warn("[ROI] couldn't centre on", name, err); }
+    },
+    // ROI list "Grow to 3D": turn a single-slice contour into a seed and grow it through the
+    // slices, exactly like a drawn polygon (the contour itself is replaced by the region)
+    growRoi(name) {
+      const roi = roiFirstContour(imageIdsPropRef.current, name);
+      if (!roi || roi.outline.length < 3) return;
+      bakeDrawnRegionRef.current?.({
+        detail: {
+          annotation: {
+            annotationUID: roi.annotation.annotationUID,
+            metadata: { toolName: PlanarFreehandROITool.toolName },
+            data: { contour: { polyline: roi.outline, closed: true } },
+          },
+        },
+      });
     },
     render() {
       getAllVps().forEach(vp => vp.render());
@@ -455,9 +551,24 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       // Annotation / measurement tools — set to Enabled so existing annotations render
       [LengthTool, AngleTool, EllipticalROITool, CircleROITool,
        RectangleROITool, ArrowAnnotateTool, ProbeTool, PlanarFreehandROITool,
+       BidirectionalTool, CobbAngleTool, LabelTool,
       ].forEach((T) => {
         toolGroup.addTool(T.toolName);
         toolGroup.setToolEnabled(T.toolName);
+      });
+      // Pencil: freehand strokes without area stats, kept apart from the named ROIs
+      toolGroup.addToolInstance(PENCIL_TOOL_NAME, PlanarFreehandROITool.toolName, { calculateStats: false });
+      toolGroup.setToolEnabled(PENCIL_TOOL_NAME);
+
+      // ROI name as the first line of each area contour's label, as in the 2D viewer
+      AREA_ROI_TOOL_NAMES.forEach(name => {
+        const tool = toolGroup.getToolInstance(name);
+        const baseTextLines = tool?.configuration?.getTextLines;
+        if (!baseTextLines) return;
+        tool.configuration.getTextLines = (data, targetId) => [
+          ...(data.label ? [data.label] : []),
+          ...(baseTextLines(data, targetId) ?? []),
+        ];
       });
 
       viewportIds.forEach(id => toolGroup.addViewport(id, engineId));
@@ -474,35 +585,23 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         getReferenceLineSlabThicknessControlsOn: () => false,
       });
 
-      // Primary = Crosshairs (click/drag to reslice + move the locator point)
-      // Shift+Primary = Pan, Auxiliary = Window/Level, Secondary = Zoom, Wheel = scroll slices
-      toolGroup.setToolActive(CrosshairsTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }],
-      });
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Auxiliary }],
-      });
-      toolGroup.setToolActive(ZoomTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Secondary }],
-      });
+      // Horos mouse layout: left = W/L (or the chosen tool), Shift+left / middle = pan,
+      // right = zoom, wheel = scroll slices. Crosshair lines stay draggable throughout.
+      applyBindings(toolGroup);
       toolGroup.setToolActive(StackScrollTool.toolName, {
         bindings: [{ mouseButton: MouseBindings.Wheel }],
       });
 
-      // Override ArrowAnnotateTool's prompt with the custom React dialog
-      const arrowTool = toolGroup.getToolInstance(ArrowAnnotateTool.toolName);
-      if (arrowTool) {
-        arrowTool.configuration.getTextCallback = (doneChangingTextCallback) => {
+      // Arrow and text labels ask for their text in the app's own dialog, not prompt()
+      [ArrowAnnotateTool, LabelTool].map(T => toolGroup.getToolInstance(T.toolName)).filter(Boolean).forEach(textTool => {
+        textTool.configuration.getTextCallback = (doneChangingTextCallback) => {
           if (arrowTextCbRef.current) {
             arrowTextCbRef.current(doneChangingTextCallback);
           } else {
             doneChangingTextCallback(prompt("Enter your annotation:"));
           }
         };
-      }
+      });
 
       if (!cancelled) setEngineReady(true);
     })();
@@ -556,6 +655,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         if (cancelled) return;
 
         await setVolumesForViewports(engine, [{ volumeId }], viewportIds);
+        defaultVoiRef.current = {}; // new volume — forget the previous one's windows
 
         if (cancelled) return;
 
@@ -594,6 +694,8 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
     if (!hasMasks) {
       if (segmentationIdRef.current) {
+        // The drawn regions share the AI layer — rebuild them from their outlines after it goes
+        const drawn = listDrawnRegions();
         try { csSegmentation.removeSegmentation(segmentationIdRef.current); } catch (_) {}
         segmentationIdRef.current = null;
         labelmapVolumeRef.current = null;
@@ -602,9 +704,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         lesionStatsRef.current = null;
         nextLesionLabelRef.current = 0;
         manualLabelsRef.current = new Set();
+        growSeedsRef.current = new Map();
         manualLabelNumberRef.current = new Map();
         manualLabelCounterRef.current = 0;
         setSelectedLesion(null);
+        drawn.forEach(region => bakeOutlineRegion(region.outline, region));
         getAllVps().forEach(vp => vp.render());
       }
       return;
@@ -618,6 +722,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       // carried forward into the new labelmap instead of silently disappearing.
       const priorLabelArray = labelArrayRef.current;
       const priorManualLabels = manualLabelsRef.current;
+      const priorGrowSeeds = growSeedsRef.current;
       const priorLesionStats = lesionStatsRef.current;
       const priorManualLabelNumbers = manualLabelNumberRef.current;
       try {
@@ -671,6 +776,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         // footprints overlap (it's the fresh/authoritative result for this model).
         const carriedManualLabels = new Set();
         const carriedManualLabelNumbers = new Map();
+        const carriedGrowSeeds = new Map();
         if (priorLabelArray && priorManualLabels?.size && priorLabelArray.length === componentLabels.length) {
           const remap = new Map(); // old label -> new label
           let nextLabel = Math.max(0, ...lesionStats.keys());
@@ -688,6 +794,8 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
               carriedManualLabels.add(newLabel);
               const polygonNumber = priorManualLabelNumbers?.get(oldLabel);
               if (polygonNumber != null) carriedManualLabelNumbers.set(newLabel, polygonNumber);
+              const growSeed = priorGrowSeeds?.get(oldLabel);
+              if (growSeed) carriedGrowSeeds.set(newLabel, growSeed);
             }
             componentLabels[voxelIdx] = newLabel;
           }
@@ -702,6 +810,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         manualLabelNumberRef.current = carriedManualLabelNumbers; // manualLabelCounterRef is left as-is so future polygons keep counting up
         nextLesionLabelRef.current = Math.max(0, ...lesionStats.keys(), ...carriedManualLabels);
         manualLabelsRef.current = carriedManualLabels;
+        growSeedsRef.current = carriedGrowSeeds;
         setSelectedLesion(null);
 
         labelmapVolume.voxelManager.setCompleteScalarDataArray(componentLabels);
@@ -813,6 +922,165 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLesion]);
 
+  // Bakes a drawn outline (world points) into the segmentation volume as its own region,
+  // grown from it through the neighbouring slices. Used for a freshly drawn polygon, for
+  // restoring saved regions, and for rebuilding them after the AI layer is cleared.
+  // Returns { label, voxelCount, volumeCm3, centroidWorld }, or null if nothing was baked.
+  const bakeOutlineRegion = (polyline, { uid: regionUid = uid(), tolerance = DEFAULT_GROW_TOLERANCE, number = null } = {}) => {
+    const mainVolumeId = volumeIdRef.current;
+    const mainVolume = csCache.getVolume(mainVolumeId);
+    if (!mainVolume?.imageData) return null;
+
+    // Reuse the existing segmentation volume if one exists (from AI masks or an
+    // earlier manual ROI); otherwise create an empty one just for manual ROIs.
+    let labelmapVolume = labelmapVolumeRef.current;
+    let segmentationId = segmentationIdRef.current;
+    let dims = labelDimsRef.current;
+
+    if (!labelmapVolume || !dims) {
+      const [w, h, d] = mainVolume.dimensions;
+      dims = { w, h, d };
+      const labelmapVolumeId = `labelmap-${instanceId.current}-${Date.now()}`;
+      labelmapVolume = volumeLoader.createAndCacheDerivedLabelmapVolume(mainVolumeId, { volumeId: labelmapVolumeId });
+      labelArrayRef.current = new Uint8Array(w * h * d);
+      labelDimsRef.current = dims;
+      lesionStatsRef.current = new Map();
+      nextLesionLabelRef.current = 0;
+      manualLabelsRef.current = new Set();
+      growSeedsRef.current = new Map();
+      manualLabelNumberRef.current = new Map();
+      manualLabelCounterRef.current = 0;
+      labelmapVolumeRef.current = labelmapVolume;
+
+      segmentationId = `segmentation-${instanceId.current}-${Date.now()}`;
+      csSegmentation.segmentationStyle.setStyle(
+        { segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap },
+        { renderFill: true, fillAlpha: maskOpacityRef.current, renderOutline: true, outlineWidth: 1, outlineOpacity: 1 }
+      );
+      csSegmentation.addSegmentations([{
+        segmentationId,
+        representation: { type: csToolsEnums.SegmentationRepresentations.Labelmap, data: { volumeId: labelmapVolumeId } },
+      }]);
+      viewportIds.forEach(viewportId => {
+        csSegmentation.addSegmentationRepresentations(viewportId, [{ segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap }]);
+      });
+      segmentationIdRef.current = segmentationId;
+    }
+
+    const { w, h, d } = dims;
+    const volDims = [w, h, d];
+
+    // Convert the drawn polygon's world points to continuous voxel indices, then
+    // find which axis barely varies across them — that's the slice it was drawn on.
+    const idxPoints = polyline.map(pt => mainVolume.imageData.worldToIndex(pt));
+    const axisVariance = [0, 1, 2].map(axis => {
+      const vals = idxPoints.map(p => p[axis]);
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+    });
+    const fixedAxis = axisVariance.indexOf(Math.min(...axisVariance));
+    const varyingAxes = [0, 1, 2].filter(a => a !== fixedAxis);
+    const fixedValue = Math.round(idxPoints.reduce((a, p) => a + p[fixedAxis], 0) / idxPoints.length);
+    if (fixedValue < 0 || fixedValue >= volDims[fixedAxis]) return null;
+
+    const poly2d = idxPoints.map(p => [p[varyingAxes[0]], p[varyingAxes[1]]]);
+    const minA = Math.max(0, Math.floor(Math.min(...poly2d.map(p => p[0]))));
+    const maxA = Math.min(volDims[varyingAxes[0]] - 1, Math.ceil(Math.max(...poly2d.map(p => p[0]))));
+    const minB = Math.max(0, Math.floor(Math.min(...poly2d.map(p => p[1]))));
+    const maxB = Math.min(volDims[varyingAxes[1]] - 1, Math.ceil(Math.max(...poly2d.map(p => p[1]))));
+
+    if (nextLesionLabelRef.current >= 254) {
+      console.warn("[Manual ROI] segment limit reached — cannot add another region.");
+      return null;
+    }
+    nextLesionLabelRef.current += 1;
+    const label = nextLesionLabelRef.current;
+
+    // The drawn outline is the seed; the region then grows from it through the
+    // neighbouring slices (growManualRegion) so the volume is the whole structure.
+    const coord = [0, 0, 0];
+    const seed = [];
+    let sumA = 0, sumB = 0;
+    for (let a = minA; a <= maxA; a++) {
+      for (let b = minB; b <= maxB; b++) {
+        if (!pointInPolygon2D(a + 0.5, b + 0.5, poly2d)) continue;
+        seed.push([a, b]);
+        sumA += a;
+        sumB += b;
+      }
+    }
+    coord[fixedAxis] = fixedValue; // the drawn slice, for the centroid below
+    if (!seed.length) {
+      nextLesionLabelRef.current -= 1; // nothing landed inside the volume — give the label back
+      return null;
+    }
+
+    // outline + uid are what's saved (see onRegionsChange); the seed is rebuilt from the outline
+    const outline = polyline.map(pt => [pt[0], pt[1], pt[2]]);
+    const growInfo = { seed, fixedAxis, fixedValue, varyingAxes, tolerance, outline, uid: regionUid };
+    growSeedsRef.current.set(label, growInfo);
+    const { voxelCount, volumeCm3 } = growManualRegion(label, growInfo);
+    manualLabelsRef.current.add(label);
+    const polygonNumber = number ?? manualLabelCounterRef.current + 1;
+    manualLabelCounterRef.current = Math.max(manualLabelCounterRef.current, polygonNumber);
+    manualLabelNumberRef.current.set(label, polygonNumber);
+
+    // A region drawn on one plane is only 1 voxel thick along its normal — from the
+    // other 2 panes you're slicing it edge-on, so it's genuinely a thin line, not a
+    // blob. Rather than fake extra thickness, give it a heavier outline (fill alpha
+    // stays on the shared opacity slider — see the merge:false note in Step 2d) so
+    // that thin line still reads clearly instead of disappearing into antialiasing.
+    csSegmentation.segmentationStyle.setStyle(
+      { segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap, segmentIndex: label },
+      { outlineWidth: 3, outlineOpacity: 1 }, false
+    );
+    viewportIds.forEach(viewportId => {
+      csSegmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, label, MANUAL_ROI_COLOR);
+    });
+
+    console.log(`[Manual ROI] baked ${voxelCount} voxels as label ${label} (${volumeCm3.toFixed(2)} cm³) into segmentation ${segmentationId}`);
+
+    // Centroid of the filled voxels (not just the last one visited), used both to
+    // position the popover and to recenter the crosshairs on the new region.
+    let centroidWorld = null;
+    try {
+      const centroidCoord = [...coord];
+      centroidCoord[varyingAxes[0]] = Math.round(sumA / seed.length);
+      centroidCoord[varyingAxes[1]] = Math.round(sumB / seed.length);
+      centroidWorld = mainVolume.imageData.indexToWorld(centroidCoord);
+    } catch (err) {
+      console.warn("[Manual ROI] couldn't compute centroid world position:", err);
+    }
+    return { label, voxelCount, volumeCm3, centroidWorld };
+  };
+
+  // The drawn regions as saved with the series' measurements: { uid, outline, tolerance, number }
+  const listDrawnRegions = () => [...growSeedsRef.current]
+    .filter(([label, info]) => manualLabelsRef.current.has(label) && info.outline)
+    .map(([label, info]) => ({ uid: info.uid, outline: info.outline, tolerance: info.tolerance, number: manualLabelNumberRef.current.get(label) ?? null }));
+  const reportRegions = () => onRegionsChangeCbRef.current?.(listDrawnRegions());
+
+  // Step 2f: Put saved regions back once the volume is in (after any AI layer has been
+  // built, since that rebuild would discard them). Regions already here are skipped by
+  // uid, so this is safe to re-run whenever the saved list changes.
+  useEffect(() => {
+    if (!volumeLoaded || !savedRegions?.length) return;
+    let timer = null;
+    const restore = () => {
+      if (rebuildingSegmentationRef.current) { timer = setTimeout(restore, 200); return; }
+      const present = new Set([...growSeedsRef.current.values()].map(info => info.uid));
+      let restored = 0;
+      savedRegions.forEach(region => {
+        if (present.has(region.uid) || !(region.outline?.length >= 3)) return;
+        if (bakeOutlineRegion(region.outline, region)) restored++;
+      });
+      if (restored) getAllVps().forEach(vp => vp.render());
+    };
+    restore();
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volumeLoaded, savedRegions]);
+
   // Step 2e: Completing a polygon ROI bakes it into the segmentation volume (as its own
   // region) instead of staying a flat 2D annotation — so it reslices across all 3 panes
   // too, and gets a volume via the exact same connected-component/popover machinery as
@@ -833,132 +1101,10 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         return;
       }
 
-      const mainVolumeId = volumeIdRef.current;
-      const mainVolume = csCache.getVolume(mainVolumeId);
-      if (!mainVolume?.imageData) return;
-
       try {
-        // Reuse the existing segmentation volume if one exists (from AI masks or an
-        // earlier manual ROI); otherwise create an empty one just for manual ROIs.
-        let labelmapVolume = labelmapVolumeRef.current;
-        let segmentationId = segmentationIdRef.current;
-        let dims = labelDimsRef.current;
-
-        if (!labelmapVolume || !dims) {
-          const [w, h, d] = mainVolume.dimensions;
-          dims = { w, h, d };
-          const labelmapVolumeId = `labelmap-${instanceId.current}-${Date.now()}`;
-          labelmapVolume = volumeLoader.createAndCacheDerivedLabelmapVolume(mainVolumeId, { volumeId: labelmapVolumeId });
-          labelArrayRef.current = new Uint8Array(w * h * d);
-          labelDimsRef.current = dims;
-          lesionStatsRef.current = new Map();
-          nextLesionLabelRef.current = 0;
-          manualLabelsRef.current = new Set();
-          manualLabelNumberRef.current = new Map();
-          manualLabelCounterRef.current = 0;
-          labelmapVolumeRef.current = labelmapVolume;
-
-          segmentationId = `segmentation-${instanceId.current}-${Date.now()}`;
-          csSegmentation.segmentationStyle.setStyle(
-            { segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap },
-            { renderFill: true, fillAlpha: maskOpacityRef.current, renderOutline: true, outlineWidth: 1, outlineOpacity: 1 }
-          );
-          csSegmentation.addSegmentations([{
-            segmentationId,
-            representation: { type: csToolsEnums.SegmentationRepresentations.Labelmap, data: { volumeId: labelmapVolumeId } },
-          }]);
-          viewportIds.forEach(viewportId => {
-            csSegmentation.addSegmentationRepresentations(viewportId, [{ segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap }]);
-          });
-          segmentationIdRef.current = segmentationId;
-        }
-
-        const { w, h, d } = dims;
-        const volDims = [w, h, d];
-
-        // Convert the drawn polygon's world points to continuous voxel indices, then
-        // find which axis barely varies across them — that's the slice it was drawn on.
-        const idxPoints = polyline.map(pt => mainVolume.imageData.worldToIndex(pt));
-        const axisVariance = [0, 1, 2].map(axis => {
-          const vals = idxPoints.map(p => p[axis]);
-          const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-          return vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
-        });
-        const fixedAxis = axisVariance.indexOf(Math.min(...axisVariance));
-        const varyingAxes = [0, 1, 2].filter(a => a !== fixedAxis);
-        const fixedValue = Math.round(idxPoints.reduce((a, p) => a + p[fixedAxis], 0) / idxPoints.length);
-        if (fixedValue < 0 || fixedValue >= volDims[fixedAxis]) return;
-
-        const poly2d = idxPoints.map(p => [p[varyingAxes[0]], p[varyingAxes[1]]]);
-        const minA = Math.max(0, Math.floor(Math.min(...poly2d.map(p => p[0]))));
-        const maxA = Math.min(volDims[varyingAxes[0]] - 1, Math.ceil(Math.max(...poly2d.map(p => p[0]))));
-        const minB = Math.max(0, Math.floor(Math.min(...poly2d.map(p => p[1]))));
-        const maxB = Math.min(volDims[varyingAxes[1]] - 1, Math.ceil(Math.max(...poly2d.map(p => p[1]))));
-
-        if (nextLesionLabelRef.current >= 254) {
-          console.warn("[Manual ROI] segment limit reached — cannot add another region.");
-          return;
-        }
-        nextLesionLabelRef.current += 1;
-        const label = nextLesionLabelRef.current;
-
-        const labelArray = labelArrayRef.current;
-        const coord = [0, 0, 0];
-        let voxelCount = 0; // counted on the drawn slice only — this is what gets reported as the volume
-        let sumA = 0, sumB = 0;
-
-        // Render-only padding: a true 1-voxel-thick slab's exact world position, round-tripped
-        // through world<->index transforms, can land the GPU's slice sample half a voxel off
-        // the slice we wrote — making a genuinely-drawn region invisible from other planes purely
-        // from floating-point rounding. Writing it onto the neighboring slice too makes it robust
-        // to that, without inflating the reported voxel count/volume (computed from the drawn slice alone).
-        const renderFixedValues = [fixedValue - 1, fixedValue, fixedValue + 1].filter(
-          v => v >= 0 && v < volDims[fixedAxis]
-        );
-
-        for (let a = minA; a <= maxA; a++) {
-          for (let b = minB; b <= maxB; b++) {
-            if (!pointInPolygon2D(a + 0.5, b + 0.5, poly2d)) continue;
-            coord[varyingAxes[0]] = a;
-            coord[varyingAxes[1]] = b;
-            renderFixedValues.forEach(v => {
-              coord[fixedAxis] = v;
-              labelArray[coord[2] * w * h + coord[1] * w + coord[0]] = label;
-            });
-            voxelCount++;
-            sumA += a;
-            sumB += b;
-          }
-        }
-        coord[fixedAxis] = fixedValue; // back to the drawn slice for the centroid below
-        if (!voxelCount) {
-          nextLesionLabelRef.current -= 1; // nothing landed inside the volume — give the label back
-          return;
-        }
-
-        const spacing = labelmapVolume.spacing;
-        const volumeCm3 = voxelCount * ((spacing[0] * spacing[1] * spacing[2]) / 1000);
-        lesionStatsRef.current.set(label, { voxelCount, volumeCm3 });
-        manualLabelsRef.current.add(label);
-        manualLabelCounterRef.current += 1;
-        manualLabelNumberRef.current.set(label, manualLabelCounterRef.current);
-
-        // A region drawn on one plane is only 1 voxel thick along its normal — from the
-        // other 2 panes you're slicing it edge-on, so it's genuinely a thin line, not a
-        // blob. Rather than fake extra thickness, give it a heavier outline (fill alpha
-        // stays on the shared opacity slider — see the merge:false note in Step 2d) so
-        // that thin line still reads clearly instead of disappearing into antialiasing.
-        csSegmentation.segmentationStyle.setStyle(
-          { segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap, segmentIndex: label },
-          { outlineWidth: 3, outlineOpacity: 1 }, false
-        );
-        viewportIds.forEach(viewportId => {
-          csSegmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, label, MANUAL_ROI_COLOR);
-        });
-
-        labelmapVolume.voxelManager.setCompleteScalarDataArray(labelArray);
-        csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId);
-        console.log(`[Manual ROI] baked ${voxelCount} voxels as label ${label} (${volumeCm3.toFixed(2)} cm³) into segmentation ${segmentationId}`);
+        const region = bakeOutlineRegion(polyline);
+        if (!region) return;
+        const { label, voxelCount, volumeCm3, centroidWorld } = region;
 
         // This annotation is now redundant — its shape lives in the segmentation volume
         // and renders (correctly) in all 3 panes, so the flat 2D outline would just be a
@@ -968,18 +1114,6 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           csAnnotation.state.removeAnnotation(annotation.annotationUID);
         } catch (err) {
           console.warn("[Manual ROI] couldn't remove the source annotation:", err);
-        }
-
-        // Centroid of the filled voxels (not just the last one visited), used both to
-        // position the popover and to recenter the crosshairs on the new region.
-        let centroidWorld = null;
-        try {
-          const centroidCoord = [...coord];
-          centroidCoord[varyingAxes[0]] = Math.round(sumA / voxelCount);
-          centroidCoord[varyingAxes[1]] = Math.round(sumB / voxelCount);
-          centroidWorld = mainVolume.imageData.indexToWorld(centroidCoord);
-        } catch (err) {
-          console.warn("[Manual ROI] couldn't compute centroid world position:", err);
         }
 
         // Drawing a polygon hands Primary to the ROI tool, so Crosshairs never got to jump
@@ -992,6 +1126,17 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
             } else {
               crosshairs.setToolCenter(centroidWorld);
               console.log("[Manual ROI] recentred crosshairs to", centroidWorld);
+
+              // The first drawn region creates the segmentation layer, which adds a labelmap
+              // actor to each pane asynchronously — and Viewport.addActors resets each camera
+              // and restores a view saved before this recentre, so the move is lost. Re-apply
+              // it once those actors are in (later regions reuse the layer; nothing fires).
+              const panes = PLANES.map(({ key }) => divRefs.current[key]).filter(Boolean);
+              const reapply = () => {
+                try { crosshairs.setToolCenter(centroidWorld); } catch (_) {}
+              };
+              panes.forEach(el => el.addEventListener(Enums.Events.ACTORS_CHANGED, reapply));
+              setTimeout(() => panes.forEach(el => el.removeEventListener(Enums.Events.ACTORS_CHANGED, reapply)), 3000);
             }
           } catch (err) {
             console.warn("[Manual ROI] setToolCenter failed:", err);
@@ -1003,7 +1148,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           const vp = getVp();
           const containerRect = containerRef.current?.getBoundingClientRect();
           const paneRect = divRefs.current[activePlaneRef.current]?.getBoundingClientRect();
-          const stat = { voxelCount, volumeCm3 };
+          const stat = lesionStatsRef.current.get(label) ?? { voxelCount, volumeCm3 };
           if (centroidWorld && vp && containerRect && paneRect) {
             const [cx, cy] = vp.worldToCanvas(centroidWorld);
             const halfCardW = 110;
@@ -1016,15 +1161,17 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           }
         } catch (err) {
           console.warn("[Manual ROI] couldn't position the popover:", err);
-          setSelectedLesion(buildSelectedLesion(label, { voxelCount, volumeCm3 }, { x: 110, y: 44 }));
+          setSelectedLesion(buildSelectedLesion(label, lesionStatsRef.current.get(label) ?? { voxelCount, volumeCm3 }, { x: 110, y: 44 }));
         }
 
         getAllVps().forEach(vp2 => vp2.render());
+        reportRegions();
       } catch (err) {
         console.error("[Manual ROI] failed to bake polygon into segmentation:", err);
       }
     };
 
+    bakeDrawnRegionRef.current = handleAnnotationCompleted;
     csEventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, handleAnnotationCompleted);
     return () => csEventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, handleAnnotationCompleted);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1118,6 +1265,85 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
   // Erases a manually-drawn region from the segmentation entirely. AI findings aren't
   // deletable this way — they're not yours to remove, only to inspect.
+  // The volume's voxel values, fetched once per volume (copying them is expensive).
+  const getVolumeScalars = (volume) => {
+    if (volumeScalarsRef.current.volumeId !== volume.volumeId) {
+      volumeScalarsRef.current = { volumeId: volume.volumeId, data: volume.voxelManager.getCompleteScalarDataArray() };
+    }
+    return volumeScalarsRef.current.data;
+  };
+
+  // (Re)grows a drawn region from its seed outline through neighbouring slices (see
+  // lib/regionGrow) and writes it into the labelmap. Returns its updated stats.
+  const growManualRegion = (label, info) => {
+    const mainVolume = csCache.getVolume(volumeIdRef.current);
+    const labelArray = labelArrayRef.current;
+    const labelmapVolume = labelmapVolumeRef.current;
+    const dims = labelDimsRef.current;
+    if (!mainVolume || !labelArray || !labelmapVolume || !dims) return null;
+    const { w, h, d } = dims;
+    const volDims = [w, h, d];
+
+    for (let idx = 0; idx < labelArray.length; idx++) {
+      if (labelArray[idx] === label) labelArray[idx] = 0; // drop the previous growth
+    }
+    const { voxels, sliceMin, sliceMax } = growRegionThroughSlices({
+      scalars: getVolumeScalars(mainVolume),
+      dims: volDims,
+      seed: info.seed,
+      fixedAxis: info.fixedAxis,
+      fixedValue: info.fixedValue,
+      varyingAxes: info.varyingAxes,
+      tolerance: info.tolerance,
+      isFree: (idx) => labelArray[idx] === 0 || labelArray[idx] === label,
+    });
+    voxels.forEach(idx => { labelArray[idx] = label; });
+
+    // Render-only padding for a region that didn't grow: a 1-voxel-thick slab's world
+    // position, round-tripped through world<->index transforms, can land the GPU's slice
+    // sample half a voxel off and make it invisible from the other planes. Writing it onto
+    // the neighbouring slices too avoids that without changing the counted volume.
+    const sliceCount = sliceMax - sliceMin + 1;
+    if (sliceCount === 1) {
+      const coord = [0, 0, 0];
+      info.seed.forEach(([a, b]) => {
+        [info.fixedValue - 1, info.fixedValue + 1].forEach(f => {
+          if (f < 0 || f >= volDims[info.fixedAxis]) return;
+          coord[info.varyingAxes[0]] = a;
+          coord[info.varyingAxes[1]] = b;
+          coord[info.fixedAxis] = f;
+          const idx = coord[2] * w * h + coord[1] * w + coord[0];
+          if (labelArray[idx] === 0) labelArray[idx] = label;
+        });
+      });
+    }
+
+    const spacing = labelmapVolume.spacing;
+    const stat = {
+      voxelCount: voxels.length,
+      volumeCm3: voxels.length * ((spacing[0] * spacing[1] * spacing[2]) / 1000),
+      sliceCount,
+    };
+    lesionStatsRef.current.set(label, stat);
+    labelmapVolume.voxelManager.setCompleteScalarDataArray(labelArray);
+    csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationIdRef.current);
+    return stat;
+  };
+
+  // Popup −/+ : regrow the selected drawn region with a tighter/looser intensity window
+  const adjustGrowTolerance = (label, delta) => {
+    const info = growSeedsRef.current.get(label);
+    if (!info) return;
+    const tolerance = Math.min(MAX_GROW_TOLERANCE, Math.max(MIN_GROW_TOLERANCE, info.tolerance + delta));
+    if (tolerance === info.tolerance) return;
+    info.tolerance = tolerance;
+    const stat = growManualRegion(label, info);
+    if (!stat) return;
+    setSelectedLesion(prev => (prev?.label === label ? { ...prev, ...stat } : prev));
+    getAllVps().forEach(vp => vp.render());
+    reportRegions();
+  };
+
   const deleteManualLesion = (label) => {
     if (!manualLabelsRef.current.has(label)) return;
     const labelArray = labelArrayRef.current;
@@ -1131,6 +1357,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     lesionStatsRef.current?.delete(label);
     manualLabelsRef.current.delete(label);
     manualLabelNumberRef.current.delete(label);
+    growSeedsRef.current.delete(label);
 
     labelmapVolume.voxelManager.setCompleteScalarDataArray(labelArray);
     csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId);
@@ -1138,6 +1365,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     setSelectedLesion(prev => (prev?.label === label ? null : prev));
     reinitializeCrosshairs();
     getAllVps().forEach(vp => vp.render());
+    reportRegions();
   };
 
   // Delete/Backspace deletes the selected polygon too, not just a click on the popover's trash icon.
@@ -1158,56 +1386,191 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Step 3: Switch active annotation tool (applies to all 3 panes via the shared tool group)
+  // Orientation letters per pane, kept in step with each pane's camera (rotate, flip,
+  // oblique crosshair rotation all move the camera)
   useEffect(() => {
-    const toolGroup = toolGroupRef.current;
-    if (!toolGroup) return;
+    if (!volumeLoaded) return;
+    const updates = PLANES.map(({ key }) => {
+      const el = divRefs.current[key];
+      const update = () => {
+        const vp = getVp(key);
+        const markers = getOrientationMarkers(vp?.getCamera());
+        setOrientationByPlane(prev => (JSON.stringify(prev[key]) === JSON.stringify(markers) ? prev : { ...prev, [key]: markers }));
+        // Scale bar follows zoom; the pixel readout follows the slice under a still mouse
+        const scale = { mmPerPixel: vp ? mmPerCanvasPixel(vp) : null, height: el?.clientHeight ?? 0 };
+        setScaleByPlane(prev => (prev[key]?.mmPerPixel === scale.mmPerPixel && prev[key]?.height === scale.height ? prev : { ...prev, [key]: scale }));
+        if (pointerRef.current?.key === key && vp) {
+          const probe = probePixel(vp, pointerRef.current.point);
+          setPixelReadout(probe ? { key, ...probe } : null);
+        }
+      };
+      update();
+      el?.addEventListener(Enums.Events.CAMERA_MODIFIED, update);
+      el?.addEventListener(Enums.Events.IMAGE_RENDERED, update);
+      return () => {
+        el?.removeEventListener(Enums.Events.CAMERA_MODIFIED, update);
+        el?.removeEventListener(Enums.Events.IMAGE_RENDERED, update);
+      };
+    });
+    return () => updates.forEach(off => off());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volumeLoaded]);
 
-    if (!activeTool || !TOOL_MAP[activeTool]) {
-      // No annotation tool — restore Crosshairs on left-click
-      ALL_ANNOTATION_TOOLS.forEach(name => {
-        try { toolGroup.setToolEnabled(name); } catch (_) {}
-      });
-      if (!windowLevel) {
-        toolGroup.setToolActive(CrosshairsTool.toolName, {
-          bindings: [{ mouseButton: MouseBindings.Primary }],
-        });
+  // Named ROI contours (drawn in the 2D view or here) shown as cross-sections on the panes
+  // they cross, like RT-planning viewers and 3D Slicer: each crossing is a band one slice
+  // thick in the ROI's colour, so contours on neighbouring slices merge into the
+  // structure's outline. Recomputed when a pane's camera moves and when contours change.
+  useEffect(() => {
+    if (!volumeLoaded) return;
+    const volume = csCache.getVolume(volumeIdRef.current);
+    if (!volume) return;
+
+    // Depth of one slice along a contour's normal: spacing of the closest volume axis
+    const sliceDepth = (normal) => {
+      let best = 0;
+      let bestDot = -1;
+      for (let axis = 0; axis < 3; axis++) {
+        const d = volume.direction;
+        const dt = Math.abs(d[axis * 3] * normal[0] + d[axis * 3 + 1] * normal[1] + d[axis * 3 + 2] * normal[2]);
+        if (dt > bestDot) { bestDot = dt; best = axis; }
       }
-      return;
-    }
+      return volume.spacing[best];
+    };
 
-    // Deactivate Crosshairs and other annotation tools, take over left-click
-    ALL_ANNOTATION_TOOLS.forEach(name => {
-      try { toolGroup.setToolEnabled(name); } catch (_) {}
-    });
-    try { toolGroup.setToolEnabled(CrosshairsTool.toolName); } catch (_) {}
+    const computePane = (key) => {
+      const vp = getVp(key);
+      if (!vp) return { bands: [], labels: [] };
+      const { focalPoint, viewPlaneNormal } = vp.getCamera();
+      const bands = [];
+      const labelAt = new Map(); // ROI name -> top-most canvas point
+      roiContoursInWorld().forEach(contour => {
+        const half = sliceDepth(contour.normal) / 2;
+        const offset = contour.normal.map(x => x * half);
+        contourCrossSection(contour, focalPoint, viewPlaneNormal).forEach(([a, b]) => {
+          const corners = [
+            a.map((x, i) => x + offset[i]), b.map((x, i) => x + offset[i]),
+            b.map((x, i) => x - offset[i]), a.map((x, i) => x - offset[i]),
+          ].map(p => vp.worldToCanvas(p));
+          bands.push({
+            color: roiColor(contour.name),
+            points: corners.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" "),
+          });
+          const top = corners.reduce((m, p) => (p[1] < m[1] ? p : m));
+          const prev = labelAt.get(contour.name);
+          if (!prev || top[1] < prev[1]) labelAt.set(contour.name, top);
+        });
+      });
+      return {
+        bands,
+        labels: [...labelAt].map(([name, [x, y]]) => ({ name, x, y, color: roiColor(name) })),
+      };
+    };
 
-    toolGroup.setToolActive(TOOL_MAP[activeTool], {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
+    let frame = null;
+    const updateAll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        setRoiCrossSections(Object.fromEntries(PLANES.map(({ key }) => [key, computePane(key)])));
+      });
+    };
+    updateAll();
+
+    const annotationEvents = [
+      csToolsEnums.Events.ANNOTATION_ADDED,
+      csToolsEnums.Events.ANNOTATION_MODIFIED,
+      csToolsEnums.Events.ANNOTATION_COMPLETED,
+      csToolsEnums.Events.ANNOTATION_REMOVED,
+    ];
+    annotationEvents.forEach(name => csEventTarget.addEventListener(name, updateAll));
+    const paneEls = PLANES.map(({ key }) => divRefs.current[key]).filter(Boolean);
+    paneEls.forEach(el => el.addEventListener(Enums.Events.CAMERA_MODIFIED, updateAll));
+    // Bands are in canvas pixels, so a pane resize moves them too (updateAll waits a
+    // frame, by which time the engine has resized the canvases)
+    const ro = new ResizeObserver(updateAll);
+    paneEls.forEach(el => ro.observe(el));
+    return () => {
+      cancelAnimationFrame(frame);
+      annotationEvents.forEach(name => csEventTarget.removeEventListener(name, updateAll));
+      paneEls.forEach(el => el.removeEventListener(Enums.Events.CAMERA_MODIFIED, updateAll));
+      ro.disconnect();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTool]);
+  }, [volumeLoaded]);
 
-  // Step 4: Window/Level toggle
+  // Keep the panes' canvases matched to their size. The grid narrows when a side panel
+  // (e.g. the ROI list) opens; without a resize Cornerstone keeps rendering at the old
+  // size, so images stretch and annotations drift off their anatomy. keepCamera preserves
+  // each pane's slice, zoom and pan.
   useEffect(() => {
-    const toolGroup = toolGroupRef.current;
-    if (!toolGroup) return;
-    if (windowLevel) {
-      try { toolGroup.setToolEnabled(CrosshairsTool.toolName); } catch (_) {}
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-    } else if (!activeTool || !TOOL_MAP[activeTool]) {
-      try { toolGroup.setToolEnabled(WindowLevelTool.toolName); } catch (_) {}
-      toolGroup.setToolActive(CrosshairsTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Auxiliary }],
-      });
-    }
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      try { engineRef.current?.resize(true, true); } catch (_) {}
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Named ROIs here too (see lib/roiVolume): ellipse/circle/rectangle contours get a name
+  // when finished — polygons don't, they become grown regions — and the ROI list is
+  // reported to the panel whenever contours change.
+  useEffect(() => {
+    if (!volumeLoaded) return;
+    let timer = null;
+    let last = "";
+    const report = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const rois = listRois(imageIdsPropRef.current, AREA_ROI_TOOL_NAMES);
+        const key = JSON.stringify(rois);
+        if (key === last) return;
+        last = key;
+        onRoisChangeCbRef.current?.(rois);
+      }, 150);
+    };
+    const nameNewContour = (evt) => {
+      const annotation = evt.detail?.annotation;
+      const toolName = annotation?.metadata?.toolName;
+      if (!AREA_ROI_TOOL_NAMES.has(toolName) || toolName === PlanarFreehandROITool.toolName || annotation.data?.label) return;
+      csToolsUtilities.setAnnotationLabel(annotation, undefined, suggestRoiName(annotation, imageIdsPropRef.current, AREA_ROI_TOOL_NAMES));
+      report();
+    };
+    report();
+    const events = [
+      csToolsEnums.Events.ANNOTATION_ADDED,
+      csToolsEnums.Events.ANNOTATION_MODIFIED,
+      csToolsEnums.Events.ANNOTATION_REMOVED,
+    ];
+    events.forEach(name => csEventTarget.addEventListener(name, report));
+    csEventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameNewContour);
+    return () => {
+      clearTimeout(timer);
+      events.forEach(name => csEventTarget.removeEventListener(name, report));
+      csEventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameNewContour);
+    };
+  }, [volumeLoaded]);
+
+  // Step 3: Mouse buttons (Horos layout, see lib/mouseBindings) — applies to all 3 panes
+  // via the shared tool group. An annotation tool, when chosen, takes the left button;
+  // otherwise it's the selected left-button tool (W/L by default, pan, or crosshairs).
+  useEffect(() => {
+    applyBindings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [windowLevel]);
+  }, [activeTool, leftTool]);
+
+  // Pixel value under the cursor (HU on CT), shown in the pane's corner
+  const reportPixel = (key) => (e) => {
+    const vp = getVp(key);
+    const rect = divRefs.current[key]?.getBoundingClientRect();
+    if (!vp || !rect || !volumeLoaded) return;
+    pointerRef.current = { key, point: [e.clientX - rect.left, e.clientY - rect.top] };
+    const probe = probePixel(vp, pointerRef.current.point);
+    setPixelReadout(probe ? { key, ...probe } : null);
+  };
+  const clearPixel = () => {
+    pointerRef.current = null;
+    setPixelReadout(null);
+  };
 
   return (
     <div ref={containerRef} className="relative w-full h-full grid grid-cols-3 gap-1.5">
@@ -1217,7 +1580,32 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           className="relative w-full h-full bg-black overflow-hidden"
           onPointerDown={handlePaneClick(key)}
         >
-          <div ref={(el) => { divRefs.current[key] = el; }} className="w-full h-full" />
+          <div
+            ref={(el) => { divRefs.current[key] = el; }}
+            className="w-full h-full"
+            onMouseMove={reportPixel(key)}
+            onMouseLeave={clearPixel}
+          />
+          <OrientationMarkers markers={orientationByPlane[key]} />
+          <ScaleBar mmPerPixel={scaleByPlane[key]?.mmPerPixel} paneHeight={scaleByPlane[key]?.height} />
+          {pixelReadout?.key === key && (
+            <div className="absolute bottom-2 left-2 z-20 pointer-events-none select-none text-[11px] font-mono text-white/70" style={{ textShadow: "0 0 3px #000" }}>
+              {formatPixelValue(pixelReadout)}
+            </div>
+          )}
+          {roiCrossSections[key]?.bands.length > 0 && (
+            <svg className="absolute inset-0 w-full h-full pointer-events-none z-10">
+              {roiCrossSections[key].bands.map((band, i) => (
+                <polygon key={i} points={band.points} fill={band.color} fillOpacity={0.35} stroke={band.color} strokeWidth={1} />
+              ))}
+              {roiCrossSections[key].labels.map(label => (
+                <text key={label.name} x={label.x} y={label.y - 4} fill={label.color} fontSize={11} fontWeight={600}
+                  style={{ paintOrder: "stroke", stroke: "#000", strokeWidth: 3 }}>
+                  {label.name}
+                </text>
+              ))}
+            </svg>
+          )}
 
           {/* Active-pane frame — a separate overlay painted on top of Cornerstone's
             canvas (an outline/box-shadow on this div gets painted underneath the
@@ -1242,46 +1630,99 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         </div>
       ))}
 
-      {/* Selected lesion popover — anchored to the point you clicked */}
-      {selectedLesion && (
-        <div
-          className="absolute z-30 flex flex-col items-center pointer-events-none"
-          style={{ left: selectedLesion.x, top: selectedLesion.y, transform: "translate(-50%, calc(-100% - 10px))" }}
-        >
-          <div className="overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] shadow-lg pointer-events-auto">
-            <div className="px-3 py-2 flex items-center gap-3 whitespace-nowrap">
-              <span className="text-[12px] font-semibold text-white">
-                {selectedLesion.isManual
-                  ? `Polygon ${selectedLesion.polygonNumber}`
-                  : selectedLesion.isStructure && selectedLesion.regionName
-                    ? selectedLesion.regionName
-                    : `Finding ${selectedLesion.label}`}
-              </span>
-              <span className="text-[12px] text-[#0694FB] font-mono">
-                {selectedLesion.volumeCm3.toFixed(2)} cm³
-              </span>
-              <span className="text-[11px] text-[#6B6B6B]">
-                {selectedLesion.voxelCount.toLocaleString()} voxels
-              </span>
-              {selectedLesion.isManual && (
+      {/* Selected lesion popover — a vertical card anchored to the point you clicked. It opens
+        above the point, or below it when there isn't room above (clicks near the top). */}
+      {selectedLesion && (() => {
+        const below = selectedLesion.y < 190;
+        const growInfo = selectedLesion.isManual ? growSeedsRef.current.get(selectedLesion.label) : null;
+        const conf = selectedLesion.confidence;
+        const signal = conf == null ? 0 : conf >= 0.75 ? 3 : conf >= 0.4 ? 2 : conf > 0 ? 1 : 0;
+        const signalLabel = conf == null ? null : conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
+        const showAi = !selectedLesion.isManual && ((selectedLesion.regionName && !selectedLesion.isStructure) || conf != null);
+        const tail = (
+          <div
+            className="w-0 h-0"
+            style={{
+              borderLeft: "5px solid transparent",
+              borderRight: "5px solid transparent",
+              [below ? "borderBottom" : "borderTop"]: "6px solid #1E1E1E",
+            }}
+          />
+        );
+        const row = (label, value) => (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] text-[#6B6B6B]">{label}</span>
+            {value}
+          </div>
+        );
+        return (
+          <div
+            className="absolute z-30 flex flex-col items-center pointer-events-none"
+            style={{
+              left: selectedLesion.x,
+              top: selectedLesion.y,
+              transform: below ? "translate(-50%, 10px)" : "translate(-50%, calc(-100% - 10px))",
+            }}
+          >
+            {below && tail}
+            <div className="w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] shadow-lg pointer-events-auto">
+              {/* Header */}
+              <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
+                <span className="flex-1 min-w-0 truncate text-[12px] font-semibold text-white">
+                  {selectedLesion.isManual
+                    ? `Polygon ${selectedLesion.polygonNumber}`
+                    : selectedLesion.isStructure && selectedLesion.regionName
+                      ? selectedLesion.regionName
+                      : `Finding ${selectedLesion.label}`}
+                </span>
+                {selectedLesion.isManual && (
+                  <button
+                    onClick={() => deleteManualLesion(selectedLesion.label)}
+                    className="text-[#6B6B6B] hover:text-red-400 text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0"
+                    title="Delete this polygon"
+                  >🗑</button>
+                )}
                 <button
-                  onClick={() => deleteManualLesion(selectedLesion.label)}
-                  className="text-[#6B6B6B] hover:text-red-400 text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0"
-                  title="Delete this polygon"
-                >🗑</button>
-              )}
-              <button
-                onClick={() => setSelectedLesion(null)}
-                className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0"
-                title="Deselect"
-              >✕</button>
-            </div>
-            {!selectedLesion.isManual && ((selectedLesion.regionName && !selectedLesion.isStructure) || selectedLesion.confidence != null) && (() => {
-              const conf = selectedLesion.confidence;
-              const signal = conf == null ? 0 : conf >= 0.75 ? 3 : conf >= 0.4 ? 2 : conf > 0 ? 1 : 0;
-              const signalLabel = conf == null ? null : conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
-              return (
-                <div className="border-t border-[#1E1E1E] bg-[#111]/60 px-3 py-2 flex items-center gap-3 whitespace-nowrap">
+                  onClick={() => setSelectedLesion(null)}
+                  className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0"
+                  title="Deselect"
+                >✕</button>
+              </div>
+
+              {/* Measurements */}
+              <div className="flex flex-col gap-1.5 px-3 pb-2.5">
+                {row("Volume", <span className="text-[13px] text-[#0694FB] font-mono">{`${selectedLesion.volumeCm3.toFixed(2)} cm³`}</span>)}
+                {row("Voxels", <span className="text-[11px] text-[#949494] font-mono">{selectedLesion.voxelCount.toLocaleString()}</span>)}
+                {selectedLesion.isManual && selectedLesion.sliceCount != null && (
+                  selectedLesion.sliceCount === 1 && growInfo
+                    ? (
+                      <span className="text-[11px] text-[#F59E0B]" title="The structure didn't continue onto neighbouring slices at this tolerance">
+                        Didn't grow beyond this slice — try − / +
+                      </span>
+                    )
+                    : row("Slices", <span className="text-[11px] text-[#949494] font-mono">{selectedLesion.sliceCount}</span>)
+                )}
+                {growInfo && row(
+                  <span title="Region growing tolerance — tighten if it leaks into neighbouring tissue, loosen if it stops short">Tolerance</span>,
+                  <span className="flex items-center gap-1">
+                    <button
+                      onClick={() => adjustGrowTolerance(selectedLesion.label, -0.5)}
+                      title="Tighter"
+                      className="w-5 h-5 rounded bg-[#1E1E1E] hover:bg-[#2a2a2a] text-white text-[12px] border-none cursor-pointer leading-none p-0"
+                    >−</button>
+                    <span className="text-[11px] text-[#949494] w-[34px] text-center font-mono">{`±${growInfo.tolerance}σ`}</span>
+                    <button
+                      onClick={() => adjustGrowTolerance(selectedLesion.label, 0.5)}
+                      title="Looser"
+                      className="w-5 h-5 rounded bg-[#1E1E1E] hover:bg-[#2a2a2a] text-white text-[12px] border-none cursor-pointer leading-none p-0"
+                    >+</button>
+                  </span>
+                )}
+              </div>
+
+              {/* AI finding: region type + model confidence */}
+              {showAi && (
+                <div className="border-t border-[#1E1E1E] bg-[#111]/60 px-3 py-2 flex flex-col gap-1.5">
                   {selectedLesion.regionName && !selectedLesion.isStructure && (
                     <span className="text-[12px] font-medium text-red-400">{selectedLesion.regionName}</span>
                   )}
@@ -1299,20 +1740,12 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
                     </span>
                   )}
                 </div>
-              );
-            })()}
+              )}
+            </div>
+            {!below && tail}
           </div>
-          {/* Pointer tail toward the clicked point */}
-          <div
-            className="w-0 h-0"
-            style={{
-              borderLeft: "5px solid transparent",
-              borderRight: "5px solid transparent",
-              borderTop: "6px solid #1E1E1E",
-            }}
-          />
-        </div>
-      )}
+        );
+      })()}
 
       {/* Loading overlay */}
       {loading && (

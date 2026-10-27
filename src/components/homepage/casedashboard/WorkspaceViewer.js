@@ -6,13 +6,19 @@ import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
-import { getSeriesForStudy, uploadDicom, getModels, authFetch } from "../../../lib/api";
+import { getSeriesForStudy, uploadDicom, getModels, authFetch, getStudy, updateStudy } from "../../../lib/api";
 import { loadSeries, invalidateSeries, prefetchSeriesInBackground, PROJECTION_MODALITIES } from "../../../lib/seriesCache";
 import { Info, } from "lucide-react";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
-function WorkspaceViewer() {
+// The patient history typed into the report is the study's clinical indication (what the
+// Add Study form calls "indication", and reports print as "Clinical history"). The latest
+// text per study is kept here too, since the workspace remounts on every series switch.
+const historyByStudy = new Map();
+const HISTORY_SAVE_DELAY_MS = 800;
+
+function WorkspaceViewer({ layout, onLayoutChange }) {
   const { state: navState } = useLocation();
   const navigate = useNavigate();
 
@@ -71,6 +77,58 @@ function WorkspaceViewer() {
       })
       .catch(() => { });
   }, [activeSeries?.id, caseId, studyId]);
+
+  // ── Patient history: load from the study, save (debounced) as it's typed. Nothing is
+  // saved until it has loaded, so a failed load can't wipe the stored text.
+  const historyLoadedForRef = useRef(historyByStudy.has(String(studyId)) ? String(studyId) : null);
+  const historyDirtyRef = useRef(false); // typed before the load finished — keep what was typed
+  const patientHistoryRef = useRef(patientHistory);
+  patientHistoryRef.current = patientHistory;
+  const historyTimerRef = useRef(null);
+  useEffect(() => {
+    const id = studyId && String(studyId);
+    if (!id || historyLoadedForRef.current === id) return;
+    if (historyByStudy.has(id)) {
+      setPatientHistory(historyByStudy.get(id));
+      historyLoadedForRef.current = id;
+      return;
+    }
+    let cancelled = false;
+    getStudy(id)
+      .then(study => {
+        if (cancelled) return;
+        const saved = study?.clinical_indication ?? "";
+        if (!historyDirtyRef.current) setPatientHistory(saved);
+        historyByStudy.set(id, historyDirtyRef.current ? patientHistoryRef.current : saved);
+        historyLoadedForRef.current = id;
+        if (historyDirtyRef.current) historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
+      })
+      .catch(err => console.warn("[History] couldn't load the study's clinical history:", err));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studyId]);
+
+  const saveHistory = useCallback(() => {
+    historyTimerRef.current = null;
+    const id = historyLoadedForRef.current;
+    if (!id) return;
+    updateStudy(id, { clinical_indication: patientHistoryRef.current.trim() || null })
+      .catch(err => console.warn("[History] couldn't save the clinical history:", err));
+  }, []);
+  const handlePatientHistoryChange = (text) => {
+    setPatientHistory(text);
+    patientHistoryRef.current = text;
+    historyDirtyRef.current = true;
+    const id = historyLoadedForRef.current;
+    if (!id) return; // saved once the load finishes and the next edit comes in
+    historyByStudy.set(id, text);
+    clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
+  };
+  // Flush on series switch / leaving the viewer
+  useEffect(() => () => {
+    if (historyTimerRef.current) { clearTimeout(historyTimerRef.current); saveHistory(); }
+  }, [saveHistory]);
 
   // Every series in the study, for the side panel's series cards
   useEffect(() => {
@@ -1470,6 +1528,7 @@ function WorkspaceViewer() {
                 seriesList={seriesList}
                 activeSeries={activeSeries}
                 onSelectSeries={handleSelectSeries}
+                shownSeriesIds={translationActive ? [] : layout?.panes?.filter(Boolean).map(s => String(s.id))}
               />
               <Midsection
                 selectedImage={selectedImage}
@@ -1495,9 +1554,13 @@ function WorkspaceViewer() {
                 onCloseTranslation={() => { setTranslationActive(false); setTranslationResult(null); setTranslationProgress(null); setTranslationLoading(false); }}
                 jobStatus={jobStatus}
                 onViewModeChange={setViewMode}
+                layout={layout}
+                onLayoutChange={onLayoutChange}
+                seriesList={seriesList}
+                onSelectSeries={handleSelectSeries}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={setPatientHistory} reportTab={reportTab} onReportTabChange={setReportTab} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={handlePatientHistoryChange} reportTab={reportTab} onReportTabChange={setReportTab} />
               </div>
             </div>
 
@@ -1512,9 +1575,12 @@ function WorkspaceViewer() {
 
 // Remount the whole workspace when the series changes, so inference results, masks,
 // translation and the loaded volume from one series never leak into another.
+// The viewer layout (lib/viewerLayout) lives out here, so making another pane active —
+// which opens its series and remounts the workspace — keeps the other panes in place.
 function WorkspaceViewerRoute() {
   const { state } = useLocation();
-  return <WorkspaceViewer key={state?.series?.id ?? "none"} />;
+  const [layout, setLayout] = useState(null);
+  return <WorkspaceViewer key={state?.series?.id ?? "none"} layout={layout} onLayoutChange={setLayout} />;
 }
 
 export default WorkspaceViewerRoute;

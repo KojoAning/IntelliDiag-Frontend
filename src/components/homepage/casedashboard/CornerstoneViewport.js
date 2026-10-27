@@ -1,11 +1,12 @@
 import React, {
   useEffect,
   useRef,
+  useState,
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { RenderingEngine, Enums, metaData } from "@cornerstonejs/core";
-import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { RenderingEngine, Enums, metaData, eventTarget as csEventTarget } from "@cornerstonejs/core";
+import { annotation as csAnnotation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
 import {
   ToolGroupManager,
   Enums as csToolsEnums,
@@ -21,8 +22,18 @@ import {
   ProbeTool,
   PlanarFreehandROITool,
   StackScrollTool,
+  BidirectionalTool,
+  CobbAngleTool,
+  LabelTool,
+  MagnifyTool,
 } from "@cornerstonejs/tools";
 import { initCornerstone } from "../../../lib/cornerstoneSetup";
+import { applyHorosMouseBindings } from "../../../lib/mouseBindings";
+import { PENCIL_TOOL_NAME } from "../../../lib/annotationPersistence";
+import { probePixel, mmPerCanvasPixel } from "../../../lib/viewportReadouts";
+import OrientationMarkers, { getOrientationMarkers } from "./OrientationMarkers";
+import ScaleBar from "./ScaleBar";
+import { listRois, suggestRoiName, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolume";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -35,9 +46,15 @@ const TOOL_MAP = {
   angle:    AngleTool.toolName,
   marker:   ProbeTool.toolName,
   polygon:  PlanarFreehandROITool.toolName,
+  bidirectional: BidirectionalTool.toolName,
+  cobb:     CobbAngleTool.toolName,
+  text:     LabelTool.toolName,
+  pencil:   PENCIL_TOOL_NAME,
+  magnify:  MagnifyTool.toolName, // stack viewports only — not offered in MPR
 };
 
-const ALL_ANNOTATION_TOOLS = Object.values(TOOL_MAP);
+// Everything but the magnifier draws an annotation that stays grabbable
+const ALL_ANNOTATION_TOOLS = Object.values(TOOL_MAP).filter(name => name !== MagnifyTool.toolName);
 
 let instanceCounter = 0;
 
@@ -94,7 +111,7 @@ function applyVoi(viewport, imageId) {
  *   getProperties() → object
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, windowLevel = false, onIndexChange, onArrowTextRequest, onCameraChanged },
+  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue },
   ref
 ) {
   const divRef = useRef(null);
@@ -104,6 +121,77 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
   onIndexChangeCbRef.current = onIndexChange;
   const onCameraChangedCbRef = useRef(onCameraChanged);
   onCameraChangedCbRef.current = onCameraChanged;
+  const onRoisChangeCbRef = useRef(onRoisChange);
+  onRoisChangeCbRef.current = onRoisChange;
+  const imageIdsRef = useRef(imageIds);
+  imageIdsRef.current = imageIds;
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
+  const onPixelValueCbRef = useRef(onPixelValue);
+  onPixelValueCbRef.current = onPixelValue;
+  const [orientation, setOrientation] = useState(null);
+  const orientationKeyRef = useRef("");
+  const [scale, setScale] = useState({ mmPerPixel: null, height: 0 }); // for the scale bar
+  const pointerRef = useRef(null); // last canvas point under the mouse, for the pixel readout
+  const leftToolRef = useRef(leftTool);
+  leftToolRef.current = leftTool;
+
+  // readOnly (the layout's other panes): measurements are drawn but can't be grabbed or
+  // edited, since only the active viewer saves them
+  // pointer: left button does nothing to the image — only grabs measurements
+  const LEFT_TOOLS = { wl: WindowLevelTool.toolName, pan: PanTool.toolName, pointer: null };
+  const applyBindings = (toolGroup = ctx.current?.toolGroup) => {
+    if (!toolGroup) return;
+    applyHorosMouseBindings(toolGroup, {
+      primary: (readOnly ? null : TOOL_MAP[activeToolRef.current])
+        ?? (leftToolRef.current in LEFT_TOOLS ? LEFT_TOOLS[leftToolRef.current] : WindowLevelTool.toolName),
+      interactiveTools: readOnly ? [] : ALL_ANNOTATION_TOOLS,
+    });
+    if (readOnly) ALL_ANNOTATION_TOOLS.forEach(name => { try { toolGroup.setToolEnabled(name); } catch (_) {} });
+  };
+
+  // Named ROIs, Horos-style (see lib/roiVolume): a contour gets a name when it's finished,
+  // and the ROI list is reported whenever contours are drawn, edited, renamed or removed
+  // (debounced, and only when it actually changes). Mean intensity needs a contour's stats,
+  // which appear once it renders — hence also recomputing after renders.
+  useEffect(() => {
+    const el = divRef.current;
+    if (!el) return;
+    let timer = null;
+    let last = "";
+    const recompute = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const rois = listRois(imageIdsRef.current, AREA_ROI_TOOL_NAMES);
+        const key = JSON.stringify(rois);
+        if (key === last) return;
+        last = key;
+        onRoisChangeCbRef.current?.(rois);
+      }, 150);
+    };
+    const nameNewContour = (evt) => {
+      const annotation = evt.detail?.annotation;
+      if (!AREA_ROI_TOOL_NAMES.has(annotation?.metadata?.toolName) || annotation.data?.label) return;
+      // The event is shared with the MPR/translation viewers — only name contours on this stack
+      if (!imageIdsRef.current.includes(annotation.metadata.referencedImageId)) return;
+      csToolsUtilities.setAnnotationLabel(annotation, el, suggestRoiName(annotation, imageIdsRef.current, AREA_ROI_TOOL_NAMES));
+      recompute();
+    };
+    const events = [
+      csToolsEnums.Events.ANNOTATION_ADDED,
+      csToolsEnums.Events.ANNOTATION_MODIFIED,
+      csToolsEnums.Events.ANNOTATION_REMOVED,
+    ];
+    el.addEventListener(csToolsEnums.Events.ANNOTATION_RENDERED, recompute);
+    events.forEach(name => csEventTarget.addEventListener(name, recompute));
+    csEventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameNewContour);
+    return () => {
+      clearTimeout(timer);
+      el.removeEventListener(csToolsEnums.Events.ANNOTATION_RENDERED, recompute);
+      events.forEach(name => csEventTarget.removeEventListener(name, recompute));
+      csEventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameNewContour);
+    };
+  }, []);
 
   // Everything stateful about this viewport lives here so we can access it
   // from imperative handles and effects without stale closures.
@@ -135,7 +223,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     setRotation(deg) {
       const vp = ctx.current.viewport;
       if (!vp) return;
-      vp.setProperties({ rotation: ((deg % 360) + 360) % 360 });
+      vp.setViewPresentation({ rotation: ((deg % 360) + 360) % 360 });
       vp.render();
     },
     flipH() {
@@ -150,6 +238,19 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       if (!vp) return;
       const cam = vp.getCamera();
       vp.setCamera({ flipVertical: !cam.flipVertical });
+      vp.render();
+    },
+    // Window presets (lib/windowPresets) and "0 = the image's own window"
+    setWindow(center, width) {
+      const vp = ctx.current.viewport;
+      if (!vp) return;
+      vp.setProperties({ voiRange: { lower: center - width / 2, upper: center + width / 2 } });
+      vp.render();
+    },
+    resetWindow() {
+      const vp = ctx.current.viewport;
+      if (!vp) return;
+      applyVoi(vp, vp.getCurrentImageId?.() ?? "");
       vp.render();
     },
     toggleInvert() {
@@ -213,11 +314,13 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     }
   }
 
+  // Cornerstone 4 moved rotation out of setProperties/getProperties (it's silently ignored
+  // there) into the view presentation.
   function rotate(delta) {
     const vp = ctx.current.viewport;
     if (!vp) return;
-    const { rotation = 0 } = vp.getProperties();
-    vp.setProperties({ rotation: ((rotation + delta) % 360 + 360) % 360 });
+    const rotation = vp.getRotation?.() ?? 0;
+    vp.setViewPresentation({ rotation: ((rotation + delta) % 360 + 360) % 360 });
     vp.render();
   }
 
@@ -259,38 +362,37 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         EllipticalROITool, CircleROITool, RectangleROITool,
         ArrowAnnotateTool, ProbeTool,
         PlanarFreehandROITool, StackScrollTool,
+        BidirectionalTool, CobbAngleTool, LabelTool, MagnifyTool,
       ];
       tools.forEach(T => toolGroup.addTool(T.toolName));
+      // Pencil: freehand strokes without area stats, kept apart from the named ROIs
+      toolGroup.addToolInstance(PENCIL_TOOL_NAME, PlanarFreehandROITool.toolName, { calculateStats: false });
+
+      // ROI name as the first line of each area contour's label, above its usual stats
+      AREA_ROI_TOOL_NAMES.forEach(name => {
+        const tool = toolGroup.getToolInstance(name);
+        const baseTextLines = tool?.configuration?.getTextLines;
+        if (!baseTextLines) return;
+        tool.configuration.getTextLines = (data, targetId) => [
+          ...(data.label ? [data.label] : []),
+          ...(baseTextLines(data, targetId) ?? []),
+        ];
+      });
       toolGroup.addViewport(viewportId, engineId);
 
-      // Override ArrowAnnotateTool's prompt with a custom React dialog callback
-      const arrowTool = toolGroup.getToolInstance(ArrowAnnotateTool.toolName);
-      if (arrowTool) {
-        arrowTool.configuration.getTextCallback = (doneChangingTextCallback) => {
+      // Arrow and text labels ask for their text in the app's own dialog, not prompt()
+      [ArrowAnnotateTool, LabelTool].map(T => toolGroup.getToolInstance(T.toolName)).filter(Boolean).forEach(textTool => {
+        textTool.configuration.getTextCallback = (doneChangingTextCallback) => {
           if (arrowTextCbRef.current) {
             arrowTextCbRef.current(doneChangingTextCallback);
           } else {
             doneChangingTextCallback(prompt("Enter your annotation:"));
           }
         };
-      }
-
-      // Bring annotation tools to Enabled state (addTool leaves them Disabled)
-      // so setToolActive() can transition them cleanly later
-      ALL_ANNOTATION_TOOLS.forEach(name => {
-        try { toolGroup.setToolEnabled(name); } catch (_) {}
       });
 
-      // Defaults: Pan on left, W/L on middle, Zoom on right
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Auxiliary }],
-      });
-      toolGroup.setToolActive(ZoomTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Secondary }],
-      });
+      // Horos mouse layout: left = W/L (or the chosen tool), middle = pan, right = zoom
+      applyBindings(toolGroup);
       // StackScrollTool stays disabled until the stack has images — activating
       // it on an empty stack causes "Stack Viewport has no images" errors.
 
@@ -301,6 +403,21 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       const onRendered = () => {
         const vp = ctx.current.viewport;
         if (!vp) return;
+
+        // Orientation letters — only for DICOM carrying patient orientation, not plain PNG/JPG
+        const plane = metaData.get("imagePlaneModule", vp.getCurrentImageId?.() ?? "");
+        const markers = plane?.rowCosines ? getOrientationMarkers(vp.getCamera()) : null;
+        const markersKey = JSON.stringify(markers);
+        if (markersKey !== orientationKeyRef.current) {
+          orientationKeyRef.current = markersKey;
+          setOrientation(markers);
+        }
+
+        // Scale bar follows zoom; the pixel readout follows the slice under a still mouse
+        const mmPerPixel = mmPerCanvasPixel(vp);
+        const height = divRef.current?.clientHeight ?? 0;
+        setScale(prev => (prev.mmPerPixel === mmPerPixel && prev.height === height ? prev : { mmPerPixel, height }));
+        if (pointerRef.current) onPixelValueCbRef.current?.(probePixel(vp, pointerRef.current));
 
         const idx = vp.getCurrentImageIdIndex?.() ?? -1;
         if (idx !== lastIndex && idx >= 0) {
@@ -313,7 +430,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
           try {
             const cam = vp.getCamera();
             const zoom = ctx.current.baseScale / (cam.parallelScale ?? ctx.current.baseScale);
-            const { rotation = 0, invert: _i } = vp.getProperties();
+            const rotation = vp.getRotation?.() ?? 0;
             const el = divRef.current;
             const cw = el?.clientWidth ?? 1;
             const ch = el?.clientHeight ?? 1;
@@ -418,57 +535,39 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       .catch(() => {});
   }, [imageIds]);
 
-  // ── Switch active annotation tool ─────────────────────────────────────────
+  // ── Mouse buttons (Horos layout, see lib/mouseBindings) ──────────────────
+  // An annotation tool, when chosen, takes the left button; otherwise it's the
+  // selected left-button tool (window/level by default, or pan).
   useEffect(() => {
-    const { toolGroup } = ctx.current;
-    if (!toolGroup) return;
+    applyBindings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool, leftTool]);
 
-    if (!activeTool || !TOOL_MAP[activeTool]) {
-      // No annotation tool active — restore default Pan on left button
-      ALL_ANNOTATION_TOOLS.forEach(name => {
-        try { toolGroup.setToolEnabled(name); } catch (_) {}
-      });
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      return;
-    }
-
-    // Release Pan from primary button, bring all annotation tools to Enabled,
-    // then activate the chosen one
-    try { toolGroup.setToolEnabled(PanTool.toolName); } catch (_) {}
-    ALL_ANNOTATION_TOOLS.forEach(name => {
-      try { toolGroup.setToolEnabled(name); } catch (_) {}
-    });
-
-    toolGroup.setToolActive(TOOL_MAP[activeTool], {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  }, [activeTool]);
-
-  // ── Window/Level toggle ───────────────────────────────────────────────────
-  useEffect(() => {
-    const { toolGroup } = ctx.current;
-    if (!toolGroup) return;
-    if (windowLevel) {
-      try { toolGroup.setToolEnabled(PanTool.toolName); } catch (_) {}
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-    } else {
-      try { toolGroup.setToolEnabled(WindowLevelTool.toolName); } catch (_) {}
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-    }
-  }, [windowLevel]);
+  // ── Pixel value under the cursor (HU on CT) ──────────────────────────────
+  const reportPixel = (e) => {
+    const vp = ctx.current.viewport;
+    const rect = divRef.current?.getBoundingClientRect();
+    if (!vp || !rect) return;
+    pointerRef.current = [e.clientX - rect.left, e.clientY - rect.top];
+    onPixelValueCbRef.current?.(probePixel(vp, pointerRef.current));
+  };
+  const clearPixel = () => {
+    pointerRef.current = null;
+    onPixelValueCbRef.current?.(null);
+  };
 
   return (
-    <div
-      ref={divRef}
-      style={{ width: "100%", height: "100%" }}
-      onContextMenu={e => e.preventDefault()}
-    />
+    <div className="relative" style={{ width: "100%", height: "100%" }}>
+      <div
+        ref={divRef}
+        style={{ width: "100%", height: "100%" }}
+        onContextMenu={e => e.preventDefault()}
+        onMouseMove={reportPixel}
+        onMouseLeave={clearPixel}
+      />
+      <OrientationMarkers markers={orientation} />
+      <ScaleBar mmPerPixel={scale.mmPerPixel} paneHeight={scale.height} />
+    </div>
   );
 });
 

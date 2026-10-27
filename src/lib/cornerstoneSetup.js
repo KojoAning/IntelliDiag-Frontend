@@ -1,6 +1,7 @@
 import { init as csInit, imageLoader, eventTarget, Enums as csEnums } from "@cornerstonejs/core";
 import {
   init as csToolsInit,
+  annotation as csAnnotation,
   addTool,
   PanTool,
   ZoomTool,
@@ -15,6 +16,10 @@ import {
   PlanarFreehandROITool,
   StackScrollTool,
   CrosshairsTool,
+  BidirectionalTool,
+  CobbAngleTool,
+  LabelTool,
+  MagnifyTool,
 } from "@cornerstonejs/tools";
 import * as dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core";
@@ -30,6 +35,21 @@ export async function initCornerstone() {
   initPromise = (async () => {
     await csInit();
     csToolsInit();
+
+    // Measurement labels only show for the annotation being hovered, drawn/edited or
+    // selected, so a slice with several measurements doesn't fill up with text boxes.
+    // Arrows keep theirs — the label is the arrow's whole point.
+    const styles = csAnnotation.config.style.getDefaultToolStyles();
+    csAnnotation.config.style.setDefaultToolStyles({
+      ...styles,
+      global: {
+        ...styles.global,
+        textBoxVisibility: false,
+        textBoxVisibilityHighlighted: true,
+        textBoxVisibilitySelected: true,
+      },
+      [ArrowAnnotateTool.toolName]: { ...styles[ArrowAnnotateTool.toolName], textBoxVisibility: true },
+    });
 
     // Initialize the DICOM image loader (wado-uri scheme handles blob:/http: DICOM).
     // beforeSend returns headers that are merged onto the XHR — inject the JWT so
@@ -68,6 +88,10 @@ export async function initCornerstone() {
       PlanarFreehandROITool,
       StackScrollTool,
       CrosshairsTool,
+      BidirectionalTool,
+      CobbAngleTool,
+      LabelTool,
+      MagnifyTool,
     ].forEach((T) => {
       try { addTool(T); } catch (_) { /* already added */ }
     });

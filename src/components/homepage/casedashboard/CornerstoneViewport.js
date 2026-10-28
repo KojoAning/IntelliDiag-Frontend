@@ -267,14 +267,16 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       // Cornerstone has no event for invert
       if (ctx.current.stackLoaded) onDisplayChangeCbRef.current?.(displayOf(vp));
     },
+    // Before the stack has loaded (a linked viewer moved while this one opens) the slice is
+    // kept and shown once it has, rather than racing the stack's own first load
     setImageIndex(n) {
       const vp = ctx.current.viewport;
-      if (!vp || n < 0) return;
-      const numImages = vp.getImageIds?.()?.length ?? 0;
-      if (n < numImages) {
-        vp.setImageIdIndex(n);
-        vp.render();
+      if (n < 0) return;
+      if (!vp || !ctx.current.stackLoaded) {
+        ctx.current.pendingIndex = n;
+        return;
       }
+      showIndex(vp, n);
     },
     getCurrentIndex() {
       return ctx.current.viewport?.getCurrentImageIdIndex() ?? 0;
@@ -379,6 +381,14 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
     try { return fn(); } finally { ctx.current.quiet -= 1; }
   }
+  // Cornerstone rejects a failed image load with a plain object; nothing else awaits it here
+  function showIndex(vp, n) {
+    if (n >= (vp.getImageIds?.()?.length ?? 0)) return;
+    vp.setImageIdIndex(n)
+      ?.catch?.(err => console.warn("[Viewer] couldn't show slice", n + 1, err?.error ?? err));
+    vp.render();
+  }
+
   // After a stack loads: the fitted camera is the reference for zoom / pan, then any
   // display a linked viewer sent while loading
   function stackReady(vp) {
@@ -389,6 +399,9 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     const pending = ctx.current.pendingDisplay;
     ctx.current.pendingDisplay = null;
     if (pending) quietly(() => applyDisplayTo(vp, pending));
+    const pendingIndex = ctx.current.pendingIndex;
+    ctx.current.pendingIndex = null;
+    if (pendingIndex != null) showIndex(vp, pendingIndex);
   }
 
   // Cornerstone 4 moved rotation out of setProperties/getProperties (it's silently ignored

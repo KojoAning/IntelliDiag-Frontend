@@ -7,7 +7,7 @@
 // Downloads are also kept on disk (lib/seriesStore), so a reload reuses them instead of
 // downloading again, as long as the series' image list hasn't changed.
 import { authFetch, getImagesForStudy } from "./api";
-import { readStoredSeries, writeStoredSeries, deleteStoredSeries, sameRecords } from "./seriesStore";
+import { readStoredSeries, writeStoredSeries, writeStoredThumbnail, deleteStoredSeries, storedSeriesIds, sameRecords } from "./seriesStore";
 import { renderDicomThumbnail, parseMultipartBody, parseDicomInstanceInfo, getDicomMetadata } from "./dicomUtils";
 
 // Rendered thumbnails, keyed by image id, or `series:<id>` for a series card.
@@ -162,22 +162,28 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
   const promise = (async () => {
     let imgs = [];
     try {
-      const stored = await readStoredSeries(id).catch(() => null);
-      try {
-        imgs = await fetchSeriesImages(id);
-      } catch (err) {
-        if (!stored) throw err;
-        imgs = stored.records; // offline: open the last downloaded copy
-      }
+      // The stored copy and the server's image list (to check it's still current) together
+      const [stored, listed] = await Promise.all([
+        readStoredSeries(id).catch(() => null),
+        fetchSeriesImages(id).then(records => ({ records }), error => ({ error })),
+      ]);
+      if (listed.error && !stored) throw listed.error;
+      imgs = listed.records ?? stored.records; // offline: open the last downloaded copy
+      const thumbKey = `series:${id}`;
+      const fromDisk = !!stored && sameRecords(stored.records, imgs);
       let blobs, bytes;
-      if (stored && sameRecords(stored.records, imgs)) {
+      if (fromDisk) {
         ({ blobs, bytes } = stored);
+        if (stored.thumbnail && !thumbCache.has(thumbKey)) thumbCache.set(thumbKey, stored.thumbnail);
       } else {
         ({ blobs, bytes } = await fetchSeriesBulk(id, imgs));
-        writeStoredSeries(id, { records: imgs, blobs, bytes })
-          .catch(err => console.warn("[Series] couldn't keep the download on this device:", err));
       }
       const { images, metadata } = await finishSeries(id, imgs, blobs, { renderThumbs });
+      const thumbnail = thumbCache.get(thumbKey) ?? null;
+      const keep = fromDisk
+        ? (!stored.thumbnail && thumbnail ? writeStoredThumbnail(id, thumbnail) : null)
+        : writeStoredSeries(id, { records: imgs, blobs, bytes, thumbnail });
+      keep?.catch(err => console.warn("[Series] couldn't keep the download on this device:", err));
       bytesHeld += bytes;
       setEntry(id, { status: "ready", images, metadata, bytes });
       return { images, metadata };
@@ -189,6 +195,16 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
   })();
   setEntry(id, { status: "loading", promise });
   return promise;
+}
+
+// The series card's thumbnail without the network: rendered this session, or kept with
+// the series' copy on disk (null if neither)
+export async function storedSeriesThumbnail(seriesId) {
+  const key = `series:${seriesId}`;
+  if (thumbCache.has(key)) return thumbCache.get(key);
+  const thumbnail = (await readStoredSeries(String(seriesId)).catch(() => null))?.thumbnail ?? null;
+  if (thumbnail) thumbCache.set(key, thumbnail);
+  return thumbnail;
 }
 
 // Drop a series (e.g. after new images were uploaded to it) so the next load refetches.
@@ -217,6 +233,12 @@ export function prefetchSeriesInBackground(seriesList) {
   if (draining) return;
   draining = true;
   (async () => {
+    // Series already on this device need no download: open them all now, so their cards
+    // don't wait behind downloads
+    const stored = await storedSeriesIds().catch(() => new Set());
+    const local = queue.filter(q => stored.has(q.id));
+    queue.splice(0, queue.length, ...queue.filter(q => !stored.has(q.id)));
+    await Promise.all(local.map(({ id, renderThumbs }) => (entries.has(id) ? null : loadSeries(id, { renderThumbs }).catch(() => {}))));
     while (queue.length) {
       const { id, renderThumbs } = queue.shift();
       if (entries.has(id)) continue; // opened by the user meanwhile

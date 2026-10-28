@@ -42,7 +42,7 @@ async function withStore(mode, fn) {
 const currentOwner = () => localStorage.getItem("sub") ?? "";
 const isUsable = (entry) => entry && entry.owner === currentOwner() && Date.now() - entry.savedAt < MAX_AGE_MS;
 
-// { records, blobs, bytes } for a series, or null (missing, expired or another user's)
+// { records, blobs, bytes, thumbnail } for a series, or null (missing, expired or another user's)
 export async function readStoredSeries(seriesId) {
   const entry = await withStore("readonly", store => store.get(String(seriesId)));
   if (!entry) return null;
@@ -53,8 +53,9 @@ export async function readStoredSeries(seriesId) {
   return entry;
 }
 
-// records: the image records; blobs: one Blob (or null) per record
-export async function writeStoredSeries(seriesId, { records, blobs, bytes }) {
+// records: the image records; blobs: one Blob (or null) per record; thumbnail: the series
+// card's image (data URL), so the side panel needn't ask the server for one after a reload
+export async function writeStoredSeries(seriesId, { records, blobs, bytes, thumbnail = null }) {
   if (bytes > MAX_BYTES) return;
   const entries = await withStore("readonly", store => store.getAll());
   // Drop what's unusable, then the oldest, until this one fits under the cap
@@ -67,8 +68,25 @@ export async function writeStoredSeries(seriesId, { records, blobs, bytes }) {
   });
   await withStore("readwrite", store => {
     evict.forEach(id => store.delete(id));
-    return store.put({ id: String(seriesId), owner: currentOwner(), savedAt: Date.now(), records, blobs, bytes });
+    return store.put({ id: String(seriesId), owner: currentOwner(), savedAt: Date.now(), records, blobs, bytes, thumbnail });
   });
+}
+
+// Add the card thumbnail to a copy stored without one
+export async function writeStoredThumbnail(seriesId, thumbnail) {
+  await withStore("readwrite", store => {
+    const req = store.get(String(seriesId));
+    req.onsuccess = () => {
+      if (req.result && isUsable(req.result)) store.put({ ...req.result, thumbnail });
+    };
+  });
+}
+
+// Ids of the series this user has a usable copy of (the Blobs in the entries are handles
+// to disk, so listing doesn't read the files)
+export async function storedSeriesIds() {
+  const entries = await withStore("readonly", store => store.getAll());
+  return new Set((entries ?? []).filter(isUsable).map(e => e.id));
 }
 
 export async function deleteStoredSeries(seriesId) {

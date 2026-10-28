@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { FiUploadCloud, FiCheckCircle, FiAlertCircle } from "react-icons/fi";
 import { authFetch, getImagesForStudy } from "../../../lib/api";
-import { thumbCache, PROJECTION_MODALITIES, getSeriesStatus, subscribeSeriesCache } from "../../../lib/seriesCache";
+import { thumbCache, PROJECTION_MODALITIES, getSeriesStatus, subscribeSeriesCache, storedSeriesThumbnail } from "../../../lib/seriesCache";
 import { SERIES_DRAG_TYPE } from "../../../lib/viewerLayout";
 
 async function fetchAuthenticatedThumb(url) {
@@ -124,7 +124,14 @@ function SeriesCard({ series, active, shown, images, onSelect }) {
     setThumbLoading(true);
 
     (async () => {
-      let src = null;
+      // Kept on this device with the series' download? Then no server calls
+      let src = await storedSeriesThumbnail(series.id);
+      if (cancelled) return;
+      if (src) {
+        setThumbSrc(src);
+        setThumbLoading(false);
+        return;
+      }
       try {
         const records = (await getImagesForStudy(series.id) ?? []).filter(r => r.status === "uploaded");
         const record = records[Math.floor(records.length / 2)];

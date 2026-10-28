@@ -77,6 +77,18 @@ function ToolBtn({ icon, label, active, onClick }) {
 
 function HDivider() { return <div className="w-6 h-px bg-[#1E1E1E]" />; }
 
+// Caveats the model reported about its input (e.g. a brain MR that isn't skull-stripped)
+function ResultWarnings({ warnings }) {
+  if (!warnings?.length) return null;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
+      {warnings.map(text => (
+        <p key={text} className="m-0 text-[11px] leading-snug text-[#F59E0B]">{text}</p>
+      ))}
+    </div>
+  );
+}
+
 // Colour key for anatomy segmentations (one colour per structure): only the structures the
 // model found, largest first, with their volumes. Whole-body results can list 100+, so it
 // scrolls and can be filtered.
@@ -1447,6 +1459,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 </span>
               </div>
               {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult?.class_volumes_cm3} />}
+              <ResultWarnings warnings={inferenceResult?.warnings} />
             </div>
           )}
 
@@ -1708,6 +1721,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                         </span>
                       </div>
                       {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} />}
+                      <ResultWarnings warnings={inferenceResult.warnings} />
                     </div>
                   );
                 })()}

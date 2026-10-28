@@ -13,6 +13,7 @@ const PARALLEL_COS = 0.9; // planes within ~25° of each other count as the same
 const MIN_TOLERANCE_MM = 3;
 
 const cache = new Map(); // imageId -> slice or null
+const fileCache = new Map(); // multi-frame file URL -> Promise<(slice | null)[]> (one per frame)
 
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -22,11 +23,7 @@ function numbers(dataSet, tag, count) {
   return values.length === count && values.every(Number.isFinite) ? values : null;
 }
 
-// { position, normal, frameOfReferenceUID } from a parsed header, or null
-export function sliceFromDataSet(dataSet) {
-  const position = numbers(dataSet, "x00200032", 3);
-  const orientation = numbers(dataSet, "x00200037", 6);
-  const frameOfReferenceUID = (dataSet.string("x00200052") ?? "").trim();
+function makeSlice(position, orientation, frameOfReferenceUID) {
   if (!position || !orientation || !frameOfReferenceUID) return null;
   const normal = cross(orientation.slice(0, 3), orientation.slice(3));
   const length = Math.hypot(...normal);
@@ -34,16 +31,50 @@ export function sliceFromDataSet(dataSet) {
   return { position, normal: normal.map(v => v / length), frameOfReferenceUID };
 }
 
-async function readSlice(imageId) {
-  // Single-frame DICOM only: multi-frame files keep per-frame positions elsewhere
-  const match = imageId.match(/^wadouri:(.*)$/);
-  if (!match || /[?&]frame=\d+$/.test(match[1])) return null;
-  const blob = await (await fetch(match[1])).blob();
+// { position, normal, frameOfReferenceUID } from a parsed header, or null
+export function sliceFromDataSet(dataSet) {
+  return makeSlice(numbers(dataSet, "x00200032", 3), numbers(dataSet, "x00200037", 6), (dataSet.string("x00200052") ?? "").trim());
+}
+
+const firstItem = (dataSet, tag) => dataSet?.elements[tag]?.items?.[0]?.dataSet ?? null;
+
+// One slice (or null) per frame of an enhanced multi-frame file (enhanced CT/MR, some
+// XA): each frame's position is in its Per-frame Functional Groups item (Plane Position),
+// the orientation there or in the Shared Functional Groups. [] when the file has none.
+export function framesFromDataSet(dataSet) {
+  const frameOfReferenceUID = (dataSet.string("x00200052") ?? "").trim();
+  const shared = firstItem(dataSet, "x52009229");
+  const perFrame = dataSet.elements.x52009230?.items ?? [];
+  const sharedPosition = numbers(firstItem(shared, "x00209113") ?? dataSet, "x00200032", 3);
+  const sharedOrientation = numbers(firstItem(shared, "x00209116") ?? dataSet, "x00200037", 6);
+  return perFrame.map(({ dataSet: frame }) => {
+    const position = numbers(firstItem(frame, "x00209113") ?? dataSet, "x00200032", 3) ?? sharedPosition;
+    const orientation = numbers(firstItem(frame, "x00209116") ?? dataSet, "x00200037", 6) ?? sharedOrientation;
+    return makeSlice(position, orientation, frameOfReferenceUID);
+  });
+}
+
+// whole: parse up to the pixel data however far that is (multi-frame functional groups
+// can run past HEADER_BYTES, and a cut that happens to fall between elements wouldn't fail)
+async function readHeader(url, { whole = false } = {}) {
+  const blob = await (await fetch(url)).blob();
   const parse = async (part) => dicomParser.parseDicom(new Uint8Array(await part.arrayBuffer()), { untilTag: "x7fe00010" });
-  let dataSet;
-  try { dataSet = await parse(blob.slice(0, HEADER_BYTES)); }
-  catch { dataSet = await parse(blob); }
-  return sliceFromDataSet(dataSet);
+  if (whole) return parse(blob);
+  try { return await parse(blob.slice(0, HEADER_BYTES)); }
+  catch { return parse(blob); }
+}
+
+async function readSlice(imageId) {
+  const match = imageId.match(/^wadouri:(.*)$/);
+  if (!match) return null;
+  // Multi-frame: wadouri:<file>?frame=N (lib/dicomUtils) — the file's header is read once
+  const frame = match[1].match(/^(.*)[?&]frame=(\d+)$/);
+  if (!frame) return sliceFromDataSet(await readHeader(match[1]));
+  const [, url, n] = frame;
+  if (!fileCache.has(url)) {
+    fileCache.set(url, readHeader(url, { whole: true }).then(framesFromDataSet).catch(() => []));
+  }
+  return (await fileCache.get(url))[Number(n)] ?? null;
 }
 
 // Typical gap between neighbouring slices along the scan direction (median), in mm

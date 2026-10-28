@@ -518,6 +518,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // edited or deleted. Nothing is saved until the restore has succeeded, so a slow or
   // failed load can never overwrite the saved set with an empty one.
   const annotationsRestoredForRef = useRef(null); // series id whose saved set is loaded
+  const changedWhileLoadingRef = useRef(false);    // an edit came in before it had loaded
   const scheduleSaveRef = useRef(null);
   const imageIdsRef = useRef(imageIds);
   imageIdsRef.current = imageIds;
@@ -541,6 +542,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         const savedRegions = restoreMprRegions(annotations);
         setMprRegions(prev => [...savedRegions, ...prev.filter(r => !savedRegions.some(s => s.uid === r.uid))]);
         annotationsRestoredForRef.current = seriesId;
+        // Save what was drawn while this loaded (merged with the saved set) now, not at the next edit
+        if (changedWhileLoadingRef.current) {
+          changedWhileLoadingRef.current = false;
+          scheduleSaveRef.current?.();
+        }
       })
       .catch(err => console.warn("[Annotations] couldn't load saved measurements:", err));
     return () => { cancelled = true; };
@@ -551,21 +557,27 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     const seriesId = activeSeries?.id;
     if (!seriesId) return;
     let timer = null;
-    const save = () => {
+    changedWhileLoadingRef.current = false;
+    const save = (options) => {
       timer = null;
       saveSeriesAnnotations(seriesId, serializeAnnotations(imageIdsRef.current, imagesRef.current, {
         keyImageIds: keyImagesRef.current,
         recistReference: recistReferenceRef.current,
         mprRegions: mprRegionsRef.current,
-      }))
+      }), options)
         .catch(err => console.warn("[Annotations] couldn't save measurements:", err));
     };
     const schedule = (evt) => {
-      if (annotationsRestoredForRef.current !== seriesId) return;
       if (evt?.detail?.changeType === csToolsEnums.ChangeTypes.StatsUpdated) return; // recalculated stats, not an edit
+      if (annotationsRestoredForRef.current !== seriesId) { changedWhileLoadingRef.current = true; return; }
       clearTimeout(timer);
       timer = setTimeout(save, 1000);
     };
+    // Tab closed, reloaded or hidden: send a pending save now (keepalive outlives the page)
+    const flush = () => { if (timer) { clearTimeout(timer); save({ keepalive: true }); } };
+    const flushOnHide = () => { if (document.visibilityState === "hidden") flush(); };
+    document.addEventListener("visibilitychange", flushOnHide);
+    window.addEventListener("pagehide", flush);
     scheduleSaveRef.current = schedule; // key-image changes save the same way
     const events = [
       csToolsEnums.Events.ANNOTATION_COMPLETED,
@@ -575,6 +587,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     events.forEach(name => csEventTarget.addEventListener(name, schedule));
     return () => {
       scheduleSaveRef.current = null;
+      document.removeEventListener("visibilitychange", flushOnHide);
+      window.removeEventListener("pagehide", flush);
       events.forEach(name => csEventTarget.removeEventListener(name, schedule));
       if (timer) { clearTimeout(timer); save(); } // flush on series switch / unmount
     };
@@ -736,6 +750,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       const tag = e.target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser/OS shortcuts alone
+      syncDriverRef.current = "active"; // shortcuts act on the active viewer
 
       // Delete / Backspace — remove the selected annotation
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -868,12 +883,34 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       else paneHandlesRef.current[key]?.setImageIndex(target);
     });
   };
-  // Bring one pane to the active viewer's position (when it loads, or linking is turned on)
+  // Window/level, invert, zoom and pan follow too. Window only between CT series (HU
+  // mean the same in each; MR intensities don't), pan only within one frame of reference.
+  const modalityOf = (key) => String(lay.panes[key === "active" ? lay.activeSlot : Number(key)]?.modality ?? "").toUpperCase();
+  const displayFor = (display, source, key) => ({
+    voiRange: modalityOf(source) === "CT" && modalityOf(key) === "CT" ? display.voiRange : null,
+    invert: display.invert,
+    zoom: display.zoom,
+    pan: canLink(geometryRef.current[source], geometryRef.current[key]) ? display.pan : null,
+  });
+  const syncDisplayFrom = (source, display) => {
+    if (!linkActive || syncDriverRef.current !== source) return;
+    ["active", ...Object.keys(paneHandlesRef.current)].forEach(key => {
+      if (key === source) return;
+      const shown = displayFor(display, source, key);
+      if (key === "active") {
+        vpRef.current?.applyDisplay(shown);
+        setInverted(shown.invert);
+      } else paneHandlesRef.current[key]?.applyDisplay(shown);
+    });
+  };
+  // Bring one pane to the active viewer's position and display (when it loads, or linking is turned on)
   function alignPane(key) {
     if (!linkActive) return;
     const from = geometryRef.current.active?.slices[currentIndexRef.current];
     const target = matchSlice(from, geometryRef.current[key]);
     if (target != null) paneHandlesRef.current[key]?.setImageIndex(target);
+    const display = vpRef.current?.getDisplay();
+    if (display) paneHandlesRef.current[key]?.applyDisplay(displayFor(display, "active", key));
   }
   const alignPaneRef = useRef(alignPane); // the latest one, for async callers
   alignPaneRef.current = alignPane;
@@ -937,7 +974,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     <div className="flex flex-col gap-2 flex-1 min-w-0 h-full overflow-hidden">
 
       {/* ── Top toolbar ── */}
-      <div ref={toolbarRef} className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
+      <div ref={toolbarRef} onMouseEnter={() => { syncDriverRef.current = "active"; }} className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
         <div className="flex items-center gap-0 min-w-0">
           {/* ── Always visible: slice nav ── */}
           <ViewBtn icon={<FiChevronLeft size={16} />} label="Prev slice" disabled={currentIndex <= 0} onClick={() => goTo(currentIndex - 1)} />
@@ -1356,6 +1393,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   if (src) onSelectImage?.(src);
                   syncFrom("active", idx);
                 }}
+                onDisplayChange={(display) => { setInverted(display.invert); syncDisplayFrom("active", display); }}
                 onArrowTextRequest={handleArrowTextRequest}
                 onCameraChanged={handleCameraChanged}
                 onRoisChange={setRois}
@@ -1695,6 +1733,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 leftTool={leftTool}
                 linked={linkActive && canLink(geometryRef.current.active, geometryRef.current[slot])}
                 onIndexChange={(index) => syncFrom(String(slot), index)}
+                onDisplayChange={(display) => syncDisplayFrom(String(slot), display)}
                 onGeometry={(geometry) => onPaneGeometry(String(slot), geometry)}
                 onActivate={() => applyLayout(activatePane(lay, slot))}
                 onRemove={() => applyLayout({ layout: clearPane(lay, slot), open: null })}

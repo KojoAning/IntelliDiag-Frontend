@@ -1,4 +1,5 @@
 import { clearSeriesStore } from "./seriesStore";
+import { LAYOUT_STORAGE_KEY } from "./viewerLayout";
 
 const BASE = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
@@ -8,6 +9,7 @@ const BASE = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL ||
 // usually navigate away straight after.
 export async function clearLocalSession() {
   ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k));
+  try { sessionStorage.removeItem(LAYOUT_STORAGE_KEY); } catch { /* blocked */ }
   await Promise.race([clearSeriesStore().catch(() => {}), new Promise(resolve => setTimeout(resolve, 1500))]);
 }
 
@@ -50,15 +52,21 @@ async function tryRefreshToken() {
   return refreshPromise;
 }
 
-async function request(method, path, body) {
+// keepalive: the request survives the page closing (saves flushed on pagehide). Browsers
+// refuse keepalive bodies over 64 KB, so a bigger one goes as a normal request (which
+// may not finish if the page is closing)
+const KEEPALIVE_MAX_BYTES = 60 * 1024;
+async function request(method, path, body, { keepalive = false } = {}) {
   const token = localStorage.getItem("token");
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const bodyText = body !== undefined ? JSON.stringify(body) : undefined;
 
   let res = await fetch(`${BASE}${path}`, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: bodyText,
+    keepalive: keepalive && new Blob([bodyText ?? ""]).size <= KEEPALIVE_MAX_BYTES,
   });
 
   // On 401, try refreshing the access token and retry once
@@ -127,7 +135,7 @@ export const getCases       = (qs = "")  => request("GET", `/cases/${qs}`);
 export const getStudies     = (qs = "")  => request("GET", `/imaging-studies/${qs}`);
 export const deleteStudy    = (studyId)  => request("DELETE", `/imaging-studies/${studyId}`);
 export const getStudy       = (studyId)  => request("GET", `/imaging-studies/${studyId}`);
-export const updateStudy    = (studyId, body) => request("PATCH", `/imaging-studies/${studyId}`, body);
+export const updateStudy    = (studyId, body, options) => request("PATCH", `/imaging-studies/${studyId}`, body, options);
 export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
 export const getReports     = (qs = "")  => request("GET", `/reports/${qs}`);
 export const getRecentJobs  = ()         => request("GET", `/jobs/recent`);
@@ -160,8 +168,8 @@ export function getSeriesForStudy(studyId) {
 export function getSeriesAnnotations(seriesId) {
   return request("GET", `/series/${seriesId}/annotations`);
 }
-export function saveSeriesAnnotations(seriesId, annotations) {
-  return request("PUT", `/series/${seriesId}/annotations`, { annotations });
+export function saveSeriesAnnotations(seriesId, annotations, options) {
+  return request("PUT", `/series/${seriesId}/annotations`, { annotations }, options);
 }
 
 /**

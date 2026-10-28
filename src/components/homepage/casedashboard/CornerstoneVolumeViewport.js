@@ -935,7 +935,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   // grown from it through the neighbouring slices. Used for a freshly drawn polygon, for
   // restoring saved regions, and for rebuilding them after the AI layer is cleared.
   // Returns { label, voxelCount, volumeCm3, centroidWorld }, or null if nothing was baked.
-  const bakeOutlineRegion = (polyline, { uid: regionUid = uid(), tolerance = DEFAULT_GROW_TOLERANCE, number = null } = {}) => {
+  // savedVoxelCount: the region's size when it was saved — regrown on different images (a
+  // re-uploaded or changed series) it can come out another size, and the popup says so.
+  const bakeOutlineRegion = (polyline, { uid: regionUid = uid(), tolerance = DEFAULT_GROW_TOLERANCE, number = null, voxelCount: savedVoxelCount = null } = {}) => {
     const mainVolumeId = volumeIdRef.current;
     const mainVolume = csCache.getVolume(mainVolumeId);
     if (!mainVolume?.imageData) return null;
@@ -1029,6 +1031,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     const growInfo = { seed, fixedAxis, fixedValue, varyingAxes, tolerance, outline, uid: regionUid };
     growSeedsRef.current.set(label, growInfo);
     const { voxelCount, volumeCm3 } = growManualRegion(label, growInfo);
+    if (savedVoxelCount > 0 && Math.abs(voxelCount - savedVoxelCount) > Math.max(5, savedVoxelCount * 0.01)) {
+      growInfo.savedVoxelCount = savedVoxelCount;
+    }
     manualLabelsRef.current.add(label);
     const polygonNumber = number ?? manualLabelCounterRef.current + 1;
     manualLabelCounterRef.current = Math.max(manualLabelCounterRef.current, polygonNumber);
@@ -1063,10 +1068,15 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     return { label, voxelCount, volumeCm3, centroidWorld };
   };
 
-  // The drawn regions as saved with the series' measurements: { uid, outline, tolerance, number }
+  // The drawn regions as saved with the series' measurements: { uid, outline, tolerance, number, voxelCount }.
+  // A region that regrew to a different size keeps its saved size (and the popup's note)
+  // until it's adjusted.
   const listDrawnRegions = () => [...growSeedsRef.current]
     .filter(([label, info]) => manualLabelsRef.current.has(label) && info.outline)
-    .map(([label, info]) => ({ uid: info.uid, outline: info.outline, tolerance: info.tolerance, number: manualLabelNumberRef.current.get(label) ?? null }));
+    .map(([label, info]) => ({
+      uid: info.uid, outline: info.outline, tolerance: info.tolerance, number: manualLabelNumberRef.current.get(label) ?? null,
+      voxelCount: info.savedVoxelCount ?? lesionStatsRef.current?.get(label)?.voxelCount ?? null,
+    }));
   const reportRegions = () => onRegionsChangeCbRef.current?.(listDrawnRegions());
 
   // Step 2f: Put saved regions back once the volume is in (after any AI layer has been
@@ -1203,6 +1213,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       ...pos,
       isManual,
       polygonNumber: isManual ? manualLabelNumberRef.current.get(label) : null,
+      savedVoxelCount: isManual ? growSeedsRef.current.get(label)?.savedVoxelCount ?? null : null,
       confidence,
       regionName: isManual ? null : regionName,
       // Anatomy segment = one whole structure, so its name is the title, not a detail
@@ -1346,9 +1357,10 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     const tolerance = Math.min(MAX_GROW_TOLERANCE, Math.max(MIN_GROW_TOLERANCE, info.tolerance + delta));
     if (tolerance === info.tolerance) return;
     info.tolerance = tolerance;
+    delete info.savedVoxelCount; // adjusted on these images: this is its size now
     const stat = growManualRegion(label, info);
     if (!stat) return;
-    setSelectedLesion(prev => (prev?.label === label ? { ...prev, ...stat } : prev));
+    setSelectedLesion(prev => (prev?.label === label ? { ...prev, ...stat, savedVoxelCount: null } : prev));
     getAllVps().forEach(vp => vp.render());
     reportRegions();
   };
@@ -1715,6 +1727,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
               <div className="flex flex-col gap-1.5 px-3 pb-2.5">
                 {row("Volume", <span className="text-[13px] text-[#0694FB] font-mono">{`${selectedLesion.volumeCm3.toFixed(2)} cm³`}</span>)}
                 {row("Voxels", <span className="text-[11px] text-[#949494] font-mono">{selectedLesion.voxelCount.toLocaleString()}</span>)}
+                {selectedLesion.savedVoxelCount != null && (
+                  <span className="text-[11px] text-[#F59E0B]" title="Saved regions are grown again from their outline when the 3D view opens. These images aren't the ones it was saved on (re-uploaded or changed), so it came out a different size. Adjust the tolerance to accept it.">
+                    {`Regrown on changed images — was ${selectedLesion.savedVoxelCount.toLocaleString()} voxels`}
+                  </span>
+                )}
                 {selectedLesion.isManual && selectedLesion.sliceCount != null && (
                   selectedLesion.sliceCount === 1 && growInfo
                     ? (

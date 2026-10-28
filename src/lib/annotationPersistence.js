@@ -60,7 +60,8 @@ const toPlainJson = (value) => JSON.parse(JSON.stringify(value, (_k, v) => (Arra
 // The measurements on this series' images, ready to save, plus
 //   keyImageIds: iterable of imageIds flagged as key images
 //   recistReference: { baseline, nadir, newLesion } entered in the RECIST panel
-//   mprRegions: [{ uid, outline, tolerance, number }] drawn in the 3D view
+//   mprRegions: [{ uid, outline, tolerance, number, voxelCount }] drawn in the 3D view
+//     (voxelCount: its size when saved, to spot a regrowth that came out different)
 export function serializeAnnotations(imageIds, images, { keyImageIds = [], recistReference = null, mprRegions = [] } = {}) {
   const { keyByImageId } = buildKeyMaps(imageIds, images);
   const keyImages = [...keyImageIds]
@@ -84,10 +85,10 @@ export function serializeAnnotations(imageIds, images, { keyImageIds = [], recis
   const reference = recistReference
     ? [{ annotationUID: "recist-reference", metadata: { toolName: RECIST_REFERENCE_TYPE }, data: { ...recistReference } }]
     : [];
-  const regions = mprRegions.map(({ uid, outline, tolerance, number }) => toPlainJson({
+  const regions = mprRegions.map(({ uid, outline, tolerance, number, voxelCount = null }) => toPlainJson({
     annotationUID: `mpr-region-${uid}`,
     metadata: { toolName: MPR_REGION_TYPE },
-    data: { uid, outline, tolerance, number },
+    data: { uid, outline, tolerance, number, voxelCount },
   }));
   return [...measurements, ...keyImages, ...reference, ...regions];
 }
@@ -130,5 +131,5 @@ export function restoreRecistReference(saved) {
 export function restoreMprRegions(saved) {
   return (saved ?? [])
     .filter(a => a.metadata?.toolName === MPR_REGION_TYPE && a.data?.uid && a.data.outline?.length >= 3)
-    .map(a => ({ uid: a.data.uid, outline: a.data.outline, tolerance: a.data.tolerance, number: a.data.number ?? null }));
+    .map(a => ({ uid: a.data.uid, outline: a.data.outline, tolerance: a.data.tolerance, number: a.data.number ?? null, voxelCount: a.data.voxelCount ?? null }));
 }

@@ -14,6 +14,26 @@ export const LAYOUTS = [
   { cols: 2, rows: 2, label: "Four (2 × 2)" },
 ];
 
+// Kept for this tab (sessionStorage) so a page reload comes back to the same viewers;
+// cleared on sign-out (clearLocalSession)
+export const LAYOUT_STORAGE_KEY = "viewer.layout";
+
+// The layout saved in this tab, if it belongs with the series being opened
+export function readSavedLayout(seriesId) {
+  try {
+    const layout = JSON.parse(sessionStorage.getItem(LAYOUT_STORAGE_KEY));
+    const fits = layout && layout.cols * layout.rows === layout.panes?.length;
+    return fits && layout.panes.some(s => s && String(s.id) === String(seriesId)) ? layout : null;
+  } catch { return null; }
+}
+
+export function saveLayout(layout) {
+  try {
+    if (layout) sessionStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+    else sessionStorage.removeItem(LAYOUT_STORAGE_KEY);
+  } catch { /* storage blocked: the layout just won't survive a reload */ }
+}
+
 // Drag-and-drop type for a series card (the side panel) dropped onto a viewer
 export const SERIES_DRAG_TYPE = "application/x-intellidiag-series";
 

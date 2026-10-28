@@ -7,6 +7,7 @@ import Sidepanel from "./sidepanel";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
 import { getSeriesForStudy, uploadDicom, getModels, authFetch, getStudy, updateStudy } from "../../../lib/api";
+import { readSavedLayout, saveLayout } from "../../../lib/viewerLayout";
 import { loadSeries, invalidateSeries, prefetchSeriesInBackground, PROJECTION_MODALITIES } from "../../../lib/seriesCache";
 import { Info, } from "lucide-react";
 
@@ -108,11 +109,11 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studyId]);
 
-  const saveHistory = useCallback(() => {
+  const saveHistory = useCallback((options) => {
     historyTimerRef.current = null;
     const id = historyLoadedForRef.current;
     if (!id) return;
-    updateStudy(id, { clinical_indication: patientHistoryRef.current.trim() || null })
+    updateStudy(id, { clinical_indication: patientHistoryRef.current.trim() || null }, options)
       .catch(err => console.warn("[History] couldn't save the clinical history:", err));
   }, []);
   const handlePatientHistoryChange = (text) => {
@@ -125,9 +126,21 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
     clearTimeout(historyTimerRef.current);
     historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
   };
-  // Flush on series switch / leaving the viewer
-  useEffect(() => () => {
-    if (historyTimerRef.current) { clearTimeout(historyTimerRef.current); saveHistory(); }
+  // Flush on series switch / leaving the viewer, and when the tab is closed, reloaded or
+  // hidden (keepalive lets the save finish after the page is gone)
+  useEffect(() => {
+    const flush = (options) => {
+      if (historyTimerRef.current) { clearTimeout(historyTimerRef.current); saveHistory(options); }
+    };
+    const onHide = () => { if (document.visibilityState === "hidden") flush({ keepalive: true }); };
+    const onPageHide = () => flush({ keepalive: true });
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      flush();
+    };
   }, [saveHistory]);
 
   // Every series in the study, for the side panel's series cards
@@ -1577,9 +1590,11 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
 // translation and the loaded volume from one series never leak into another.
 // The viewer layout (lib/viewerLayout) lives out here, so making another pane active —
 // which opens its series and remounts the workspace — keeps the other panes in place.
+// It's also kept for the tab, so a reload comes back to the same viewers.
 function WorkspaceViewerRoute() {
   const { state } = useLocation();
-  const [layout, setLayout] = useState(null);
+  const [layout, setLayout] = useState(() => readSavedLayout(state?.series?.id));
+  useEffect(() => { saveLayout(layout); }, [layout]);
   return <WorkspaceViewer key={state?.series?.id ?? "none"} layout={layout} onLayoutChange={setLayout} />;
 }
 

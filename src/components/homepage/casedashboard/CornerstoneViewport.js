@@ -99,6 +99,8 @@ function applyVoi(viewport, imageId) {
  *   imageIds    – string[]  Cornerstone imageIds  (use toImageId() helper for blob/http URLs)
  *   activeTool  – string | null  one of the keys in TOOL_MAP, or null for default W/L
  *   onIndexChange – (index: number) => void
+ *   onDisplayChange – (display) => void  the user changed window/level, invert, zoom or pan
+ *                     (see displayOf; not fired for loading, resizing or applyDisplay)
  *
  * Ref methods (use a React ref):
  *   zoomIn(), zoomOut(), resetFit()
@@ -109,9 +111,10 @@ function applyVoi(viewport, imageId) {
  *   getCurrentIndex() → number
  *   getZoom() → number
  *   getProperties() → object
+ *   getDisplay() → display, applyDisplay(display)  for linked viewers
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue },
+  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onDisplayChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue },
   ref
 ) {
   const divRef = useRef(null);
@@ -120,6 +123,8 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
   const onIndexChangeCbRef = useRef(onIndexChange);
   onIndexChangeCbRef.current = onIndexChange;
   const onCameraChangedCbRef = useRef(onCameraChanged);
+  const onDisplayChangeCbRef = useRef(onDisplayChange);
+  onDisplayChangeCbRef.current = onDisplayChange;
   onCameraChangedCbRef.current = onCameraChanged;
   const onRoisChangeCbRef = useRef(onRoisChange);
   onRoisChangeCbRef.current = onRoisChange;
@@ -259,6 +264,8 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       const { invert = false } = vp.getProperties();
       vp.setProperties({ invert: !invert });
       vp.render();
+      // Cornerstone has no event for invert
+      if (ctx.current.stackLoaded) onDisplayChangeCbRef.current?.(displayOf(vp));
     },
     setImageIndex(n) {
       const vp = ctx.current.viewport;
@@ -282,6 +289,19 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     },
     getProperties() {
       return ctx.current.viewport?.getProperties() ?? {};
+    },
+    getDisplay() {
+      return ctx.current.viewport && ctx.current.stackLoaded ? displayOf(ctx.current.viewport) : null;
+    },
+    // Show another viewer's window/level, invert, zoom or pan (any subset). Kept until the
+    // stack has loaded if it hasn't yet, so loading doesn't overwrite it.
+    applyDisplay(display) {
+      if (!display) return;
+      if (!ctx.current.viewport || !ctx.current.stackLoaded) {
+        ctx.current.pendingDisplay = { ...ctx.current.pendingDisplay, ...display };
+        return;
+      }
+      quietly(() => applyDisplayTo(ctx.current.viewport, display));
     },
     /** Delete whichever annotations are currently selected. Returns true if any were removed. */
     deleteSelectedAnnotations() {
@@ -312,6 +332,63 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       vp.setCamera({ ...cam, parallelScale: cam.parallelScale / factor });
       vp.render();
     }
+  }
+
+  // What linked viewers share: window, invert, and zoom / pan relative to the fitted image
+  // (pan in patient mm, so it only means the same in a series with the same frame of reference)
+  function displayOf(vp) {
+    const { voiRange, invert = false } = vp.getProperties();
+    const cam = vp.getCamera();
+    const centre = ctx.current.imageCenterWorld;
+    return {
+      voiRange: voiRange ? { lower: voiRange.lower, upper: voiRange.upper } : null,
+      invert,
+      zoom: cam.parallelScale && ctx.current.baseScale ? ctx.current.baseScale / cam.parallelScale : 1,
+      pan: centre && cam.focalPoint ? [0, 1, 2].map(k => cam.focalPoint[k] - centre[k]) : [0, 0, 0],
+    };
+  }
+  const near = (a, b, eps) => Math.abs(a - b) <= eps;
+  function applyDisplayTo(vp, { voiRange, invert, zoom, pan }) {
+    const now = displayOf(vp);
+    let changed = false;
+    if (voiRange && !(now.voiRange && near(now.voiRange.lower, voiRange.lower, 1e-3) && near(now.voiRange.upper, voiRange.upper, 1e-3))) {
+      vp.setProperties({ voiRange });
+      changed = true;
+    }
+    if (invert != null && invert !== now.invert) {
+      vp.setProperties({ invert });
+      changed = true;
+    }
+    const cam = vp.getCamera();
+    const camera = {};
+    if (zoom > 0 && ctx.current.baseScale && !near(zoom, now.zoom, 1e-3)) camera.parallelScale = ctx.current.baseScale / zoom;
+    const centre = ctx.current.imageCenterWorld;
+    if (pan && centre && cam.focalPoint && cam.position && pan.some((v, k) => !near(v, now.pan[k], 1e-2))) {
+      const shift = [0, 1, 2].map(k => centre[k] + pan[k] - cam.focalPoint[k]);
+      camera.focalPoint = cam.focalPoint.map((v, k) => v + shift[k]);
+      camera.position = cam.position.map((v, k) => v + shift[k]);
+    }
+    if (Object.keys(camera).length) {
+      vp.setCamera(camera);
+      changed = true;
+    }
+    if (changed) vp.render();
+  }
+  // Runs fn without reporting onDisplayChange (Cornerstone fires its events synchronously)
+  function quietly(fn) {
+    ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
+    try { return fn(); } finally { ctx.current.quiet -= 1; }
+  }
+  // After a stack loads: the fitted camera is the reference for zoom / pan, then any
+  // display a linked viewer sent while loading
+  function stackReady(vp) {
+    const cam = vp.getCamera();
+    ctx.current.baseScale = cam.parallelScale ?? 1;
+    ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
+    ctx.current.stackLoaded = true;
+    const pending = ctx.current.pendingDisplay;
+    ctx.current.pendingDisplay = null;
+    if (pending) quietly(() => applyDisplayTo(vp, pending));
   }
 
   // Cornerstone 4 moved rotation out of setProperties/getProperties (it's silently ignored
@@ -351,6 +428,12 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
 
       const viewport = engine.getViewport(viewportId);
       ctx.current.viewport = viewport;
+      const reportDisplay = () => {
+        if (ctx.current.quiet || !ctx.current.stackLoaded || !onDisplayChangeCbRef.current) return;
+        onDisplayChangeCbRef.current(displayOf(viewport));
+      };
+      divRef.current.addEventListener(Enums.Events.VOI_MODIFIED, reportDisplay);
+      divRef.current.addEventListener(Enums.Events.CAMERA_MODIFIED, reportDisplay);
 
       // ── Tool group ─────────────────────────────────────────────────────
       const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
@@ -466,15 +549,19 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       divRef.current?.addEventListener(Enums.Events.IMAGE_RENDERED, onRendered);
 
       // Load initial images
-      if (imageIds.length) {
-        await viewport.setStack(imageIds);
-        // Apply the DICOM's embedded WindowCenter/Width so CT looks correct immediately.
-        applyVoi(viewport, imageIds[0]);
-        viewport.render();
+      // The latest imageIds: they may have arrived while Cornerstone was starting
+      const initialIds = imageIdsRef.current;
+      if (initialIds.length) {
+        ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
+        try {
+          await viewport.setStack(initialIds);
+          // Apply the DICOM's embedded WindowCenter/Width so CT looks correct immediately.
+          applyVoi(viewport, initialIds[0]);
+          viewport.render();
+        } finally { ctx.current.quiet -= 1; }
+        if (cancelled) return;
         // Store base parallelScale for zoom calculation and image center for mask alignment
-        const initCam = viewport.getCamera();
-        ctx.current.baseScale = initCam.parallelScale ?? 1;
-        ctx.current.imageCenterWorld = initCam.focalPoint ? [...initCam.focalPoint] : null;
+        stackReady(viewport);
         // Now safe to enable scroll
         toolGroup.setToolActive(StackScrollTool.toolName, {
           bindings: [{ mouseButton: MouseBindings.Wheel }],
@@ -505,32 +592,40 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       const vp = ctx.current.viewport;
       if (!engine || !vp) return;
       try {
-        engine.resize(true, false);
-        // Re-fit the image to the new container size so the mask stays aligned.
-        // This resets user pan/zoom on resize, which is acceptable for split-screen transitions.
-        vp.resetCamera();
-        vp.render();
-        const cam = vp.getCamera();
-        ctx.current.baseScale = cam.parallelScale ?? 1;
-        ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
+        quietly(() => {
+          // Re-fit to the new size (the fit is what zoom / pan and the mask overlay are
+          // measured from), then put back the zoom and pan the user had on top of it
+          const before = ctx.current.stackLoaded ? displayOf(vp) : null;
+          engine.resize(true, false);
+          vp.resetCamera();
+          const cam = vp.getCamera();
+          ctx.current.baseScale = cam.parallelScale ?? 1;
+          ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
+          if (before) applyDisplayTo(vp, { zoom: before.zoom, pan: before.pan });
+          vp.render();
+        });
       } catch (_) {}
     });
 
     ro.observe(el);
     return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Update image stack when imageIds prop changes ─────────────────────────
   useEffect(() => {
     const vp = ctx.current.viewport;
     if (!vp || !imageIds.length) return;
+    ctx.current.stackLoaded = false;
+    ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
     vp.setStack(imageIds)
       .then(() => {
         applyVoi(vp, imageIds[0]);
         vp.render();
-        const updatedCam = vp.getCamera();
-        ctx.current.baseScale = updatedCam.parallelScale ?? 1;
-        ctx.current.imageCenterWorld = updatedCam.focalPoint ? [...updatedCam.focalPoint] : null;
+      })
+      .finally(() => { ctx.current.quiet -= 1; })
+      .then(() => {
+        stackReady(vp);
         // Enable stack scroll now that the stack is populated
         const tg = ctx.current.toolGroup;
         if (tg) {
@@ -542,6 +637,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         }
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIds]);
 
   // ── Mouse buttons (Horos layout, see lib/mouseBindings) ──────────────────

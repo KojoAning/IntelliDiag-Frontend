@@ -15,8 +15,9 @@ import { getSeriesAnnotations } from "../../../lib/api";
 //
 // linked: scrolls with the others by position (null when there's nothing to link to)
 // onIndexChange(index): the slice on screen changed
+// onDisplayChange(display): the user changed its window, invert, zoom or pan (CornerstoneViewport)
 // onGeometry(geometry | null): slice positions (lib/slicePositions) once read, null on unmount
-const SeriesPane = forwardRef(function SeriesPane({ series, leftTool, linked, onIndexChange, onGeometry, onActivate, onRemove }, ref) {
+const SeriesPane = forwardRef(function SeriesPane({ series, leftTool, linked, onIndexChange, onDisplayChange, onGeometry, onActivate, onRemove }, ref) {
   const vpRef = useRef(null);
   const [imageIds, setImageIds] = useState([]);
   const [status, setStatus] = useState("loading"); // "loading" | "ready" | "empty" | "error"
@@ -26,6 +27,7 @@ const SeriesPane = forwardRef(function SeriesPane({ series, leftTool, linked, on
 
   useImperativeHandle(ref, () => ({
     setImageIndex(n) { vpRef.current?.setImageIndex(n); },
+    applyDisplay(display) { vpRef.current?.applyDisplay(display); },
   }));
 
   useEffect(() => {
@@ -59,6 +61,7 @@ const SeriesPane = forwardRef(function SeriesPane({ series, leftTool, linked, on
           leftTool={leftTool === "crosshairs" ? "wl" : leftTool}
           readOnly
           onIndexChange={(i) => { setIndex(i); onIndexChange?.(i); }}
+          onDisplayChange={onDisplayChange}
         />
       </div>
 
@@ -97,7 +100,7 @@ const SeriesPane = forwardRef(function SeriesPane({ series, leftTool, linked, on
 
       {/* Link state, bottom-left; slice counter, bottom-right */}
       {linked && (
-        <span className="absolute bottom-3 left-3 z-20 flex items-center gap-1 text-[11px] text-[#0694FB]/80 pointer-events-none select-none" title="Scrolls with the active viewer by position">
+        <span className="absolute bottom-3 left-3 z-20 flex items-center gap-1 text-[11px] text-[#0694FB]/80 pointer-events-none select-none" title="Scrolls with the active viewer by position, and follows its zoom and pan (and window, between CT series)">
           <TbLink size={12} /> Linked
         </span>
       )}

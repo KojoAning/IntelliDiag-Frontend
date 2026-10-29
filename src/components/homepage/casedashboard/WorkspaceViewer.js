@@ -679,7 +679,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             user_email: localStorage.getItem("email"),
             user_name: localStorage.getItem("name"),
             model_id: 10000001,
-            viewplane: viewMode === "mpr" ? "axial" : viewMode,
+            viewplane: viewMode === "stack" ? viewMode : "axial", // MPR and 3D both run on the axial stack
           }),
         });
         if (!response.ok) {

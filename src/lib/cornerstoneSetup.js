@@ -20,6 +20,7 @@ import {
   CobbAngleTool,
   LabelTool,
   MagnifyTool,
+  TrackballRotateTool,
 } from "@cornerstonejs/tools";
 import * as dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core";
@@ -110,6 +111,7 @@ export async function initCornerstone() {
       CobbAngleTool,
       LabelTool,
       MagnifyTool,
+      TrackballRotateTool,
     ].forEach((T) => {
       try { addTool(T); } catch (_) { /* already added */ }
     });

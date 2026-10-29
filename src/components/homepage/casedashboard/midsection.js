@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import CornerstoneViewport from "./CornerstoneViewport";
-import CornerstoneVolumeViewport from "./CornerstoneVolumeViewport";
+import CornerstoneVolumeViewport, { SLAB_MODES, slabLabel, FUSION_COLORMAPS } from "./CornerstoneVolumeViewport";
+import { loadSeries } from "../../../lib/seriesCache";
+import CornerstoneVolume3D, { presetsFor } from "./CornerstoneVolume3D";
 import SliceScrubber from "./SliceScrubber";
 import DicomTagPanel from "./DicomTagPanel";
 import RecistPanel from "./RecistPanel";
@@ -36,7 +38,7 @@ import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
 import { PiPolygonLight, PiSparkleFill } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
-import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption } from "react-icons/tb";
+import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption, TbBrush } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 import { Sparkle } from "lucide-react";
 import { formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
@@ -236,6 +238,9 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
+// The Enhance button's collapsed width (it widens on hover)
+const ENHANCE_BTN_REST_PX = 28;
+
 function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange, layout, onLayoutChange, seriesList = [], onSelectSeries }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -246,6 +251,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [activePlane, setActivePlane] = useState("axial");
 
   const switchViewMode = (mode) => {
+    if (mode !== "mpr") setActiveTool(t => (t === "brush" ? null : t));
     setViewMode(mode);
     onViewModeChange?.(mode);
   };
@@ -255,11 +261,50 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     if (translationActive && viewMode !== "stack") switchViewMode("stack");
   }, [translationActive]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mprMenuOpen, setMprMenuOpen] = useState(false);
+  // Thick-slab MIP / MinIP / average in the 3D view (mode "off" = single plane)
+  const [slab, setSlab] = useState({ mode: "off", mm: 10 });
+  const [slabMenuOpen, setSlabMenuOpen] = useState(false);
+  const slabMenuRef = useRef(null);
+  // Fusion in the 3-plane view: a PET / NM series of this study drawn over the open one.
+  // { seriesId, label, colormap, opacity, imageIds (once loaded) }
+  const [fusion, setFusion] = useState(null);
+  const [fusionMenuOpen, setFusionMenuOpen] = useState(false);
+  const fusionMenuRef = useRef(null);
+  const fusionCandidates = seriesList.filter(s =>
+    String(s.id) !== String(activeSeries?.id) && ["PT", "NM"].includes((s.modality || "").toUpperCase()));
+  useEffect(() => { setFusion(null); }, [activeSeries?.id]);
+  const fuseWith = async (series) => {
+    const label = `${(series.modality || "").toUpperCase()} ${series.description || series.name || ""}`.trim();
+    setFusion(prev => ({ colormap: FUSION_COLORMAPS[0][0], opacity: 0.6, ...prev, seriesId: series.id, label, imageIds: null }));
+    try {
+      const { images } = await loadSeries(series.id);
+      const ids = await buildImageIds(images);
+      setFusion(prev => (prev?.seriesId === series.id ? { ...prev, imageIds: ids, key: `${series.id}:${ids.length}` } : prev));
+    } catch (err) {
+      console.warn("[Fusion] couldn't load the series:", err);
+      setFusion(prev => (prev?.seriesId === series.id ? null : prev));
+    }
+  };
+
+  // 3D rendering preset (viewMode "3d")
+  const render3dRef = useRef(null);
+  const [renderPreset, setRenderPreset] = useState(null);
+  // A CT preset means nothing on an MR — each series starts on its modality's first one
+  useEffect(() => { setRenderPreset(null); }, [activeSeries?.id]);
   const [enhancementActive, setEnhancementActive] = useState(false);
   const [enhancementDone, setEnhancementDone] = useState(false);
   const [enhancementHovered, setEnhancementHovered] = useState(false);
   const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
-  const [toolbarNarrow, setToolbarNarrow] = useState(false);
+  // Toolbar tiers, stepped down only while it doesn't fit: 0 everything inline · 1 view
+  // tools in the ··· menu · 2 buttons shrink to icons / short labels · 3 wraps onto a
+  // second row rather than cutting anything off
+  const [toolbarTier, setToolbarTier] = useState(0);
+  const [toolbarWidth, setToolbarWidth] = useState(0);
+  const toolbarLeftRef = useRef(null);
+  const toolbarRightRef = useRef(null);
+  const enhanceBtnRef = useRef(null);
+  const toolbarNarrow = toolbarTier >= 1;
+  const toolbarCompact = toolbarTier >= 2;
   const overflowMenuRef = useRef(null);
   const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const presetMenuRef = useRef(null);
@@ -311,6 +356,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     const handler = (e) => {
       if (infoRef.current && !infoRef.current.contains(e.target)) setInfoOpen(false);
       if (mprMenuRef.current && !mprMenuRef.current.contains(e.target)) setMprMenuOpen(false);
+      if (slabMenuRef.current && !slabMenuRef.current.contains(e.target)) setSlabMenuOpen(false);
+      if (fusionMenuRef.current && !fusionMenuRef.current.contains(e.target)) setFusionMenuOpen(false);
       if (layoutMenuRef.current && !layoutMenuRef.current.contains(e.target)) setLayoutMenuOpen(false);
       if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target)) setOverflowMenuOpen(false);
       if (presetMenuRef.current && !presetMenuRef.current.contains(e.target)) setPresetMenuOpen(false);
@@ -319,12 +366,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Toolbar ResizeObserver — switches to overflow menu when toolbar gets narrow
+  // Toolbar width → start again from the full toolbar; the layout effect below steps down
   useEffect(() => {
     if (!toolbarRef.current) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setToolbarNarrow(entry.contentRect.width < 1000);
-    });
+    const ro = new ResizeObserver(([entry]) => setToolbarWidth(Math.round(entry.contentRect.width)));
     ro.observe(toolbarRef.current);
     return () => ro.disconnect();
   }, []);
@@ -822,7 +867,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         case "s": setLeftTool("pointer"); setActiveTool(null); return;
         case "w": setLeftTool("wl"); setActiveTool(null); return;
         case "p": case "m": setLeftTool("pan"); setActiveTool(null); return; // M = Horos's "Move"
-        case "c": if (viewMode !== "stack") { setLeftTool("crosshairs"); setActiveTool(null); } return;
+        case "c": if (viewMode === "mpr") { setLeftTool("crosshairs"); setActiveTool(null); } return;
         case "i": activeVp.current?.toggleInvert(); setInverted(i => !i); return;
         case "r":
           if (e.shiftKey) { activeVp.current?.rotateCCW(); setRotation(r => (r + 270) % 360); }
@@ -864,7 +909,34 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   }, [enhancementLoading, enhancementResult]);
 
   // Pick the active viewport ref based on current view mode
-  const activeVp = viewMode === "stack" ? vpRef : volumeVpRef;
+  const activeVp = viewMode === "stack" ? vpRef : viewMode === "3d" ? render3dRef : volumeVpRef;
+
+  // What's in the toolbar changes how much room it needs: start again from the full one
+  const toolbarContentKey = [viewMode, multi, slabLabel(slab), !!fusion, aiLoading, translationActive, isCT].join("|");
+  useLayoutEffect(() => { setToolbarTier(0); }, [toolbarWidth, toolbarContentKey]);
+  // After each render: still overflowing → one tier down (before paint, so no flicker).
+  // Runs after every render on purpose — it only ever steps down, and stops at the last tier.
+  // Not while a menu is open: the toolbar mustn't rearrange under the pointer.
+  const toolbarMenuOpen = mprMenuOpen || slabMenuOpen || fusionMenuOpen || layoutMenuOpen || overflowMenuOpen || presetMenuOpen;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const bar = toolbarRef.current;
+    const left = toolbarLeftRef.current;
+    const right = toolbarRightRef.current;
+    if (!bar || !left || !right || toolbarTier >= 3 || toolbarMenuOpen) return;
+    const style = getComputedStyle(bar);
+    const room = bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    // Width of the buttons themselves: the span of each group's own children. (scrollWidth
+    // would also count an open dropdown hanging off a button.)
+    const span = group => {
+      const boxes = [...group.children].map(el => el.getBoundingClientRect()).filter(r => r.width > 0);
+      return boxes.length ? Math.max(...boxes.map(r => r.right)) - Math.min(...boxes.map(r => r.left)) : 0;
+    };
+    // The Enhance button widens while hovered; measure it at rest so a hover doesn't shrink the toolbar
+    const enhanceExtra = Math.max(0, (enhanceBtnRef.current?.offsetWidth ?? 0) - ENHANCE_BTN_REST_PX);
+    const needed = span(left) - enhanceExtra + span(right) + parseFloat(style.columnGap || 0);
+    if (needed > room + 1) setToolbarTier(t => Math.min(3, t + 1));
+  });
   const activeVpRef = useRef(activeVp);
   activeVpRef.current = activeVp;
 
@@ -990,6 +1062,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     { name: "polygon", icon: <PiPolygonLight size={19} />, label: "Polygon ROI (D)" },
     { name: "pencil", icon: <TbPencil size={19} />, label: "Pencil — freehand line" },
     { name: "text", icon: <TbLetterT size={19} />, label: "Text label" },
+    // Painting needs the volume (and its segmentation layer) — 3-plane view only for now
+    ...(viewMode === "mpr" ? [{ name: "brush", icon: <TbBrush size={19} />, label: "Brush — paint a region; Alt erases, [ ] size" }] : []),
   ];
 
   const measureTools = [
@@ -1004,8 +1078,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     <div className="flex flex-col gap-2 flex-1 min-w-0 h-full overflow-hidden">
 
       {/* ── Top toolbar ── */}
-      <div ref={toolbarRef} onMouseEnter={() => { syncDriverRef.current = "active"; }} className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-0 min-w-0">
+      <div ref={toolbarRef} onMouseEnter={() => { syncDriverRef.current = "active"; }} className={`relative z-40 bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0 ${toolbarTier >= 3 ? "flex-wrap gap-y-1.5" : ""}`}>
+        {/* Nothing in here shrinks or wraps its text: short of room it overflows, which is
+          what tells the toolbar to step down a tier. The dropdowns (absolutely positioned)
+          go back to normal wrapping — their items are inline buttons that must stack. */}
+        <div ref={toolbarLeftRef} className={`flex items-center gap-0 whitespace-nowrap [&>*]:shrink-0 [&_.absolute]:whitespace-normal ${toolbarTier >= 3 ? "flex-wrap gap-y-1" : "min-w-0"}`}>
           {/* ── Always visible: slice nav ── */}
           <ViewBtn icon={<FiChevronLeft size={16} />} label="Prev slice" disabled={currentIndex <= 0} onClick={() => goTo(currentIndex - 1)} />
           <span className="text-[#6B6B6B] text-[13px] font-mono w-[60px] text-center shrink-0">
@@ -1024,7 +1101,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* ── Secondary tools: hidden when toolbar is narrow ── */}
           {!toolbarNarrow && (
-            <div className="flex items-center">
+            <div className="flex items-center [&>*]:shrink-0">
               <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setLeftTool("wl"); setActiveTool(null); }} />
               <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
               <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
@@ -1034,7 +1111,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               <ViewBtn icon={<FiMousePointer size={15} />} label="Pointer — left-click does nothing; drag crosshair lines or measurements (S)" active={!activeTool && leftTool === "pointer"} onClick={() => { setLeftTool("pointer"); setActiveTool(null); }} />
               <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level — left-drag (W)" active={!activeTool && leftTool === "wl"} onClick={() => { setLeftTool("wl"); setActiveTool(null); }} />
               <ViewBtn icon={<FiMove size={15} />} label="Pan — left-drag (P)" active={!activeTool && leftTool === "pan"} onClick={() => { setLeftTool("pan"); setActiveTool(null); }} />
-              {viewMode !== "stack" && (
+              {viewMode === "mpr" && (
                 <ViewBtn icon={<FiCrosshair size={15} />} label="Crosshairs — click to jump (C)" active={!activeTool && leftTool === "crosshairs"} onClick={() => { setLeftTool("crosshairs"); setActiveTool(null); }} />
               )}
               {isCT && (
@@ -1092,7 +1169,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               ···
             </button>
             {overflowMenuOpen && (
-              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl overflow-hidden min-w-[180px]">
+              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl overflow-hidden min-w-[220px]">
                 {/* Fit / Rotate / Flip */}
                 <div className="flex items-center gap-1 px-3 py-2 border-b border-[#2a2a2a]">
                   <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setLeftTool("wl"); setActiveTool(null); setOverflowMenuOpen(false); }} />
@@ -1106,9 +1183,37 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   <ViewBtn icon={<FiMousePointer size={15} />} label="Pointer" active={!activeTool && leftTool === "pointer"} onClick={() => { setLeftTool("pointer"); setActiveTool(null); }} />
                   <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level" active={!activeTool && leftTool === "wl"} onClick={() => { setLeftTool("wl"); setActiveTool(null); }} />
                   <ViewBtn icon={<FiMove size={15} />} label="Pan" active={!activeTool && leftTool === "pan"} onClick={() => { setLeftTool("pan"); setActiveTool(null); }} />
+                  {viewMode === "mpr" && (
+                    <ViewBtn icon={<FiCrosshair size={15} />} label="Crosshairs (C)" active={!activeTool && leftTool === "crosshairs"} onClick={() => { setLeftTool("crosshairs"); setActiveTool(null); }} />
+                  )}
                   <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
-                  <span className="text-[#555] text-[11px] ml-1">Pointer · W/L · Pan · Invert</span>
+                  <ViewBtn icon={<FiHelpCircle size={15} />} label="Keyboard shortcuts (?)" active={shortcutsOpen} onClick={() => { setShortcutsOpen(o => !o); setOverflowMenuOpen(false); }} />
                 </div>
+                {/* CT window presets */}
+                {isCT && (
+                  <div className="px-3 py-2 border-b border-[#2a2a2a] flex flex-col gap-1">
+                    <span className="text-[#555] text-[11px]">Window presets</span>
+                    <div className="grid grid-cols-2 gap-1">
+                      {CT_WINDOW_PRESETS.map(p => (
+                        <button
+                          key={p.key}
+                          onClick={() => { applyWindowPreset(p); setOverflowMenuOpen(false); }}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-left text-[11px] text-[#CCCCCC] hover:bg-[#1a1a1a] hover:text-white bg-transparent border-none cursor-pointer"
+                        >
+                          <span className="text-[#0694FB] font-mono">{p.key}</span>
+                          <span className="truncate">{p.name}</span>
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => { resetWindow(); setOverflowMenuOpen(false); }}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-left text-[11px] text-[#CCCCCC] hover:bg-[#1a1a1a] hover:text-white bg-transparent border-none cursor-pointer"
+                      >
+                        <span className="text-[#0694FB] font-mono">0</span>
+                        <span className="truncate">Original</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {/* Reset */}
                 <div className="px-3 py-2">
                   <button
@@ -1133,7 +1238,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 }`}
             >
               <TbView360 size={15} />
-              {viewMode === "stack" ? "MPR" : `MPR · ${activePlane.toUpperCase()}`}
+              {viewMode === "stack" ? "MPR" : viewMode === "3d" ? "3D" : toolbarCompact ? "MPR" : `MPR · ${activePlane.toUpperCase()}`}
             </button>
             {mprMenuOpen && (
               <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[150px]">
@@ -1149,9 +1254,148 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 >
                   MPR (3-pane + crosshairs)
                 </button>
+                <button
+                  onClick={() => { switchViewMode("3d"); setMprMenuOpen(false); setActiveTool(null); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "3d" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                >
+                  3D rendering
+                </button>
               </div>
             )}
           </div>
+
+          {/* ── 3D rendering only: preset ── */}
+          {viewMode === "3d" && (
+            <select
+              value={renderPreset ?? presetsFor(activeSeries?.modality)[0][0]}
+              onChange={e => setRenderPreset(e.target.value)}
+              title="What the 3D rendering shows"
+              className={`ml-1 bg-[#111] border border-[#2a2a2a] rounded-lg px-2 py-1 text-white text-[12px] outline-none cursor-pointer shrink-0 ${toolbarCompact ? "max-w-[96px]" : ""}`}
+            >
+              {presetsFor(activeSeries?.modality).map(([name, label]) => <option key={name} value={name}>{label}</option>)}
+            </select>
+          )}
+
+          {/* ── 3D view only: thick slab ── */}
+          {viewMode === "mpr" && (
+            <div ref={slabMenuRef} className="relative ml-1">
+              <button
+                onClick={() => setSlabMenuOpen(v => !v)}
+                title="Thick slab — MIP / MinIP / average through a slab instead of one plane"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${slabLabel(slab)
+                  ? "bg-[#F59E0B] text-black"
+                  : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+                  }`}
+              >
+                {slabLabel(slab) ? (toolbarCompact ? SLAB_MODES[slab.mode].label : slabLabel(slab)) : "Slab"}
+              </button>
+              {slabMenuOpen && (
+                <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl w-[230px] p-3 flex flex-col gap-2.5">
+                  <div className="grid grid-cols-4 gap-1">
+                    {[["off", "Off"], ...Object.entries(SLAB_MODES).map(([k, m]) => [k, m.label])].map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        onClick={() => setSlab(prev => ({ ...prev, mode }))}
+                        className={`px-1 py-1 rounded-md text-[11px] border-none cursor-pointer ${slab.mode === mode ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className={`flex flex-col gap-1.5 ${slab.mode === "off" ? "opacity-40 pointer-events-none" : ""}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-[#868686]">Thickness</span>
+                      <span className="text-[12px] text-white font-mono">{`${slab.mm} mm`}</span>
+                    </div>
+                    <input
+                      type="range" min={1} max={100} step={1} value={slab.mm}
+                      onChange={e => setSlab(prev => ({ ...prev, mm: Number(e.target.value) }))}
+                      className="w-full accent-[#0694FB]"
+                    />
+                    <div className="flex gap-1">
+                      {[3, 5, 10, 20, 40].map(mm => (
+                        <button
+                          key={mm}
+                          onClick={() => setSlab(prev => ({ ...prev, mm }))}
+                          className={`flex-1 py-0.5 rounded-md text-[10px] font-mono border-none cursor-pointer ${slab.mm === mm ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                        >
+                          {mm}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-[#6B6B6B] leading-snug">MIP for vessels and nodules, MinIP for airways. The pixel readout is off while a slab is shown.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── 3D view only: fusion ── */}
+          {viewMode === "mpr" && (
+            <div ref={fusionMenuRef} className="relative ml-1">
+              <button
+                onClick={() => setFusionMenuOpen(v => !v)}
+                title="Fusion — show a PET / NM series of this study over this one, in colour"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${fusion
+                  ? "bg-[#F472B6] text-black"
+                  : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+                  }`}
+              >
+                {fusion ? "Fused" : "Fuse"}
+              </button>
+              {fusionMenuOpen && (
+                <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl w-[250px] p-3 flex flex-col gap-2.5">
+                  {fusionCandidates.length === 0 ? (
+                    <span className="text-[11px] text-[#6B6B6B] leading-snug">No PET or nuclear medicine series in this study to fuse.</span>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[11px] text-[#868686]">Overlay</span>
+                      <button
+                        onClick={() => setFusion(null)}
+                        className={`text-left px-2 py-1 rounded-md text-[11px] border-none cursor-pointer ${!fusion ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                      >None</button>
+                      {fusionCandidates.map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => fuseWith(s)}
+                          className={`text-left px-2 py-1 rounded-md text-[11px] border-none cursor-pointer truncate ${fusion?.seriesId === s.id ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                          title={s.description || s.name}
+                        >{`${(s.modality || "").toUpperCase()} · ${s.description || s.name || "series"}`}</button>
+                      ))}
+                    </div>
+                  )}
+                  {fusion && (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[11px] text-[#868686]">Colour scale</span>
+                        <div className="flex flex-wrap gap-1">
+                          {FUSION_COLORMAPS.map(([name, label]) => (
+                            <button
+                              key={name}
+                              onClick={() => setFusion(prev => ({ ...prev, colormap: name }))}
+                              className={`px-2 py-0.5 rounded-md text-[10px] border-none cursor-pointer ${fusion.colormap === name ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                            >{label}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-[#868686]">Opacity</span>
+                          <span className="text-[11px] text-white font-mono">{`${Math.round(fusion.opacity * 100)}%`}</span>
+                        </div>
+                        <input
+                          type="range" min={0.1} max={1} step={0.05} value={fusion.opacity}
+                          onChange={e => setFusion(prev => ({ ...prev, opacity: Number(e.target.value) }))}
+                          className="w-full accent-[#0694FB]"
+                        />
+                      </div>
+                      <span className="text-[10px] text-[#6B6B6B] leading-snug">Placed by scanner coordinates — lines up for PET and CT from the same scan.</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Always visible: viewer layout ── */}
           <div ref={layoutMenuRef} className="relative ml-1">
@@ -1165,7 +1409,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 }`}
             >
               <TbLayoutGrid size={15} />
-              {multi ? `${lay.cols}×${lay.rows}` : "Layout"}
+              {multi ? `${lay.cols}×${lay.rows}` : toolbarCompact ? null : "Layout"}
             </button>
             {layoutMenuOpen && (
               <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[210px] py-1">
@@ -1201,6 +1445,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── Always visible: Enhance button ── */}
           <div className="relative flex items-center shrink-0">
             <motion.button
+              ref={enhanceBtnRef}
               onClick={imageEnhancement}
               onMouseEnter={() => setEnhancementHovered(true)}
               onMouseLeave={() => setEnhancementHovered(false)}
@@ -1268,12 +1513,13 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         {/* Slice navigation */}
 
 
-        <div className="flex items-center gap-2">
+        <div ref={toolbarRightRef} className="flex items-center gap-2 shrink-0 whitespace-nowrap">
           <button
             onClick={() => onRunAnalysis()}
             disabled={aiLoading}
             className="flex items-center justify-center gap-2 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#036cb8] text-white text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-            style={{ minWidth: 148 }}
+            style={{ minWidth: toolbarCompact && !aiLoading ? 0 : 148 }}
+            title="Run the selected AI model on this series"
           >
             {aiLoading ? (
               inferenceProgress != null ? (
@@ -1294,7 +1540,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   Analyzing…
                 </>
               )
-            ) : <>Run Analysis</>}
+            ) : <>{toolbarCompact ? "Run AI" : "Run Analysis"}</>}
           </button>
           {(translationActive || translationPairsFor(dicomMeta?.modality || activeSeries?.modality).length > 0) && <button
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
@@ -1303,7 +1549,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               : "bg-[#303030] text-[#a1a1a1] hover:text-white hover:bg-[#222]"
               }`}
           >
-            Translate Image
+            {toolbarCompact ? "Translate" : "Translate Image"}
             {/* Toggle pill */}
             <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-200 shrink-0 ${translationActive ? "bg-white/80" : "bg-[#6e6e6e]"}`}>
               <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-200 ${translationActive ? "left-[18px]" : "left-0.5"}`} />
@@ -1318,7 +1564,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       {/* ── Viewport ── */}
       <div className="flex-1 min-h-0 flex flex-row gap-2">
         {/* ── Annotation tools — docked beside the viewer so they never cover the image ── */}
-        <div className="shrink-0 flex flex-col items-center gap-1 bg-[#161616] rounded-xl px-1.5 py-2 overflow-y-auto select-none" style={{ scrollbarWidth: "none" }}>
+        <div className={`shrink-0 ${viewMode === "3d" ? "hidden" : "flex"} flex-col items-center gap-1 bg-[#161616] rounded-xl px-1.5 py-2 overflow-y-auto select-none`} style={{ scrollbarWidth: "none" }}>
           {/* Draw tools */}
           {drawTools.map(t => (
             <ToolBtn key={t.name} icon={t.icon} label={t.label} active={activeTool === t.name} onClick={() => toggleTool(t.name)} />
@@ -1429,6 +1675,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onRoisChange={setRois}
                 onPixelValue={(probe) => pixelFeedRef.current?.(probe)}
               />
+            ) : viewMode === "3d" ? (
+              <CornerstoneVolume3D
+                ref={render3dRef}
+                imageIds={imageIds}
+                preset={renderPreset ?? presetsFor(activeSeries?.modality)[0][0]}
+              />
             ) : (
               <CornerstoneVolumeViewport
                 ref={volumeVpRef}
@@ -1444,6 +1696,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onRoisChange={setRois}
                 maskOpacity={maskOpacity}
                 savedRegions={mprRegions}
+                slab={slab}
+                fusion={fusion?.imageIds ? fusion : null}
                 onRegionsChange={(regions) => { setMprRegions(regions); mprRegionsRef.current = regions; scheduleSaveRef.current?.(); }}
               />
             )}
@@ -1452,7 +1706,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── MPR segmentation opacity control — the 2D overlay's slider card only
             renders in stack mode, but the mask is a real labelmap volume here too,
             so give it an equivalent (lighter) control. ── */}
-          {viewMode !== "stack" && segmentationMaskSlices && (
+          {viewMode === "mpr" && segmentationMaskSlices && (
             <div className="absolute top-3 right-3 z-30 w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg">
               <div className="px-3 py-2 flex items-center gap-2">
                 <span className="text-[12px] font-semibold text-white flex-1">Segmentation</span>
@@ -2025,7 +2279,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       </div>
 
       {/* ── Cine / slice bar — docked under the viewer (as in Horos) so it never covers the image ── */}
-      {frameCount > 1 && (
+      {frameCount > 1 && viewMode !== "3d" && (
         <div className="shrink-0 bg-[#161616] rounded-xl px-4 py-2 flex items-center gap-3 select-none">
           {/* Skip to first */}
           <button

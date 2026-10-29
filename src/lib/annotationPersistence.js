@@ -60,8 +60,10 @@ const toPlainJson = (value) => JSON.parse(JSON.stringify(value, (_k, v) => (Arra
 // The measurements on this series' images, ready to save, plus
 //   keyImageIds: iterable of imageIds flagged as key images
 //   recistReference: { baseline, nadir, newLesion } entered in the RECIST panel
-//   mprRegions: [{ uid, outline, tolerance, number, voxelCount }] drawn in the 3D view
-//     (voxelCount: its size when saved, to spot a regrowth that came out different)
+//   mprRegions: regions in the 3D view, either drawn and grown
+//     { uid, outline, tolerance, number, voxelCount } (voxelCount: its size when saved, to
+//     spot a regrowth that came out different) or painted with the brush
+//     { uid, kind: "brush", number, voxelCount, dims: [w, h, d], runs: [start, length, …] }
 export function serializeAnnotations(imageIds, images, { keyImageIds = [], recistReference = null, mprRegions = [] } = {}) {
   const { keyByImageId } = buildKeyMaps(imageIds, images);
   const keyImages = [...keyImageIds]
@@ -85,10 +87,12 @@ export function serializeAnnotations(imageIds, images, { keyImageIds = [], recis
   const reference = recistReference
     ? [{ annotationUID: "recist-reference", metadata: { toolName: RECIST_REFERENCE_TYPE }, data: { ...recistReference } }]
     : [];
-  const regions = mprRegions.map(({ uid, outline, tolerance, number, voxelCount = null }) => toPlainJson({
+  const regions = mprRegions.map(({ uid, kind, outline, tolerance, number, voxelCount = null, dims, runs }) => toPlainJson({
     annotationUID: `mpr-region-${uid}`,
     metadata: { toolName: MPR_REGION_TYPE },
-    data: { uid, outline, tolerance, number, voxelCount },
+    data: kind === "brush"
+      ? { uid, kind, number, voxelCount, dims, runs }
+      : { uid, outline, tolerance, number, voxelCount },
   }));
   return [...measurements, ...keyImages, ...reference, ...regions];
 }
@@ -127,9 +131,16 @@ export function restoreRecistReference(saved) {
   return (saved ?? []).find(a => a.metadata?.toolName === RECIST_REFERENCE_TYPE)?.data ?? null;
 }
 
-// The saved 3D-view regions: [{ uid, outline, tolerance, number }]
+// The saved 3D-view regions, in the shapes serializeAnnotations takes them
 export function restoreMprRegions(saved) {
   return (saved ?? [])
-    .filter(a => a.metadata?.toolName === MPR_REGION_TYPE && a.data?.uid && a.data.outline?.length >= 3)
-    .map(a => ({ uid: a.data.uid, outline: a.data.outline, tolerance: a.data.tolerance, number: a.data.number ?? null, voxelCount: a.data.voxelCount ?? null }));
+    .filter(a => a.metadata?.toolName === MPR_REGION_TYPE && a.data?.uid)
+    .map(({ data }) => (data.kind === "brush"
+      ? (Array.isArray(data.runs) && data.runs.length >= 2
+        ? { uid: data.uid, kind: "brush", number: data.number ?? null, voxelCount: data.voxelCount ?? null, dims: data.dims ?? null, runs: data.runs }
+        : null)
+      : (data.outline?.length >= 3
+        ? { uid: data.uid, outline: data.outline, tolerance: data.tolerance, number: data.number ?? null, voxelCount: data.voxelCount ?? null }
+        : null)))
+    .filter(Boolean);
 }

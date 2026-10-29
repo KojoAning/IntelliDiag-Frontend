@@ -36,6 +36,7 @@ import {
 import { growRegionThroughSlices } from "../../../lib/regionGrow";
 import { uid } from "../../../lib/uid";
 import { snapshotMetadata } from "../../../lib/metadataSnapshot";
+import { loadVolume, failedSlicesNote } from "../../../lib/volumeLoad";
 import { createExtent, addPoint, extentSize, voxelFootprint, formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
 
 // Starting intensity window for growing a drawn region (mean ± this many SDs); the popup's
@@ -69,10 +70,38 @@ const PLANES = [
   { key: "coronal",  orientation: Enums.OrientationAxis.CORONAL,  color: "#F59E0B", label: "CORONAL" },
 ];
 
+// Thick-slab rendering: the brightest (MIP), darkest (MinIP) or mean voxel through a slab
+// of the given thickness, instead of one plane. Only the image volume is slabbed — the
+// segmentation layer stays a single plane.
+export const SLAB_MODES = {
+  mip: { label: "MIP", blend: Enums.BlendModes.MAXIMUM_INTENSITY_BLEND },
+  minip: { label: "MinIP", blend: Enums.BlendModes.MINIMUM_INTENSITY_BLEND },
+  avg: { label: "Average", blend: Enums.BlendModes.AVERAGE_INTENSITY_BLEND },
+};
+// Colour scales for a fused overlay (PET/NM over CT/MR): [vtk preset name, label]
+export const FUSION_COLORMAPS = [
+  ["Black-Body Radiation", "Hot iron"],
+  ["jet", "Rainbow"],
+  ["2hot", "Hot"],
+  ["Cold and Hot", "Cold–hot"],
+  ["Grayscale", "Grey"],
+];
+// Fused intensities below this share of the overlay's range stay see-through, so only
+// uptake is coloured, not the whole field of view
+const FUSION_FLOOR = 0.05;
+const FUSION_SAMPLE_STEP = 37; // every Nth voxel, for the overlay's display range
+
+export const slabLabel = slab => (slab && SLAB_MODES[slab.mode] ? `${SLAB_MODES[slab.mode].label} ${slab.mm} mm` : null);
+
 // Same orange-red the 2D overlay tints its mask with, so a finding reads the same in both views.
 const AI_FINDING_COLOR = [255, 77, 64, 255];
 // Manually-drawn polygons stay blue so they're never mistaken for a model prediction.
 const MANUAL_ROI_COLOR = [6, 148, 251, 255];
+// Brush-painted regions: their own colour, so they read apart from grown polygons
+const BRUSH_COLOR = [34, 211, 238, 255];
+export const BRUSH_MIN_MM = 1;
+export const BRUSH_MAX_MM = 50;
+export const BRUSH_DEFAULT_MM = 8;
 
 // Map a mask pixel to a class id: 0 = background, otherwise 1 + its index in the result's
 // label_legend. Single-class legends (and results with no legend) mark every hit as 1;
@@ -228,6 +257,59 @@ function labelByClass(classes, w, h, d, spacingMm) {
   return { labels: classes.slice(), stats };
 }
 
+// Runs of each wanted label along a label array: Map<label, [start, length, …]>
+function encodeLabelRuns(labels, wanted) {
+  const runs = new Map();
+  let current = 0;
+  let start = 0;
+  const close = (end) => {
+    if (!wanted.has(current)) return;
+    if (!runs.has(current)) runs.set(current, []);
+    runs.get(current).push(start, end - start);
+  };
+  for (let i = 0; i < labels.length; i++) {
+    const v = labels[i];
+    if (v === current) continue;
+    close(i);
+    current = v;
+    start = i;
+  }
+  close(labels.length);
+  return runs;
+}
+
+// Voxel count, slice range and volume of one label (a brush region after a stroke)
+function labelStat(labels, label, sliceSize, voxelVolumeCm3) {
+  let voxelCount = 0;
+  let kMin = Infinity;
+  let kMax = -Infinity;
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] !== label) continue;
+    voxelCount++;
+    const k = Math.floor(i / sliceSize);
+    if (k < kMin) kMin = k;
+    if (k > kMax) kMax = k;
+  }
+  return voxelCount
+    ? { voxelCount, volumeCm3: voxelCount * voxelVolumeCm3, kMin, kMax, sliceCount: kMax - kMin + 1 }
+    : null;
+}
+
+// An empty segmentation (labelmap) volume on the same voxel grid as an image volume.
+// Built from the volume's own geometry rather than Cornerstone's derived-volume helper,
+// which re-reads every slice's DICOM header — and a slice that failed to download (or
+// whose parsed header the loader has dropped) has none, which used to throw.
+function createLabelmapVolume(mainVolumeId, labelmapVolumeId) {
+  const main = csCache.getVolume(mainVolumeId);
+  return volumeLoader.createLocalLabelmapVolume({
+    dimensions: [...main.dimensions],
+    spacing: [...main.spacing],
+    origin: [...main.origin],
+    direction: [...main.direction],
+    metadata: main.metadata,
+  }, labelmapVolumeId);
+}
+
 // Even-odd point-in-polygon test (ray casting), used to rasterize a manually-drawn
 // polygon ROI into voxels on whichever 2D plane it was drawn on.
 function pointInPolygon2D(x, y, poly) {
@@ -245,7 +327,7 @@ function pointInPolygon2D(x, y, poly) {
 let instanceCounter = 0;
 
 const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
-  { imageIds = [], activeTool = null, leftTool = "wl", onArrowTextRequest, onActivePlaneChange, maskSlices = null, maskConfidences = null, maskLegend = null, colorByClass = false, maskOpacity = 0.5, onRoisChange, savedRegions = null, onRegionsChange },
+  { imageIds = [], activeTool = null, leftTool = "wl", onArrowTextRequest, onActivePlaneChange, maskSlices = null, maskConfidences = null, maskLegend = null, colorByClass = false, maskOpacity = 0.5, onRoisChange, savedRegions = null, onRegionsChange, slab = null, fusion = null },
   ref
 ) {
   const containerRef = useRef(null); // outer grid — click position is measured relative to this
@@ -296,13 +378,19 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   const LEFT_TOOLS = { wl: WindowLevelTool.toolName, pan: PanTool.toolName, crosshairs: CrosshairsTool.toolName, pointer: null };
   const applyBindings = (toolGroup = toolGroupRef.current) => {
     if (!toolGroup) return;
+    // The brush handles the left button itself (pane pointer events), so no tool takes it
+    const brush = activeToolRef.current === "brush";
     applyHorosMouseBindings(toolGroup, {
-      primary: TOOL_MAP[activeToolRef.current]
+      primary: brush ? null : TOOL_MAP[activeToolRef.current]
         ?? (leftToolRef.current in LEFT_TOOLS ? LEFT_TOOLS[leftToolRef.current] : WindowLevelTool.toolName),
-      // Crosshair lines stay draggable (Passive) whatever is on the left button
-      interactiveTools: [...ALL_ANNOTATION_TOOLS, CrosshairsTool.toolName],
+      // Crosshair lines stay draggable (Passive) whatever is on the left button — except
+      // while painting, where they'd be grabbed instead
+      interactiveTools: brush ? ALL_ANNOTATION_TOOLS : [...ALL_ANNOTATION_TOOLS, CrosshairsTool.toolName],
       extraBindings: { [PanTool.toolName]: [{ mouseButton: MouseBindings.Primary, modifierKey: KeyboardBindings.Shift }] },
     });
+    if (brush) {
+      try { toolGroup.setToolEnabled(CrosshairsTool.toolName); } catch (_) {}
+    }
   };
   const instanceId = useRef(++instanceCounter);
   const arrowTextCbRef = useRef(onArrowTextRequest);
@@ -336,6 +424,28 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
   const getVp = (planeKey) => engineRef.current?.getViewport(viewportIdFor(planeKey ?? activePlaneRef.current));
   const getAllVps = () => viewportIds.map(id => engineRef.current?.getViewport(id)).filter(Boolean);
+
+  const slabRef = useRef(slab);
+  slabRef.current = slab;
+  const applySlab = () => {
+    const volumeId = volumeIdRef.current;
+    if (!volumeId) return;
+    const mode = SLAB_MODES[slabRef.current?.mode];
+    getAllVps().forEach(vp => {
+      try {
+        if (mode) {
+          vp.setBlendMode(mode.blend, [volumeId]);
+          vp.setSlabThickness(slabRef.current.mm, [volumeId]);
+        } else {
+          vp.setBlendMode(Enums.BlendModes.COMPOSITE, [volumeId]);
+          vp.resetSlabThickness();
+        }
+        vp.render();
+      } catch (err) {
+        console.warn("[MPR] slab change failed:", err);
+      }
+    });
+  };
 
   // Defensive — Crosshairs can end up with stale/partial internal annotation data after
   // annotations are removed or a click/selection interrupts its own interaction lifecycle,
@@ -659,12 +769,10 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
         if (cancelled) return;
 
-        await volume.load((evt) => {
-          if (cancelled) return;
-          if (evt?.loaded != null && evt?.total) {
-            setProgress(Math.round((evt.loaded / evt.total) * 100));
-          }
-        });
+        // Streams in; shown as soon as the viewports have it (not awaited)
+        setFailedSlices(0);
+        loadVolume(volume, pct => { if (!cancelled) setProgress(pct); })
+          .then(({ failed }) => { if (!cancelled) setFailedSlices(failed); });
 
         if (cancelled) return;
 
@@ -688,6 +796,90 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engineReady, imageIds]);
+
+  // Step 2g: Fusion — a second series (e.g. PET over CT from the same scan) drawn over the
+  // volume in colour. It's placed by its own scanner coordinates, so it lines up when both
+  // come from one acquisition (same frame of reference); there's no registration.
+  const fusionIdRef = useRef(null);
+  const fusionRangeRef = useRef(null);
+  const fusionRef = useRef(fusion);
+  fusionRef.current = fusion;
+  const applyFusionLook = () => {
+    const id = fusionIdRef.current;
+    const range = fusionRangeRef.current;
+    const look = fusionRef.current;
+    if (!id || !range || !look) return;
+    const [lower, upper] = range;
+    const opacity = look.opacity ?? 0.6;
+    getAllVps().forEach(vp => {
+      try {
+        vp.setProperties({
+          colormap: {
+            name: look.colormap ?? FUSION_COLORMAPS[0][0],
+            opacity: [
+              { value: lower, opacity: 0 },
+              { value: lower + FUSION_FLOOR * (upper - lower), opacity },
+              { value: upper, opacity },
+            ],
+          },
+        }, id);
+        vp.setProperties({ voiRange: { lower, upper } }, id);
+        vp.render();
+      } catch (err) {
+        console.warn("[MPR] fusion display failed:", err);
+      }
+    });
+  };
+  const removeFusion = () => {
+    const id = fusionIdRef.current;
+    if (!id) return;
+    getAllVps().forEach(vp => { try { vp.removeVolumeActors([id]); vp.render(); } catch (_) {} });
+    try { csCache.removeVolumeLoadObject(id); } catch (_) {}
+    fusionIdRef.current = null;
+    fusionRangeRef.current = null;
+  };
+  const [fusionLoading, setFusionLoading] = useState(false);
+  const [failedSlices, setFailedSlices] = useState(0);
+  useEffect(() => {
+    if (!volumeLoaded) return;
+    if (!fusion?.imageIds?.length) { removeFusion(); return; }
+    let cancelled = false;
+    const id = `cornerstoneStreamingImageVolume:fused-${instanceId.current}-${Date.now()}`;
+    setFusionLoading(true);
+    (async () => {
+      const volume = await volumeLoader.createAndCacheVolume(id, { imageIds: [...fusion.imageIds] });
+      snapshotMetadata(volume.imageIds);
+      await loadVolume(volume); // the display range below needs every slice
+      if (cancelled) { try { csCache.removeVolumeLoadObject(id); } catch (_) {} return; }
+      removeFusion();
+      // Display range: zero up to the 99.5th percentile, so a few hot voxels don't wash out the rest
+      const data = volume.voxelManager.getCompleteScalarDataArray();
+      const sample = [];
+      for (let i = 0; i < data.length; i += FUSION_SAMPLE_STEP) sample.push(data[i]);
+      sample.sort((a, b) => a - b);
+      const lower = Math.min(0, sample[0] ?? 0);
+      const upper = sample[Math.floor(sample.length * 0.995)] || sample[sample.length - 1] || 1;
+      fusionIdRef.current = id;
+      fusionRangeRef.current = [lower, upper > lower ? upper : lower + 1];
+      await Promise.all(getAllVps().map(vp => vp.addVolumes([{ volumeId: id }])));
+      applyFusionLook();
+    })()
+      .catch(err => console.warn("[MPR] couldn't load the fused series:", err))
+      .finally(() => { if (!cancelled) setFusionLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volumeLoaded, fusion?.key]);
+  useEffect(() => {
+    applyFusionLook();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fusion?.colormap, fusion?.opacity]);
+  useEffect(() => () => removeFusion(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Slab mode and thickness, re-applied whenever a volume comes in
+  useEffect(() => {
+    if (volumeLoaded) applySlab();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volumeLoaded, slab?.mode, slab?.mm]);
 
   // Step 2b: Build a 3D labelmap volume from the per-slice segmentation masks so the
   // mask gets resliced along with the DICOM volume on all 3 panes (not just drawn flat on one).
@@ -722,7 +914,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         manualLabelNumberRef.current = new Map();
         manualLabelCounterRef.current = 0;
         setSelectedLesion(null);
-        drawn.forEach(region => bakeOutlineRegion(region.outline, region));
+        drawn.forEach(region => (region.kind === "brush" ? restoreBrushRegion(region) : bakeOutlineRegion(region.outline, region)));
         getAllVps().forEach(vp => vp.render());
       }
       return;
@@ -746,7 +938,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         }
 
         const labelmapVolumeId = `labelmap-${instanceId.current}-${Date.now()}`;
-        const labelmapVolume = volumeLoader.createAndCacheDerivedLabelmapVolume(mainVolumeId, { volumeId: labelmapVolumeId });
+        const labelmapVolume = createLabelmapVolume(mainVolumeId, labelmapVolumeId);
         const [w, h, d] = labelmapVolume.dimensions;
 
         // maskSlices follows the imageIds prop (InstanceNumber order), but Cornerstone
@@ -857,7 +1049,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         // one orange-red otherwise; manual ROIs keep their own.
         const legend = maskLegendRef.current;
         const colorFor = (label) => {
-          if (carriedManualLabels.has(label)) return MANUAL_ROI_COLOR;
+          if (carriedManualLabels.has(label)) return carriedGrowSeeds.get(label)?.brush ? BRUSH_COLOR : MANUAL_ROI_COLOR;
           const rgb = colorByClassRef.current && legend?.[label - 1]?.rgb;
           return rgb ? [...rgb, 255] : AI_FINDING_COLOR;
         };
@@ -936,28 +1128,17 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLesion]);
 
-  // Bakes a drawn outline (world points) into the segmentation volume as its own region,
-  // grown from it through the neighbouring slices. Used for a freshly drawn polygon, for
-  // restoring saved regions, and for rebuilding them after the AI layer is cleared.
-  // Returns { label, voxelCount, volumeCm3, centroidWorld }, or null if nothing was baked.
-  // savedVoxelCount: the region's size when it was saved — regrown on different images (a
-  // re-uploaded or changed series) it can come out another size, and the popup says so.
-  const bakeOutlineRegion = (polyline, { uid: regionUid = uid(), tolerance = DEFAULT_GROW_TOLERANCE, number = null, voxelCount: savedVoxelCount = null } = {}) => {
-    const mainVolumeId = volumeIdRef.current;
-    const mainVolume = csCache.getVolume(mainVolumeId);
-    if (!mainVolume?.imageData) return null;
-
-    // Reuse the existing segmentation volume if one exists (from AI masks or an
-    // earlier manual ROI); otherwise create an empty one just for manual ROIs.
+  // The segmentation layer drawn regions and brush strokes go into: the AI layer if there
+  // is one, otherwise an empty one made for them
+  const ensureSegmentation = (mainVolume) => {
     let labelmapVolume = labelmapVolumeRef.current;
     let segmentationId = segmentationIdRef.current;
     let dims = labelDimsRef.current;
-
     if (!labelmapVolume || !dims) {
       const [w, h, d] = mainVolume.dimensions;
       dims = { w, h, d };
       const labelmapVolumeId = `labelmap-${instanceId.current}-${Date.now()}`;
-      labelmapVolume = volumeLoader.createAndCacheDerivedLabelmapVolume(mainVolumeId, { volumeId: labelmapVolumeId });
+      labelmapVolume = createLabelmapVolume(volumeIdRef.current, labelmapVolumeId);
       labelArrayRef.current = new Uint8Array(w * h * d);
       labelDimsRef.current = dims;
       lesionStatsRef.current = new Map();
@@ -982,7 +1163,44 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       });
       segmentationIdRef.current = segmentationId;
     }
+    return { labelmapVolume, segmentationId, dims };
+  };
 
+  // A new manual region's label, number, colour and outline style. kind: "polygon" | "brush"
+  const addManualLabel = (segmentationId, info, number = null) => {
+    if (nextLesionLabelRef.current >= 254) {
+      console.warn("[Manual ROI] segment limit reached — cannot add another region.");
+      return null;
+    }
+    nextLesionLabelRef.current += 1;
+    const label = nextLesionLabelRef.current;
+    growSeedsRef.current.set(label, info);
+    manualLabelsRef.current.add(label);
+    const regionNumber = number ?? manualLabelCounterRef.current + 1;
+    manualLabelCounterRef.current = Math.max(manualLabelCounterRef.current, regionNumber);
+    manualLabelNumberRef.current.set(label, regionNumber);
+    csSegmentation.segmentationStyle.setStyle(
+      { segmentationId, type: csToolsEnums.SegmentationRepresentations.Labelmap, segmentIndex: label },
+      { outlineWidth: 3, outlineOpacity: 1 }, false
+    );
+    viewportIds.forEach(viewportId => {
+      csSegmentation.config.color.setSegmentIndexColor(viewportId, segmentationId, label, info.brush ? BRUSH_COLOR : MANUAL_ROI_COLOR);
+    });
+    return label;
+  };
+
+  // Bakes a drawn outline (world points) into the segmentation volume as its own region,
+  // grown from it through the neighbouring slices. Used for a freshly drawn polygon, for
+  // restoring saved regions, and for rebuilding them after the AI layer is cleared.
+  // Returns { label, voxelCount, volumeCm3, centroidWorld }, or null if nothing was baked.
+  // savedVoxelCount: the region's size when it was saved — regrown on different images (a
+  // re-uploaded or changed series) it can come out another size, and the popup says so.
+  const bakeOutlineRegion = (polyline, { uid: regionUid = uid(), tolerance = DEFAULT_GROW_TOLERANCE, number = null, voxelCount: savedVoxelCount = null } = {}) => {
+    const mainVolumeId = volumeIdRef.current;
+    const mainVolume = csCache.getVolume(mainVolumeId);
+    if (!mainVolume?.imageData) return null;
+
+    const { segmentationId, dims } = ensureSegmentation(mainVolume);
     const { w, h, d } = dims;
     const volDims = [w, h, d];
 
@@ -1076,13 +1294,302 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   // The drawn regions as saved with the series' measurements: { uid, outline, tolerance, number, voxelCount }.
   // A region that regrew to a different size keeps its saved size (and the popup's note)
   // until it's adjusted.
-  const listDrawnRegions = () => [...growSeedsRef.current]
-    .filter(([label, info]) => manualLabelsRef.current.has(label) && info.outline)
-    .map(([label, info]) => ({
-      uid: info.uid, outline: info.outline, tolerance: info.tolerance, number: manualLabelNumberRef.current.get(label) ?? null,
-      voxelCount: info.savedVoxelCount ?? lesionStatsRef.current?.get(label)?.voxelCount ?? null,
-    }));
+  // Brush regions are saved as their voxels: { uid, kind: "brush", number, voxelCount,
+  // dims: [w, h, d], runs: [start, length, …] } — runs of the region along the volume's
+  // flattened voxel order.
+  const listDrawnRegions = () => {
+    const entries = [...growSeedsRef.current].filter(([label]) => manualLabelsRef.current.has(label));
+    const polygons = entries
+      .filter(([, info]) => info.outline)
+      .map(([label, info]) => ({
+        uid: info.uid, outline: info.outline, tolerance: info.tolerance, number: manualLabelNumberRef.current.get(label) ?? null,
+        voxelCount: info.savedVoxelCount ?? lesionStatsRef.current?.get(label)?.voxelCount ?? null,
+      }));
+    const brushes = entries.filter(([, info]) => info.brush);
+    if (!brushes.length || !labelArrayRef.current || !labelDimsRef.current) return polygons;
+    const runs = encodeLabelRuns(labelArrayRef.current, new Set(brushes.map(([label]) => label)));
+    const { w, h, d } = labelDimsRef.current;
+    return [...polygons, ...brushes.map(([label, info]) => ({
+      uid: info.uid, kind: "brush", number: manualLabelNumberRef.current.get(label) ?? null,
+      voxelCount: lesionStatsRef.current?.get(label)?.voxelCount ?? null, dims: [w, h, d], runs: runs.get(label) ?? [],
+    }))];
+  };
   const reportRegions = () => onRegionsChangeCbRef.current?.(listDrawnRegions());
+
+  // Move the crosshairs (and so the other two panes) to a world point — after a region
+  // is drawn or painted, so it shows in every plane
+  const recenterCrosshairs = (world) => {
+    try {
+      const crosshairs = toolGroupRef.current?.getToolInstance(CrosshairsTool.toolName);
+      if (!crosshairs) {
+        console.warn("[Manual ROI] no CrosshairsTool instance on the tool group — can't recenter.");
+        return;
+      }
+      crosshairs.setToolCenter(world);
+      // The first region creates the segmentation layer, which adds a labelmap actor to
+      // each pane asynchronously — and Viewport.addActors resets each camera and restores a
+      // view saved before this recentre, so the move is lost. Re-apply it once those actors
+      // are in (later regions reuse the layer; nothing fires).
+      const panes = PLANES.map(({ key }) => divRefs.current[key]).filter(Boolean);
+      const reapply = () => {
+        try { crosshairs.setToolCenter(world); } catch (_) {}
+      };
+      panes.forEach(el => el.addEventListener(Enums.Events.ACTORS_CHANGED, reapply));
+      setTimeout(() => panes.forEach(el => el.removeEventListener(Enums.Events.ACTORS_CHANGED, reapply)), 3000);
+    } catch (err) {
+      console.warn("[Manual ROI] setToolCenter failed:", err);
+    }
+  };
+
+  // ── Brush (activeTool "brush"): paint a region by hand on any pane ──
+  // A stroke paints a disc of the brush's diameter on the plane being viewed (or a ball,
+  // in Sphere mode, so it has depth in the other planes), filled in
+  // between pointer moves. It adds to the brush region it starts on (or the selected one),
+  // otherwise starts a new one. Erase (toggle, or Alt held) removes brush paint only — AI
+  // findings and grown polygons aren't painted over or erased.
+  const brushActive = activeTool === "brush";
+  const brushActiveRef = useRef(brushActive);
+  brushActiveRef.current = brushActive;
+  const [brushSize, setBrushSize] = useState(BRUSH_DEFAULT_MM); // diameter, mm
+  const [brushErase, setBrushErase] = useState(false);
+  const [brushSphere, setBrushSphere] = useState(false);
+  const brushSphereRef = useRef(brushSphere);
+  brushSphereRef.current = brushSphere;
+  const brushSizeRef = useRef(brushSize);
+  brushSizeRef.current = brushSize;
+  const brushEraseRef = useRef(brushErase);
+  brushEraseRef.current = brushErase;
+  const strokeRef = useRef(null); // { planeKey, label, erase, last, touched: Set<label>, slices: Set<k> }
+  const brushFrameRef = useRef(0);
+  const [brushCursor, setBrushCursor] = useState(null); // { key, x, y, r (px), erase }
+
+  const brushLabels = () => new Set(
+    [...growSeedsRef.current].filter(([label, info]) => info.brush && manualLabelsRef.current.has(label)).map(([label]) => label)
+  );
+  const voxelVolumeCm3Of = volume => (volume.spacing[0] * volume.spacing[1] * volume.spacing[2]) / 1000;
+
+  const canvasPointIn = e => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return [e.clientX - rect.left, e.clientY - rect.top];
+  };
+
+  // Label under a canvas point (0 = nothing)
+  const labelUnder = (vp, point) => {
+    const labels = labelArrayRef.current;
+    const dims = labelDimsRef.current;
+    const volume = csCache.getVolume(volumeIdRef.current);
+    if (!labels || !dims || !volume?.imageData) return 0;
+    const [i, j, k] = volume.imageData.worldToIndex(vp.canvasToWorld(point)).map(Math.round);
+    if (i < 0 || j < 0 || k < 0 || i >= dims.w || j >= dims.h || k >= dims.d) return 0;
+    return labels[k * dims.w * dims.h + j * dims.w + i];
+  };
+
+  // One disc of the brush at a canvas point: the voxels within its radius, on the plane
+  // being viewed (within half a voxel of it)
+  const paintDab = (vp, point, stroke) => {
+    const labels = labelArrayRef.current;
+    const dims = labelDimsRef.current;
+    const volume = csCache.getVolume(volumeIdRef.current);
+    const voxelManager = labelmapVolumeRef.current?.voxelManager;
+    if (!labels || !dims || !volume || !voxelManager) return;
+    const { w, h, d } = dims;
+    const { origin, spacing, direction: dir } = volume;
+    const axes = [0, 1, 2].map(a => [dir[a * 3], dir[a * 3 + 1], dir[a * 3 + 2]]);
+    const centre = vp.canvasToWorld(point);
+    stroke.dabs += 1;
+    for (let c = 0; c < 3; c++) stroke.centreSum[c] += centre[c];
+    const n = vp.getCamera().viewPlaneNormal;
+    const r = brushSizeRef.current / 2;
+    const rel = [centre[0] - origin[0], centre[1] - origin[1], centre[2] - origin[2]];
+    const ci = axes.map((ax, a) => (rel[0] * ax[0] + rel[1] * ax[1] + rel[2] * ax[2]) / spacing[a]);
+    const halfThick = 0.5 * axes.reduce((sum, ax, a) => sum + Math.abs(ax[0] * n[0] + ax[1] * n[1] + ax[2] * n[2]) * spacing[a], 0) + 1e-3;
+    const size = [w, h, d];
+    const lo = ci.map((c, a) => Math.max(0, Math.floor(c - r / spacing[a] - 1)));
+    const hi = ci.map((c, a) => Math.min(size[a] - 1, Math.ceil(c + r / spacing[a] + 1)));
+    const erasable = stroke.erase ? brushLabels() : null;
+    for (let k = lo[2]; k <= hi[2]; k++) {
+      for (let j = lo[1]; j <= hi[1]; j++) {
+        for (let i = lo[0]; i <= hi[0]; i++) {
+          const di = (i - ci[0]) * spacing[0];
+          const dj = (j - ci[1]) * spacing[1];
+          const dk = (k - ci[2]) * spacing[2];
+          const off = [0, 1, 2].map(c => di * axes[0][c] + dj * axes[1][c] + dk * axes[2][c]);
+          const along = off[0] * n[0] + off[1] * n[1] + off[2] * n[2];
+          const dist2 = off[0] * off[0] + off[1] * off[1] + off[2] * off[2];
+          if (stroke.sphere) {
+            if (dist2 > r * r) continue;
+          } else {
+            if (Math.abs(along) > halfThick) continue;
+            if (dist2 - along * along > r * r) continue;
+          }
+          const idx = k * w * h + j * w + i;
+          const current = labels[idx];
+          if (stroke.erase) {
+            if (!erasable.has(current)) continue;
+            labels[idx] = 0;
+            voxelManager.setAtIndex(idx, 0);
+            stroke.touched.add(current);
+          } else {
+            if (current !== 0) continue;
+            labels[idx] = stroke.label;
+            voxelManager.setAtIndex(idx, stroke.label);
+          }
+          stroke.slices.add(k);
+        }
+      }
+    }
+  };
+
+  // Redraw once per frame while painting, telling Cornerstone which slices changed
+  const scheduleBrushRender = () => {
+    if (brushFrameRef.current) return;
+    brushFrameRef.current = requestAnimationFrame(() => {
+      brushFrameRef.current = 0;
+      const stroke = strokeRef.current;
+      const segmentationId = segmentationIdRef.current;
+      if (!segmentationId) return;
+      csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(
+        segmentationId, stroke ? [...stroke.slices] : undefined
+      );
+      getAllVps().forEach(vp => vp.render());
+    });
+  };
+
+  const brushRadiusPx = vp => {
+    const mm = mmPerCanvasPixel(vp);
+    return mm ? brushSizeRef.current / 2 / mm : null;
+  };
+
+  const startStroke = (planeKey, e) => {
+    const vp = getVp(planeKey);
+    const volume = csCache.getVolume(volumeIdRef.current);
+    if (!vp || !volume?.imageData) return;
+    const { segmentationId } = ensureSegmentation(volume);
+    const point = canvasPointIn(e);
+    const erase = brushEraseRef.current || e.altKey;
+    let label = null;
+    if (!erase) {
+      const brushes = brushLabels();
+      const under = labelUnder(vp, point);
+      const selected = selectedLesionRef.current?.label;
+      label = brushes.has(under) ? under
+        : brushes.has(selected) ? selected
+          : addManualLabel(segmentationId, { uid: uid(), brush: true });
+      if (label == null) return;
+    }
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    strokeRef.current = {
+      planeKey, label, erase, sphere: brushSphereRef.current, last: point,
+      touched: new Set(label ? [label] : []), slices: new Set(), centreSum: [0, 0, 0], dabs: 0,
+    };
+    paintDab(vp, point, strokeRef.current);
+    scheduleBrushRender();
+  };
+
+  const moveBrush = (planeKey, e) => {
+    const vp = getVp(planeKey);
+    if (!vp) return;
+    const point = canvasPointIn(e);
+    const r = brushRadiusPx(vp);
+    setBrushCursor(r ? { key: planeKey, x: point[0], y: point[1], r, erase: brushEraseRef.current || e.altKey } : null);
+    const stroke = strokeRef.current;
+    if (!stroke || stroke.planeKey !== planeKey) return;
+    // Dabs every half radius along the move, so a fast drag still leaves a solid line
+    const [x0, y0] = stroke.last;
+    const step = Math.max(1, (r ?? 4) / 2);
+    const steps = Math.max(1, Math.ceil(Math.hypot(point[0] - x0, point[1] - y0) / step));
+    for (let s = 1; s <= steps; s++) {
+      paintDab(vp, [x0 + ((point[0] - x0) * s) / steps, y0 + ((point[1] - y0) * s) / steps], stroke);
+    }
+    stroke.last = point;
+    scheduleBrushRender();
+  };
+
+  // Stroke done: re-measure the regions it touched (dropping any erased to nothing),
+  // show the painted one's popup, and save
+  const endStroke = () => {
+    const stroke = strokeRef.current;
+    if (!stroke) return;
+    strokeRef.current = null;
+    const labels = labelArrayRef.current;
+    const dims = labelDimsRef.current;
+    const volume = csCache.getVolume(volumeIdRef.current);
+    if (!labels || !dims || !volume) return;
+    let painted = null;
+    stroke.touched.forEach(label => {
+      const stat = labelStat(labels, label, dims.w * dims.h, voxelVolumeCm3Of(volume));
+      if (stat) {
+        lesionStatsRef.current?.set(label, stat);
+        if (label === stroke.label) painted = { label, stat };
+      } else {
+        lesionStatsRef.current?.delete(label);
+        manualLabelsRef.current.delete(label);
+        manualLabelNumberRef.current.delete(label);
+        growSeedsRef.current.delete(label);
+        setSelectedLesion(prev => (prev?.label === label ? null : prev));
+      }
+    });
+    // Whole layer once the stroke is done, the way drawn polygons are written: per-voxel
+    // writes with only the changed slices flagged reach the pane being painted, but the
+    // other two planes' renderings only pick up a full update
+    labelmapVolumeRef.current?.voxelManager.setCompleteScalarDataArray(labels);
+    csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationIdRef.current);
+    getAllVps().forEach(vp => vp.render());
+    // Bring the other two panes to the stroke, so it shows in every plane
+    if (stroke.dabs) recenterCrosshairs(stroke.centreSum.map(v => v / stroke.dabs));
+    if (painted) {
+      const vp = getVp(stroke.planeKey);
+      const anchor = vp && { plane: stroke.planeKey, world: vp.canvasToWorld(stroke.last) };
+      const pos = anchor && popoverPosition(anchor);
+      if (pos) setSelectedLesion(buildSelectedLesion(painted.label, painted.stat, { ...pos, anchor }));
+    }
+    reportRegions();
+  };
+
+  useEffect(() => {
+    if (!brushActive) { setBrushCursor(null); return undefined; }
+    const up = () => endStroke();
+    // [ and ] change the brush size, as in most paint tools
+    const key = e => {
+      const tag = e.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "[") setBrushSize(v => Math.max(BRUSH_MIN_MM, v - (v > 10 ? 2 : 1)));
+      if (e.key === "]") setBrushSize(v => Math.min(BRUSH_MAX_MM, v + (v >= 10 ? 2 : 1)));
+    };
+    window.addEventListener("pointerup", up);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("keydown", key);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brushActive]);
+
+  // A saved brush region back into the segmentation layer — only on the same voxel grid it
+  // was painted on (the series' images haven't changed)
+  const restoreBrushRegion = (region) => {
+    const volume = csCache.getVolume(volumeIdRef.current);
+    if (!volume?.imageData || !(region.runs?.length >= 2)) return false;
+    const { segmentationId, dims, labelmapVolume } = ensureSegmentation(volume);
+    if (region.dims && (region.dims[0] !== dims.w || region.dims[1] !== dims.h || region.dims[2] !== dims.d)) {
+      console.warn(`[MPR] brush region ${region.uid} was painted on a ${region.dims.join("×")} volume; this one is ${dims.w}×${dims.h}×${dims.d} — not restored`);
+      return false;
+    }
+    const label = addManualLabel(segmentationId, { uid: region.uid, brush: true }, region.number ?? null);
+    if (label == null) return false;
+    const labels = labelArrayRef.current;
+    for (let r = 0; r + 1 < region.runs.length; r += 2) {
+      const end = Math.min(labels.length, region.runs[r] + region.runs[r + 1]);
+      for (let i = Math.max(0, region.runs[r]); i < end; i++) {
+        if (labels[i] === 0) labels[i] = label;
+      }
+    }
+    labelmapVolume.voxelManager.setCompleteScalarDataArray(labels);
+    csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId);
+    const stat = labelStat(labels, label, dims.w * dims.h, voxelVolumeCm3Of(volume));
+    if (stat) lesionStatsRef.current?.set(label, stat);
+    return true;
+  };
 
   // Step 2f: Put saved regions back once the volume is in (after any AI layer has been
   // built, since that rebuild would discard them). Regions already here are skipped by
@@ -1095,10 +1602,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       const present = new Set([...growSeedsRef.current.values()].map(info => info.uid));
       let restored = 0;
       savedRegions.forEach(region => {
-        if (present.has(region.uid) || !(region.outline?.length >= 3)) return;
+        if (present.has(region.uid)) return;
+        if (region.kind !== "brush" && !(region.outline?.length >= 3)) return;
         // One region that can't be rebuilt mustn't take the view down with it
         try {
-          if (bakeOutlineRegion(region.outline, region)) restored++;
+          if (region.kind === "brush" ? restoreBrushRegion(region) : bakeOutlineRegion(region.outline, region)) restored++;
         } catch (err) {
           console.warn(`[MPR] couldn't restore drawn region ${region.uid}:`, err);
         }
@@ -1147,30 +1655,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
         // Drawing a polygon hands Primary to the ROI tool, so Crosshairs never got to jump
         // here — the other 2 panes are likely still parked on an unrelated slice. Move them.
-        if (centroidWorld) {
-          try {
-            const crosshairs = toolGroupRef.current?.getToolInstance(CrosshairsTool.toolName);
-            if (!crosshairs) {
-              console.warn("[Manual ROI] no CrosshairsTool instance on the tool group — can't recenter.");
-            } else {
-              crosshairs.setToolCenter(centroidWorld);
-              console.log("[Manual ROI] recentred crosshairs to", centroidWorld);
-
-              // The first drawn region creates the segmentation layer, which adds a labelmap
-              // actor to each pane asynchronously — and Viewport.addActors resets each camera
-              // and restores a view saved before this recentre, so the move is lost. Re-apply
-              // it once those actors are in (later regions reuse the layer; nothing fires).
-              const panes = PLANES.map(({ key }) => divRefs.current[key]).filter(Boolean);
-              const reapply = () => {
-                try { crosshairs.setToolCenter(centroidWorld); } catch (_) {}
-              };
-              panes.forEach(el => el.addEventListener(Enums.Events.ACTORS_CHANGED, reapply));
-              setTimeout(() => panes.forEach(el => el.removeEventListener(Enums.Events.ACTORS_CHANGED, reapply)), 3000);
-            }
-          } catch (err) {
-            console.warn("[Manual ROI] setToolCenter failed:", err);
-          }
-        }
+        if (centroidWorld) recenterCrosshairs(centroidWorld);
 
         // Surface the new region's volume right away, same popover as a clicked finding.
         try {
@@ -1253,6 +1738,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       sizeMm: regionSizeOf(label, stat),
       isManual,
       polygonNumber: isManual ? manualLabelNumberRef.current.get(label) : null,
+      isBrush: isManual && !!growSeedsRef.current.get(label)?.brush,
       savedVoxelCount: isManual ? growSeedsRef.current.get(label)?.savedVoxelCount ?? null : null,
       confidence,
       regionName: isManual ? null : regionName,
@@ -1652,7 +2138,14 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         <div
           key={key}
           className="relative w-full h-full bg-black overflow-hidden"
-          onPointerDown={handlePaneClick(key)}
+          onPointerDown={(e) => {
+            // The brush paints with the left button (Shift + left still pans)
+            if (brushActiveRef.current && e.button === 0 && !e.shiftKey) { setActivePlane(key); startStroke(key, e); return; }
+            handlePaneClick(key)(e);
+          }}
+          onPointerMove={brushActive ? (e) => moveBrush(key, e) : undefined}
+          onPointerLeave={brushActive ? () => setBrushCursor(c => (c?.key === key ? null : c)) : undefined}
+          style={brushActive ? { cursor: "none" } : undefined}
         >
           <div
             ref={(el) => { divRefs.current[key] = el; }}
@@ -1661,8 +2154,16 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
             onMouseLeave={clearPixel}
           />
           <OrientationMarkers markers={orientationByPlane[key]} />
+          {brushActive && brushCursor?.key === key && (
+            <svg className="absolute inset-0 w-full h-full pointer-events-none z-20">
+              <circle cx={brushCursor.x} cy={brushCursor.y} r={brushCursor.r} fill="none"
+                stroke={brushCursor.erase ? "#F87171" : "#22D3EE"} strokeWidth={1.5} strokeDasharray={brushCursor.erase ? "4 3" : undefined} />
+              <circle cx={brushCursor.x} cy={brushCursor.y} r={1.5} fill={brushCursor.erase ? "#F87171" : "#22D3EE"} />
+            </svg>
+          )}
           <ScaleBar mmPerPixel={scaleByPlane[key]?.mmPerPixel} paneHeight={scaleByPlane[key]?.height} />
-          {pixelReadout?.key === key && (
+          {/* The value under the cursor is one plane's, which a slab image doesn't show */}
+          {pixelReadout?.key === key && !slabLabel(slab) && (
             <div className="absolute bottom-2 left-2 z-20 pointer-events-none select-none text-[11px] font-mono text-white/70" style={{ textShadow: "0 0 3px #000" }}>
               {formatPixelValue(pixelReadout)}
             </div>
@@ -1700,6 +2201,12 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
             >
               {label}
             </span>
+            {slabLabel(slab) && (
+              <span className="block text-[10px] font-mono font-semibold text-[#F59E0B]">{slabLabel(slab)}</span>
+            )}
+            {fusion?.label && (
+              <span className="block text-[10px] font-mono font-semibold text-[#F472B6]">{fusionLoading ? `Loading ${fusion.label}…` : `+ ${fusion.label}`}</span>
+            )}
           </div>
         </div>
       ))}
@@ -1708,7 +2215,8 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         above the point, or below it when there isn't room above (clicks near the top). */}
       {selectedLesion && (() => {
         const below = selectedLesion.y < 190;
-        const growInfo = selectedLesion.isManual ? growSeedsRef.current.get(selectedLesion.label) : null;
+        const seedInfo = selectedLesion.isManual ? growSeedsRef.current.get(selectedLesion.label) : null;
+        const growInfo = seedInfo?.brush ? null : seedInfo; // brush regions aren't grown — no tolerance
         const conf = selectedLesion.confidence;
         const signal = conf == null ? 0 : conf >= 0.75 ? 3 : conf >= 0.4 ? 2 : conf > 0 ? 1 : 0;
         const signalLabel = conf == null ? null : conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
@@ -1744,7 +2252,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
               <div className="flex items-center gap-2 px-3 pt-2.5 pb-2">
                 <span className="flex-1 min-w-0 truncate text-[12px] font-semibold text-white">
                   {selectedLesion.isManual
-                    ? `Polygon ${selectedLesion.polygonNumber}`
+                    ? `${selectedLesion.isBrush ? "Brush" : "Polygon"} ${selectedLesion.polygonNumber}`
                     : selectedLesion.isStructure && selectedLesion.regionName
                       ? selectedLesion.regionName
                       : `Finding ${selectedLesion.label}`}
@@ -1753,7 +2261,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
                   <button
                     onClick={() => deleteManualLesion(selectedLesion.label)}
                     className="text-[#6B6B6B] hover:text-red-400 text-[12px] bg-transparent border-none cursor-pointer leading-none transition-colors p-0"
-                    title="Delete this polygon"
+                    title="Delete this region"
                   >🗑</button>
                 )}
                 <button
@@ -1832,6 +2340,42 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       })()}
 
       {/* Loading overlay */}
+      {brushActive && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 bg-[#161616]/95 border border-[#2a2a2a] rounded-xl px-3 py-1.5 shadow-lg select-none">
+          <span className="text-[11px] font-semibold text-white">Brush</span>
+          <div className="flex rounded-md overflow-hidden border border-[#2a2a2a]">
+            {[[false, "Paint"], [true, "Erase"]].map(([erase, label]) => (
+              <button
+                key={label}
+                onClick={() => setBrushErase(erase)}
+                className={`px-2 py-0.5 text-[11px] border-none cursor-pointer ${brushErase === erase ? (erase ? "bg-[#F87171] text-black" : "bg-[#22D3EE] text-black") : "bg-[#111] text-[#999] hover:text-white"}`}
+              >{label}</button>
+            ))}
+          </div>
+          <div className="flex rounded-md overflow-hidden border border-[#2a2a2a]" title="Disc paints the plane you're on; Sphere paints a ball, so the region has depth in the other planes">
+            {[[false, "Disc"], [true, "Sphere"]].map(([sphere, label]) => (
+              <button
+                key={label}
+                onClick={() => setBrushSphere(sphere)}
+                className={`px-2 py-0.5 text-[11px] border-none cursor-pointer ${brushSphere === sphere ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+              >{label}</button>
+            ))}
+          </div>
+          <input
+            type="range" min={BRUSH_MIN_MM} max={BRUSH_MAX_MM} step={1} value={brushSize}
+            onChange={e => setBrushSize(Number(e.target.value))}
+            className="w-[110px] accent-[#22D3EE]"
+            title="Brush diameter ( [ and ] )"
+          />
+          <span className="text-[11px] font-mono text-white w-[38px]">{`${brushSize} mm`}</span>
+          <span className="text-[10px] text-[#6B6B6B]">Alt erases · [ ] size</span>
+        </div>
+      )}
+      {failedSlicesNote(failedSlices) && !loading && (
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none text-[11px] text-[#F59E0B] bg-black/60 rounded px-2 py-0.5">
+          {failedSlicesNote(failedSlices)}
+        </div>
+      )}
       {loading && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 pointer-events-none">
           <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />

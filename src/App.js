@@ -25,6 +25,7 @@ import SettingsPage from "./components/homepage/settings/SettingsPage";
 import JobsPage from "./components/homepage/jobs/JobsPage";
 import ReportsPage from "./components/homepage/casedashboard/reports/ReportsPage";
 import ModelsPage from "./components/homepage/models/ModelsPage";
+import PacsPage from "./components/homepage/pacs/PacsPage";
 import ReportTemplateEditor from "./components/homepage/reporttemplates/ReportTemplateEditor";
 import ReportViewer from "./components/homepage/casedashboard/reports/ReportViewer";
 import Appbar from "./components/homepage/appbar/appbar";
@@ -380,6 +381,17 @@ function App() {
                 <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
                   <Sidebar activePage="Models" />
                   <ModelsPage />
+                </div>
+              </div>
+            </div>
+          } />
+          <Route path="/pacs" element={
+            <div className="m-0 p-0 h-screen bg-black w-screen">
+              <div className="flex flex-col px-[33px] py-[28px] w-full h-screen box-border overflow-hidden">
+                <Appbar />
+                <div className="w-full flex flex-row gap-[30px] box-border mt-[30px] flex-1 min-h-0">
+                  <Sidebar activePage="PACS" />
+                  <PacsPage />
                 </div>
               </div>
             </div>

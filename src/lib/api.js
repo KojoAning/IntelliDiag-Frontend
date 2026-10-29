@@ -380,3 +380,24 @@ export function getModels(modality) {
 export function runInference(modelId, imageId) {
   return request("POST", `/models/${modelId}/infer`, { image_id: imageId });
 }
+
+/**
+ * PACS (backend routers/pacs): connections searched over DICOMweb, and studies copied
+ * from them into a case.
+ */
+export const getPacsConnections   = ()         => request("GET",    `/pacs/connections`);
+export const createPacsConnection = (body)     => request("POST",   `/pacs/connections`, body);
+export const updatePacsConnection = (id, body) => request("PATCH",  `/pacs/connections/${id}`, body);
+export const deletePacsConnection = (id)       => request("DELETE", `/pacs/connections/${id}`);
+export const testPacsConnection   = (id)       => request("POST",   `/pacs/connections/${id}/test`);
+// filters: { patient_name, patient_id, accession_number, date_from, date_to, modality, limit, offset }
+export function searchPacsStudies(id, filters = {}) {
+  const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v !== "" && v != null)).toString();
+  return request("GET", `/pacs/connections/${id}/studies${qs ? `?${qs}` : ""}`);
+}
+export const getPacsStudySeries = (id, studyUid) => request("GET", `/pacs/connections/${id}/studies/${encodeURIComponent(studyUid)}/series`);
+// body: { case_id, study_instance_uid, series_instance_uids?, description? }
+export const retrievePacsStudy  = (id, body)     => request("POST", `/pacs/connections/${id}/retrieve`, body);
+export const getPacsRetrievals  = ()             => request("GET",  `/pacs/retrievals`);
+// Carry on an import that stopped part-way (retrieval.can_resume)
+export const resumePacsRetrieval = (retrievalId) => request("POST", `/pacs/retrievals/${retrievalId}/resume`);

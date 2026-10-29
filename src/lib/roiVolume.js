@@ -14,6 +14,7 @@ import {
   utilities as csToolsUtilities,
   PlanarFreehandROITool, EllipticalROITool, CircleROITool, RectangleROITool,
 } from "@cornerstonejs/tools";
+import { createExtent, addPoint, extentSize } from "./regionSize";
 
 // Closed-contour tools whose contours are named ROIs
 export const AREA_ROI_TOOL_NAMES = new Set([
@@ -56,7 +57,7 @@ function stackGeometry(imageIds) {
   }
   const positions = imageIds.map((_, i) => knownPos.get(i) ?? knownPos.get(first) + (i - first) * step);
   const spacing = Math.abs(step);
-  return { calibrated: spacing > 0, positions, spacing, rowCos, colCos };
+  return { calibrated: spacing > 0, positions, spacing, rowCos, colCos, normal };
 }
 
 // Contour outline in mm along the image's row/column directions
@@ -86,6 +87,26 @@ function contourArea(toolName, pts) {
     twice += x1 * y2 - x2 * y1;
   }
   return Math.abs(twice) / 2;
+}
+
+// Points along the contour's outline (in-plane mm), for its size: circles and ellipses
+// are stored as handles, not outlines, so they're traced
+const TRACE_POINTS = 32;
+function outlinePoints(toolName, pts) {
+  const trace = (centre, a, b) => Array.from({ length: TRACE_POINTS }, (_, n) => {
+    const t = (2 * Math.PI * n) / TRACE_POINTS;
+    return [centre[0] + a[0] * Math.cos(t) + b[0] * Math.sin(t), centre[1] + a[1] * Math.cos(t) + b[1] * Math.sin(t)];
+  });
+  if (toolName === "CircleROI" && pts.length >= 2) {
+    const r = dist(pts[0], pts[1]);
+    return trace(pts[0], [r, 0], [0, r]);
+  }
+  if (toolName === "EllipticalROI" && pts.length >= 4) {
+    const [bottom, top, left, right] = pts;
+    const centre = [(left[0] + right[0]) / 2, (left[1] + right[1]) / 2];
+    return trace(centre, [(right[0] - left[0]) / 2, (right[1] - left[1]) / 2], [(top[0] - bottom[0]) / 2, (top[1] - bottom[1]) / 2]);
+  }
+  return pts;
 }
 
 function contourBounds(toolName, pts) {
@@ -121,6 +142,7 @@ function stackContours(imageIds, toolNames) {
       slice,
       area: geometry.calibrated ? contourArea(metadata.toolName, pts) : null,
       bounds: pts.length ? contourBounds(metadata.toolName, pts) : null,
+      outline: pts.length ? outlinePoints(metadata.toolName, pts) : [],
       mean: typeof stats?.mean === "number" ? stats.mean : null,
       unit: stats?.modalityUnit ?? "",
     });
@@ -157,6 +179,22 @@ export function listRois(imageIds, toolNames) {
       volumeCm3 = mm3 / 1000;
     }
 
+    // AP × TR × CC size, alongside the volume: the outlines placed back in patient
+    // coordinates, plus half a slice at each end (as the volume counts it)
+    let sizeMm = null;
+    if (volumeCm3 != null) {
+      const { rowCos, colCos, normal } = geometry;
+      const extent = createExtent();
+      members.forEach(c => {
+        const n = geometry.positions[c.slice];
+        c.outline.forEach(([u, v]) => addPoint(extent,
+          u * rowCos[0] + v * colCos[0] + n * normal[0],
+          u * rowCos[1] + v * colCos[1] + n * normal[1],
+          u * rowCos[2] + v * colCos[2] + n * normal[2]));
+      });
+      sizeMm = extentSize(extent, normal.map(x => Math.abs(x) * geometry.spacing));
+    }
+
     // Area-weighted mean over the contours that have been displayed (and so have stats)
     const measured = members.filter(c => c.mean != null && c.area);
     const weight = measured.reduce((sum, c) => sum + c.area, 0);
@@ -170,6 +208,7 @@ export function listRois(imageIds, toolNames) {
       lastSlice: slices[slices.length - 1] + 1,
       skippedSlices: slices[slices.length - 1] - slices[0] + 1 - slices.length,
       volumeCm3,
+      sizeMm,
       mean,
       meanUnit: measured[0]?.unit ?? "",
       meanFromContours: measured.length,

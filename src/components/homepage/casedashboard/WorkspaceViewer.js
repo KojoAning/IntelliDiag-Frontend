@@ -19,6 +19,21 @@ const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "")
 const historyByStudy = new Map();
 const HISTORY_SAVE_DELAY_MS = 800;
 
+// What the inference worker works out for the report — which model ran, what kind of scan
+// it is, structure / lesion sizes — passed through as the result holds it
+function reportFacts(results) {
+  const vol = results.volume_analysis ?? {};
+  return {
+    model: results.model ?? null,
+    exam: results.dicom_metadata?.exam ?? null,
+    structures: results.structures ?? null,
+    organ_assessments: results.organ_assessments?.length ? results.organ_assessments : null,
+    lesions: vol.lesions?.length ? vol.lesions : null,
+    largest_lesion_size_mm: vol.largest_lesion_size_mm ?? null,
+    tumour_parts_cm3: vol.tumour_parts_cm3 ?? null,
+  };
+}
+
 function WorkspaceViewer({ layout, onLayoutChange }) {
   const { state: navState } = useLocation();
   const navigate = useNavigate();
@@ -312,7 +327,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            metadata: null,
+            metadata: results.dicom_metadata ?? null,
             patient_context: null,
             model_type: isClassification ? "classification" : isGradCam ? "gradcam" : "segmentation",
             detected: isAnatomy || isClassification ? null : detectedSlices.length > 0,
@@ -331,6 +346,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             largest_lesion_volume_cm3: vol.largest_lesion_volume_cm3 ?? null,
             largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
             detection_location: vol.detection_location ?? null,
+            ...reportFacts(results),
           }),
         });
 
@@ -910,6 +926,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             largest_lesion_volume_cm3: vol.largest_lesion_volume_cm3 ?? null,
             largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
             detection_location: vol.detection_location ?? null,
+            ...reportFacts(results),
           }),
         });
 

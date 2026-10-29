@@ -39,6 +39,7 @@ import { RiSketching } from "react-icons/ri";
 import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 import { Sparkle } from "lucide-react";
+import { formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
 
 // ── Small top-bar button ───────────────────────────────────────────────────────
 function ViewBtn({ icon, label, active, onClick, disabled }) {
@@ -92,18 +93,33 @@ function ResultWarnings({ warnings }) {
 // Colour key for anatomy segmentations (one colour per structure): only the structures the
 // model found, largest first, with their volumes. Whole-body results can list 100+, so it
 // scrolls and can be filtered.
-function SegmentationLegend({ legend, volumes }) {
+const capitalize = text => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Results from before the worker named structures fall back to the raw name, and
+// without "structures" there are no sizes.
+function SegmentationLegend({ legend, volumes, structures }) {
   const [query, setQuery] = useState("");
   const rows = useMemo(() => {
-    const rgbByName = new Map((legend ?? []).map(entry => [entry.name, entry.rgb]));
+    const entryByName = new Map((legend ?? []).map(entry => [entry.name, entry]));
+    const sizeByName = new Map((structures ?? []).map(s => [s.name, s]));
     return Object.entries(volumes ?? {})
-      .filter(([name]) => rgbByName.has(name))
-      .map(([name, volume]) => ({ name, volume, rgb: rgbByName.get(name) }))
+      .filter(([name]) => entryByName.has(name))
+      .map(([name, volume]) => {
+        const entry = entryByName.get(name);
+        const measured = sizeByName.get(name);
+        return {
+          name,
+          label: capitalize(entry.clinical_name ?? measured?.clinical_name ?? name.replace(/_/g, " ")),
+          volume,
+          rgb: entry.rgb,
+          size: measured?.size_mm ? formatSize(measured.size_mm) : null,
+        };
+      })
       .sort((a, b) => b.volume - a.volume);
-  }, [legend, volumes]);
+  }, [legend, volumes, structures]);
   if (!rows.length) return null;
   const q = query.trim().toLowerCase();
-  const shown = q ? rows.filter(r => r.name.toLowerCase().replace(/_/g, " ").includes(q)) : rows;
+  const shown = q ? rows.filter(r => r.label.toLowerCase().includes(q) || r.name.toLowerCase().replace(/_/g, " ").includes(q)) : rows;
   return (
     <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
       <div className="flex items-center justify-between gap-2">
@@ -121,8 +137,10 @@ function SegmentationLegend({ legend, volumes }) {
         {shown.map(r => (
           <div key={r.name} className="flex items-center gap-2 text-[11px]">
             <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: `rgb(${r.rgb.join(",")})` }} />
-            <span className="flex-1 min-w-0 truncate text-[#CCCCCC] capitalize" title={r.name}>{r.name.replace(/_/g, " ")}</span>
-            <span className="text-[#6B6B6B] font-mono shrink-0">{`${r.volume} cm³`}</span>
+            <span className="flex-1 min-w-0 truncate text-[#CCCCCC]" title={r.size ? `${r.label} — ${r.volume} cm³, ${r.size} (${SIZE_AXES_LABEL})` : r.label}>{r.label}</span>
+            <span className="text-[#6B6B6B] font-mono shrink-0" title={r.size ? `Maximum extent ${SIZE_AXES_LABEL}` : undefined}>
+              {r.size ? `${r.volume} cm³ · ${r.size}` : `${r.volume} cm³`}
+            </span>
           </div>
         ))}
         {!shown.length && <span className="text-[11px] text-[#6B6B6B]">No match</span>}
@@ -1458,7 +1476,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   {Math.round(maskOpacity * 100)}%
                 </span>
               </div>
-              {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult?.class_volumes_cm3} />}
+              {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult?.class_volumes_cm3} structures={inferenceResult?.structures} />}
               <ResultWarnings warnings={inferenceResult?.warnings} />
             </div>
           )}
@@ -1720,7 +1738,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                           >✕</button>
                         </span>
                       </div>
-                      {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} />}
+                      {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} structures={inferenceResult.structures} />}
                       <ResultWarnings warnings={inferenceResult.warnings} />
                     </div>
                   );
@@ -1858,6 +1876,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                           <span className="text-[11px] text-[#868686]">Volume</span>
                           <span className="text-[13px] text-[#0694FB] font-mono">{`${roi.volumeCm3.toFixed(2)} cm³`}</span>
                         </div>
+                        {roi.sizeMm && (
+                          <div className="flex items-baseline justify-between" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
+                            <span className="text-[11px] text-[#868686]">Size</span>
+                            <span className="text-[12px] text-white font-mono">
+                              {formatSize(roi.sizeMm)} <span className="text-[10px] text-[#6B6B6B]">{SIZE_AXES_LABEL}</span>
+                            </span>
+                          </div>
+                        )}
                         {roi.skippedSlices > 0 && (
                           <span className="text-[10px] text-[#6B6B6B]">
                             {`${roi.skippedSlices} slice${roi.skippedSlices === 1 ? "" : "s"} between outlines filled in by interpolation`}

@@ -35,6 +35,7 @@ import {
 } from "../../../lib/roiVolume";
 import { growRegionThroughSlices } from "../../../lib/regionGrow";
 import { uid } from "../../../lib/uid";
+import { createExtent, addPoint, extentSize, voxelFootprint, formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
 
 // Starting intensity window for growing a drawn region (mean ± this many SDs); the popup's
 // −/+ buttons tighten or loosen it within these bounds.
@@ -1193,6 +1194,35 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   // Manually-drawn ROIs are "Polygon N" (yours, deletable); AI findings stay "Finding N" (read-only).
   // AI findings also carry the model's confidence (mean over the slices the finding spans,
   // same per-slice numbers the 2D card shows) and the predicted region type at the click.
+  // AP × TR × CC size of one label, in patient coordinates — worked out when a region is
+  // selected (one pass over its slices) rather than for every region up front
+  const regionSizeOf = (label, stat) => {
+    const labels = labelArrayRef.current;
+    const dims = labelDimsRef.current;
+    const volume = csCache.getVolume(volumeIdRef.current);
+    if (!labels || !dims || !volume?.direction) return null;
+    const { w, h, d } = dims;
+    const { origin, direction: dir, spacing } = volume;
+    const ax = [0, 1, 2].map(a => [0, 1, 2].map(c => dir[a * 3 + c] * spacing[a])); // world step per index step
+    const extent = createExtent();
+    const sliceSize = w * h;
+    const k0 = stat?.kMin ?? 0;
+    const k1 = stat?.kMax ?? d - 1;
+    for (let k = k0; k <= k1; k++) {
+      for (let j = 0; j < h; j++) {
+        const row = k * sliceSize + j * w;
+        for (let i = 0; i < w; i++) {
+          if (labels[row + i] !== label) continue;
+          addPoint(extent,
+            origin[0] + i * ax[0][0] + j * ax[1][0] + k * ax[2][0],
+            origin[1] + i * ax[0][1] + j * ax[1][1] + k * ax[2][1],
+            origin[2] + i * ax[0][2] + j * ax[1][2] + k * ax[2][2]);
+        }
+      }
+    }
+    return extentSize(extent, voxelFootprint(dir, spacing));
+  };
+
   const buildSelectedLesion = (label, stat, pos, regionName = null) => {
     const isManual = manualLabelsRef.current.has(label);
     let confidence = null;
@@ -1211,6 +1241,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       label,
       ...stat,
       ...pos,
+      sizeMm: regionSizeOf(label, stat),
       isManual,
       polygonNumber: isManual ? manualLabelNumberRef.current.get(label) : null,
       savedVoxelCount: isManual ? growSeedsRef.current.get(label)?.savedVoxelCount ?? null : null,
@@ -1360,7 +1391,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     delete info.savedVoxelCount; // adjusted on these images: this is its size now
     const stat = growManualRegion(label, info);
     if (!stat) return;
-    setSelectedLesion(prev => (prev?.label === label ? { ...prev, ...stat, savedVoxelCount: null } : prev));
+    setSelectedLesion(prev => (prev?.label === label ? { ...prev, ...stat, sizeMm: regionSizeOf(label, stat), savedVoxelCount: null } : prev));
     getAllVps().forEach(vp => vp.render());
     reportRegions();
   };
@@ -1726,6 +1757,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
               {/* Measurements */}
               <div className="flex flex-col gap-1.5 px-3 pb-2.5">
                 {row("Volume", <span className="text-[13px] text-[#0694FB] font-mono">{`${selectedLesion.volumeCm3.toFixed(2)} cm³`}</span>)}
+                {selectedLesion.sizeMm && row("Size", (
+                  <span className="text-[12px] text-white font-mono" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
+                    {formatSize(selectedLesion.sizeMm)} <span className="text-[10px] text-[#6B6B6B]">{SIZE_AXES_LABEL}</span>
+                  </span>
+                ))}
                 {row("Voxels", <span className="text-[11px] text-[#949494] font-mono">{selectedLesion.voxelCount.toLocaleString()}</span>)}
                 {selectedLesion.savedVoxelCount != null && (
                   <span className="text-[11px] text-[#F59E0B]" title="Saved regions are grown again from their outline when the 3D view opens. These images aren't the ones it was saved on (re-uploaded or changed), so it came out a different size. Adjust the tolerance to accept it.">

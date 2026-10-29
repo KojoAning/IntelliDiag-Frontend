@@ -24,6 +24,7 @@ import {
 import * as dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core";
 import loadWebImage from "./webImageLoader";
+import { installMetadataSnapshot } from "./metadataSnapshot";
 
 let initialized = false;
 let initPromise = null;
@@ -80,6 +81,9 @@ export async function initCornerstone() {
         return {};
       },
     });
+
+    // Keep each image's geometry once read, so it survives cache eviction
+    installMetadataSnapshot();
 
     // Register loader for plain web/blob image URLs (PNG/JPG)
     imageLoader.registerImageLoader("web", loadWebImage);

@@ -35,6 +35,7 @@ import {
 } from "../../../lib/roiVolume";
 import { growRegionThroughSlices } from "../../../lib/regionGrow";
 import { uid } from "../../../lib/uid";
+import { snapshotMetadata } from "../../../lib/metadataSnapshot";
 import { createExtent, addPoint, extentSize, voxelFootprint, formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
 
 // Starting intensity window for growing a drawn region (mean ± this many SDs); the popup's
@@ -652,6 +653,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         // which would silently flip our imageIds prop (and the mask-to-slice mapping with it).
         const volume = await volumeLoader.createAndCacheVolume(volumeId, { imageIds: [...imageIds] });
         volumeIdRef.current = volumeId;
+        // The segmentation layer is derived from these slices later; their metadata has
+        // to outlive the loader's cache (metadataSnapshot)
+        snapshotMetadata(volume.imageIds);
 
         if (cancelled) return;
 
@@ -1092,7 +1096,12 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       let restored = 0;
       savedRegions.forEach(region => {
         if (present.has(region.uid) || !(region.outline?.length >= 3)) return;
-        if (bakeOutlineRegion(region.outline, region)) restored++;
+        // One region that can't be rebuilt mustn't take the view down with it
+        try {
+          if (bakeOutlineRegion(region.outline, region)) restored++;
+        } catch (err) {
+          console.warn(`[MPR] couldn't restore drawn region ${region.uid}:`, err);
+        }
       });
       if (restored) getAllVps().forEach(vp => vp.render());
     };

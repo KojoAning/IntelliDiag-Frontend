@@ -62,7 +62,12 @@ export async function initCornerstone() {
   if (initPromise) return initPromise;
 
   initPromise = (async () => {
-    await csInit();
+    // One WebGL context per rendering engine. Cornerstone's default pools 7 per engine, and
+    // every viewer (each 2D pane, the 3-plane view, the 3D view) has its own engine — two or
+    // three of them pass WebKit's limit of ~16, and Safari then drops the oldest contexts
+    // ("too many active WebGL contexts"), blanking a viewer. One context draws all of an
+    // engine's panes; Cornerstone itself uses one on mobile.
+    await csInit({ rendering: { webGlContextCount: 1 } });
     csToolsInit();
 
     applyLabelVisibility();

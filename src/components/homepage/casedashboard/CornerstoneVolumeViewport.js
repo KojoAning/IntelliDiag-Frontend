@@ -2341,7 +2341,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
       {/* Loading overlay */}
       {brushActive && (
-        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 bg-[#161616]/95 border border-[#2a2a2a] rounded-xl px-3 py-1.5 shadow-lg select-none">
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2.5 whitespace-nowrap [&>*]:shrink-0 bg-[#161616]/95 border border-[#2a2a2a] rounded-xl px-3 py-1.5 shadow-lg select-none">
           <span className="text-[11px] font-semibold text-white">Brush</span>
           <div className="flex rounded-md overflow-hidden border border-[#2a2a2a]">
             {[[false, "Paint"], [true, "Erase"]].map(([erase, label]) => (

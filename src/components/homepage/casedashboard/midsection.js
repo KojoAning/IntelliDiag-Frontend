@@ -183,14 +183,16 @@ function PixelValueLine({ feed }) {
   return <MetaLine label={probe.unit ? null : "Val"} value={`${formatPixelValue(probe)}  (${probe.i}, ${probe.j})`} bright />;
 }
 
-function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, inverted, pixelFeed, isKeyImage }) {
+// viewMode: in the 3-plane view the patient block starts lower, clear of the axial pane's
+// own labels (plane, slab, fusion); a 3D rendering has no slice, zoom or window to show.
+function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, inverted, pixelFeed, isKeyImage, viewMode = "stack" }) {
   const wc = wl?.wc != null ? Math.round(wl.wc) : (meta?.windowCenter != null ? Math.round(meta.windowCenter) : null);
   const ww = wl?.ww != null ? Math.round(wl.ww) : (meta?.windowWidth != null ? Math.round(meta.windowWidth) : null);
 
   return (
     <>
       {/* ── Top-left: Patient ── */}
-      <div className="absolute top-3 left-3 z-20 flex flex-col gap-0.5 pointer-events-none select-none">
+      <div className={`absolute ${viewMode === "mpr" ? "top-14" : "top-3"} left-3 z-20 flex flex-col gap-0.5 pointer-events-none select-none`}>
         <MetaLine value={meta?.patientName} bright />
         <MetaLine label="ID" value={meta?.patientId} />
         <MetaLine label="DOB" value={meta?.patientDob} />
@@ -207,6 +209,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
         {meta?.accessionNumber && <MetaLine label="Acc" value={meta.accessionNumber} />}
       </div>
 
+      {viewMode !== "3d" && <>
       {/* ── Bottom-left: Image geometry + view state ── */}
       <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-0.5 pointer-events-none select-none">
         {pixelFeed && <PixelValueLine feed={pixelFeed} />}
@@ -233,6 +236,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
           value={total > 0 ? `${currentIndex + 1} / ${total}` : "— / —"}
         />
       </div>
+      </>}
     </>
   );
 }
@@ -1810,6 +1814,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               inverted={inverted}
               pixelFeed={viewMode === "stack" ? pixelFeedRef : null}
               isKeyImage={viewMode === "stack" && isKeyImage}
+              viewMode={viewMode}
             />
           )}
 

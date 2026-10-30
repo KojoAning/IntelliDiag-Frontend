@@ -231,11 +231,11 @@ const CornerstoneVolume3D = forwardRef(function CornerstoneVolume3D({ imageIds =
         }}
         onAuxClick={e => e.preventDefault()}
       />
-      <div className="absolute top-2 left-2 z-20 pointer-events-none text-[10px] font-mono uppercase font-semibold text-white/50">
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 pointer-events-none whitespace-nowrap text-[10px] font-mono uppercase font-semibold text-white/50">
         3D · drag to rotate · Shift-drag or middle to pan · right / wheel to zoom
       </div>
       {!fullyLoaded && !error && imageIds.length >= 2 && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1.5 pointer-events-none">
+        <div className="absolute bottom-9 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-1.5 pointer-events-none">
           <span className="text-[11px] text-[#868686]">{`Loading slices… ${progress}%`}</span>
           <div className="w-40 h-1 bg-[#1E1E1E] rounded-full overflow-hidden">
             <div className="h-full bg-[#0694FB] transition-all" style={{ width: `${progress}%` }} />
@@ -243,7 +243,7 @@ const CornerstoneVolume3D = forwardRef(function CornerstoneVolume3D({ imageIds =
         </div>
       )}
       {failedSlicesNote(failedSlices) && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 pointer-events-none text-[11px] text-[#F59E0B]">
+        <div className="absolute bottom-9 left-1/2 -translate-x-1/2 z-30 pointer-events-none text-[11px] text-[#F59E0B]">
           {failedSlicesNote(failedSlices)}
         </div>
       )}

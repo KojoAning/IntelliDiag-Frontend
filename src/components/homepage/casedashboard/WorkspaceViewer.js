@@ -29,6 +29,15 @@ function confirmedExam(exam) {
   return text || null;
 }
 
+// A finished job's result: the inference service returns it inline (local dev) or as a
+// link to the stored copy (deployed) — either way, the result
+async function fetchJobResults(jobId) {
+  const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+  if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
+  const raw = await res.json();
+  return raw.url && !raw.slices ? fetch(raw.url).then(r => r.json()) : raw;
+}
+
 // Drawn / painted regions with measurements, as the report takes them
 function markedRegionsForReport(regions) {
   const rows = (regions ?? [])
@@ -288,16 +297,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
           updateCtx('10000001', { enhancementLoading: true, enhancementProgress: 100 });
           try {
             let results;
-            if (process.env.NODE_ENV === 'development') {
-              const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-              if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-              results = await resR.json();
-            } else {
-              const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-              if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-              const { url } = await res.json();
-              results = await fetch(url).then(r => r.json());
-            }
+            results = await fetchJobResults(jobId);
             if (!cancelled) updateCtx('10000001', { enhancementResult: results });
           } catch {
             if (!cancelled) updateCtx('10000001', { jobStatus: 'failed' });
@@ -351,16 +351,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
       updateCtx(pollModelId, { aiLoading: true, inferenceProgress: null });
       try {
         let results;
-        if (process.env.NODE_ENV === 'development') {
-          const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-          if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-          results = await resR.json();
-        } else {
-          const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-          if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-          const { url } = await res.json();
-          results = await fetch(url).then(r => r.json());
-        }
+        results = await fetchJobResults(jobId);
         if (cancelled) return;
         updateCtx(pollModelId, { inferenceResult: results, jobStatus: "completed" });
 
@@ -764,16 +755,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
           updateCtx('10000001', { enhancementProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
           updateCtx('10000001', { enhancementProgress: 100 });
-          if (process.env.NODE_ENV === 'development') {
-            const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-            results = await resR.json();
-          } else {
-            const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-            const { url } = await res.json();
-            results = await fetch(url).then(r => r.json());
-          }
+          results = await fetchJobResults(job_id);
           break;
         } else if (status.status === "failed") {
           updateCtx('10000001', { jobStatus: "failed" });
@@ -907,16 +889,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
           updateCtx(capturedModelId, { inferenceProgress: 100 });
 
 
-          if (process.env.NODE_ENV === 'development') {
-            const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-            results = await resR.json();
-          } else {
-            const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-            const { url } = await res.json();
-            results = await fetch(url).then(r => r.json());
-          }
+          results = await fetchJobResults(job_id);
           break;
         } else if (status.status === "failed") {
           updateCtx(capturedModelId, { jobStatus: "failed" });

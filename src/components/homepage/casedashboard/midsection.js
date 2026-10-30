@@ -7,6 +7,7 @@ import CornerstoneVolume3D, { presetsFor } from "./CornerstoneVolume3D";
 import SliceScrubber from "./SliceScrubber";
 import DicomTagPanel from "./DicomTagPanel";
 import RecistPanel from "./RecistPanel";
+import KeyImagesPanel from "./KeyImagesPanel";
 import SeriesPane, { EmptyPane } from "./SeriesPane";
 import { translationPairsFor } from "./rightsection/TranslationPanel";
 import { getLabelsAlwaysOn, setLabelsAlwaysOn } from "../../../lib/cornerstoneSetup";
@@ -20,6 +21,7 @@ import { formatPixelValue } from "../../../lib/viewportReadouts";
 import { renameRoi, deleteRoi, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolume";
 import { getSeriesAnnotations, saveSeriesAnnotations } from "../../../lib/api";
 import { captureViewer, canvasBlob, download, copyImage, printImage, recordMovie, seriesZip } from "../../../lib/viewerExport";
+import { zipFiles } from "../../../lib/zipWriter";
 import { eventTarget as csEventTarget, Enums as csEnums } from "@cornerstonejs/core";
 import { annotation as csAnnotation, Enums as csToolsEnums, CrosshairsTool, BidirectionalTool } from "@cornerstonejs/tools";
 import {
@@ -39,7 +41,7 @@ import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
 import { PiPolygonLight, PiSparkleFill } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
-import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption, TbBrush } from "react-icons/tb";
+import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption, TbBrush, TbStars } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 import { Sparkle } from "lucide-react";
 import { formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
@@ -442,6 +444,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const toggleLabels = () => { setLabelsAlwaysOn(!labelsAlwaysOn); setLabelsAlwaysOnState(!labelsAlwaysOn); };
   // RECIST panel, and the earlier studies' sums typed into it ({ baseline, nadir, newLesion }), saved with the series
   const [recistPanelOpen, setRecistPanelOpen] = useState(false);
+  const [keyPanelOpen, setKeyPanelOpen] = useState(false);
   const [recistReference, setRecistReference] = useState(null);
   const recistReferenceRef = useRef(recistReference);
   recistReferenceRef.current = recistReference;
@@ -644,7 +647,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       .then(({ annotations }) => {
         if (cancelled) return;
         if (restoreAnnotations(annotations, imageIds, images)) vpRef.current?.render?.();
-        setKeyImages(new Set(restoreKeyImages(annotations, imageIds, images)));
+        // Keep any slice marked while this was loading
+        const savedKeys = restoreKeyImages(annotations, imageIds, images);
+        setKeyImages(prev => new Set([...savedKeys, ...prev]));
         setRecistReference(restoreRecistReference(annotations));
         // Keep any region drawn in the 3D view while this was loading
         const savedRegions = restoreMprRegions(annotations, imageIds, images);
@@ -814,21 +819,22 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const printViewer = () => runExport("Preparing print", async () => {
     printImage((await captureViewer(viewportWrapRef.current)).toDataURL("image/png"), "IntelliDiag image");
   });
+  // Puts slice i of the 2D stack on screen, resolving once it has been drawn (IMAGE_RENDERED
+  // doesn't bubble: listen in capture)
+  const showSliceDrawn = (i) => new Promise(resolve => {
+    const root = viewportWrapRef.current;
+    const done = () => { root.removeEventListener(csEnums.Events.IMAGE_RENDERED, done, true); clearTimeout(timer); requestAnimationFrame(() => resolve()); };
+    const timer = setTimeout(done, 2000);
+    root.addEventListener(csEnums.Events.IMAGE_RENDERED, done, true);
+    if ((vpRef.current?.getCurrentIndex?.() ?? -1) === i) { vpRef.current?.render?.(); setTimeout(done, 50); }
+    else goTo(i);
+  });
   // A movie through every slice of the 2D stack, back on the slice it started from
   const saveMovie = () => runExport("Recording movie", async () => {
     setPlaying(false);
-    const root = viewportWrapRef.current;
     const start = currentIndexRef.current;
-    // Resolves once the slice has been drawn (IMAGE_RENDERED doesn't bubble: listen in capture)
-    const showSlice = (i) => new Promise(resolve => {
-      const done = () => { root.removeEventListener(csEnums.Events.IMAGE_RENDERED, done, true); clearTimeout(timer); requestAnimationFrame(() => resolve()); };
-      const timer = setTimeout(done, 2000);
-      root.addEventListener(csEnums.Events.IMAGE_RENDERED, done, true);
-      if ((vpRef.current?.getCurrentIndex?.() ?? -1) === i) { vpRef.current?.render?.(); setTimeout(done, 50); }
-      else goTo(i);
-    });
     try {
-      const { blob, extension } = await recordMovie(root, frameCount, showSlice, {
+      const { blob, extension } = await recordMovie(viewportWrapRef.current, frameCount, showSliceDrawn, {
         fps, onProgress: pct => setExportStatus({ text: `Recording movie ${pct}%` }),
       });
       download(blob, `${exportBaseName().replace(/_slice\d+$/, "")}_movie.${extension}`);
@@ -836,8 +842,29 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       goTo(start);
     }
   });
+  // Each key image as on screen (PNG), in one ZIP
+  const keyIndices = () => imageIds.map((id, i) => (keyImages.has(id) ? i : -1)).filter(i => i >= 0);
+  const saveKeyPictures = () => runExport("Saving key images", async () => {
+    setPlaying(false);
+    const start = currentIndexRef.current;
+    const base = exportBaseName().replace(/_slice\d+$/, "");
+    const files = [];
+    try {
+      const indices = keyIndices();
+      for (const [n, i] of indices.entries()) {
+        await showSliceDrawn(i);
+        const blob = await canvasBlob(await captureViewer(viewportWrapRef.current));
+        files.push({ name: `${base}_key${String(n + 1).padStart(2, "0")}_slice${i + 1}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+        setExportStatus({ text: `Saving key images ${Math.round(((n + 1) / indices.length) * 100)}%` });
+      }
+    } finally {
+      goTo(start);
+    }
+    if (!files.length) throw new Error("No key images");
+    download(zipFiles(files), `${base}_key_images.zip`);
+  });
   // The open series' DICOM files; the token only goes to our backend (as Cornerstone's loader does)
-  const downloadSeries = (anonymize) => runExport(anonymize ? "Anonymising series" : "Zipping series", async () => {
+  const downloadSeries = (anonymize, keyOnly = false) => runExport(anonymize ? "Anonymising series" : "Zipping series", async () => {
     const apiBase = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
     const getBytes = async (img) => {
       const src = img.blobUrl ?? img.url;
@@ -847,10 +874,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       if (!res.ok) throw new Error(`HTTP ${res.status} for ${img.name ?? src}`);
       return res.arrayBuffer();
     };
-    const { blob, name, count } = await seriesZip(images, getBytes, {
+    // Key images: their files (a multi-frame file once, whole)
+    const chosen = keyOnly ? [...new Set(keyIndices().map(fileOfFrame))].sort((a, b) => a - b).map(i => images[i]).filter(Boolean) : images;
+    const { blob, name, count } = await seriesZip(chosen, getBytes, {
       anonymize,
       patient: dicomMeta?.patientName,
-      series: dicomMeta?.seriesDescription || activeSeries?.modality,
+      series: `${dicomMeta?.seriesDescription || activeSeries?.modality || "series"}${keyOnly ? " key images" : ""}`,
       onProgress: pct => setExportStatus({ text: `${anonymize ? "Anonymising" : "Zipping"} ${pct}%` }),
     });
     if (!count) throw new Error("No DICOM files in this series");
@@ -887,6 +916,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     setKeyImages(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+    scheduleSaveRef.current?.();
+  };
+  const unmarkKeyImage = (index) => {
+    setKeyImages(prev => {
+      const next = new Set(prev);
+      next.delete(imageIds[index]);
       return next;
     });
     scheduleSaveRef.current?.();
@@ -1589,6 +1626,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Series DICOM files</span>
                   {item("Download as ZIP", () => downloadSeries(false))}
                   {item("Download anonymised ZIP", () => downloadSeries(true), { hint: "Names, IDs, addresses and institution removed; dates kept to the year; new study, series and image UIDs" })}
+                  <div className="h-px bg-[#2a2a2a] my-1" />
+                  <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">{`Key images${keyImages.size ? ` (${keyImages.size})` : " — none marked"}`}</span>
+                  {item("Pictures as ZIP", saveKeyPictures, { disabled: !keyImages.size || viewMode !== "stack", hint: viewMode !== "stack" ? "Key images are captured from the 2D view" : undefined })}
+                  {item("DICOM files as ZIP", () => downloadSeries(false, true), { disabled: !keyImages.size })}
+                  {item("Anonymised DICOM ZIP", () => downloadSeries(true, true), { disabled: !keyImages.size })}
                 </div>
               );
             })()}
@@ -1750,6 +1792,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               label={`${isKeyImage ? "Unmark" : "Mark"} key image (K) · Shift+K next${keyImages.size ? ` · ${keyImages.size} marked` : ""}`}
               onClick={toggleKeyImage}
             />
+          )}
+          {viewMode === "stack" && (
+            <ToolBtn icon={<TbStars size={17} />} label={`Key images — list and export${keyImages.size ? ` (${keyImages.size})` : ""}`} active={keyPanelOpen} onClick={() => setKeyPanelOpen(o => !o)} />
           )}
 
           {/* RECIST 1.1 — lesions from the bidirectional tool */}
@@ -2332,6 +2377,23 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         )}
 
         {/* ── RECIST 1.1 ── */}
+        {keyPanelOpen && viewMode === "stack" && (
+          <KeyImagesPanel
+            keyed={keyIndices().map(index => ({
+              index,
+              imageId: imageIds[index],
+              src: frameMap.fileOfFrame.filter(f => f === fileOfFrame(index)).length > 1 ? null : fileSrcOfFrame(index), // multi-frame: no thumbnail (it would show frame 1)
+            }))}
+            currentIndex={currentIndex}
+            total={frameCount}
+            onGoTo={goTo}
+            onUnmark={unmarkKeyImage}
+            onClose={() => setKeyPanelOpen(false)}
+            onSavePictures={saveKeyPictures}
+            onDownloadDicom={anonymize => downloadSeries(anonymize, true)}
+          />
+        )}
+
         {recistPanelOpen && (
           <RecistPanel
             imageIds={imageIds}

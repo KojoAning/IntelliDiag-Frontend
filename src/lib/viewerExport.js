@@ -133,11 +133,12 @@ export async function seriesZip(images, getBytes, { anonymize = false, patient, 
   const dicom = images.filter(isDicomImage);
   const folder = `${anonymize ? "ANONYMOUS" : safeName(patient, "patient")}/${safeName(series, "series")}`;
   const files = [];
+  const uidMap = new Map(); // one for the series: its files keep sharing study / series UIDs
   for (let i = 0; i < dicom.length; i++) {
     const buffer = await getBytes(dicom[i]);
     files.push({
       name: `${folder}/IM${String(i + 1).padStart(4, "0")}.dcm`,
-      data: anonymize ? anonymizeDicom(buffer) : new Uint8Array(buffer),
+      data: anonymize ? anonymizeDicom(buffer, uidMap) : new Uint8Array(buffer),
     });
     onProgress?.(Math.round(((i + 1) / dicom.length) * 100));
   }

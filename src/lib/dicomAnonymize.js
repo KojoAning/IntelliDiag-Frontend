@@ -8,8 +8,11 @@ import dicomParser from "dicom-parser";
 //   physicians, device and station → blank; dates → the year only (YYYY0101), times kept,
 //   so intervals within a day (e.g. PET injection to scan, for SUV) still hold.
 // Private (vendor) text fields are blanked; private numbers are kept (Philips' SUV factor).
-// Not handled: identity burned into the pixels (ultrasound screens, scanned forms), and
-// UIDs, which are kept (the "retain UIDs" option).
+// UIDs (study, series, image, frame of reference, references between them) are replaced by
+// new random ones (2.25.…) of the same length; one map is shared by every file of an export,
+// so series still group and references still resolve. Class UIDs (what kind of object,
+// transfer syntax) and the standard's own (1.2.840.10008.…) are kept.
+// Not handled: identity burned into the pixels (ultrasound screens, scanned forms).
 
 const NAME = "n", ID = "i", BLANK = "b", DATE = "d", DATETIME = "t";
 const RULES = {
@@ -26,6 +29,8 @@ const RULES = {
   x00080012: DATE, x00181012: DATE, x00080024: DATE, x00080025: DATE,
   x0008002a: DATETIME, x00181078: DATETIME, x00181079: DATETIME,
 };
+// SOP class, transfer syntax and implementation class UIDs: describe the object, not the patient
+const CLASS_UIDS = new Set(["x00020002", "x00020010", "x00020012", "x00080016", "x00081150", "x00041510", "x00041512", "x0008001a", "x00080062"]);
 const TEXT_VRS = new Set(["AE", "AS", "CS", "DA", "DT", "LO", "LT", "PN", "SH", "ST", "TM", "UC", "UT"]);
 
 function write(bytes, start, length, text) {
@@ -37,16 +42,40 @@ const printable = (bytes, start, length) => {
   return true;
 };
 
-function scrub(dataSet, bytes) {
+// A new UID of the given length: "2.25." and random digits (no leading zero)
+function newUid(length) {
+  if (length < 6) return null;
+  const digits = crypto.getRandomValues(new Uint8Array(length - 5));
+  return "2.25." + Array.from(digits, (d, i) => (i === 0 ? 1 + (d % 9) : d % 10)).join("");
+}
+
+// Implicit VR has no type: digits with two or more dots is a UID (a decimal has at most one)
+const looksLikeUid = (text) => /^\d+(\.\d+){2,}(\\\d+(\.\d+){2,})*$/.test(text);
+
+function replaceUids(bytes, at, length, uidMap) {
+  const text = readText(bytes, at, length).replace(/[\0 ]+$/, "");
+  const parts = text.split("\\").map(uid => {
+    if (uid.startsWith("1.2.840.10008.")) return uid;
+    if (!uidMap.has(uid)) uidMap.set(uid, newUid(uid.length) ?? uid);
+    return uidMap.get(uid);
+  });
+  const next = parts.join("\\");
+  for (let i = 0; i < length; i++) bytes[at + i] = i < next.length ? next.charCodeAt(i) : 0; // UI pads with NUL
+}
+
+function scrub(dataSet, bytes, uidMap) {
   Object.values(dataSet.elements).forEach(el => {
     if (el.items) {
-      el.items.forEach(item => item.dataSet && scrub(item.dataSet, bytes));
+      el.items.forEach(item => item.dataSet && scrub(item.dataSet, bytes, uidMap));
       return;
     }
     if (!el.length || el.dataOffset == null) return;
     const rule = RULES[el.tag];
     const { dataOffset: at, length } = el;
-    if (rule === NAME) write(bytes, at, length, "ANONYMOUS");
+    const isUid = el.vr ? el.vr === "UI" : looksLikeUid(readText(bytes, at, length).replace(/[\0 ]+$/, ""));
+    if (isUid) {
+      if (!CLASS_UIDS.has(el.tag)) replaceUids(bytes, at, length, uidMap);
+    } else if (rule === NAME) write(bytes, at, length, "ANONYMOUS");
     else if (rule === ID) write(bytes, at, length, "ANON");
     else if (rule === BLANK) write(bytes, at, length, "");
     else if (rule === DATE || rule === DATETIME) {
@@ -67,10 +96,11 @@ function scrub(dataSet, bytes) {
   });
 }
 
-// ArrayBuffer of a DICOM file → de-identified copy (Uint8Array)
-export function anonymizeDicom(buffer) {
+// ArrayBuffer of a DICOM file → de-identified copy (Uint8Array). Pass the same uidMap for
+// every file of one export, so their new UIDs agree.
+export function anonymizeDicom(buffer, uidMap = new Map()) {
   const bytes = new Uint8Array(buffer.slice(0));
   const dataSet = dicomParser.parseDicom(bytes);
-  scrub(dataSet, bytes);
+  scrub(dataSet, bytes, uidMap);
   return bytes;
 }

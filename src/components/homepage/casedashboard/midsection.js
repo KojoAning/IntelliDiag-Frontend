@@ -1571,7 +1571,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   <div className="h-px bg-[#2a2a2a] my-1" />
                   <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Series DICOM files</span>
                   {item("Download as ZIP", () => downloadSeries(false))}
-                  {item("Download anonymised ZIP", () => downloadSeries(true), { hint: "Names, IDs, addresses and institution removed; dates kept to the year" })}
+                  {item("Download anonymised ZIP", () => downloadSeries(true), { hint: "Names, IDs, addresses and institution removed; dates kept to the year; new study, series and image UIDs" })}
                 </div>
               );
             })()}

@@ -93,6 +93,23 @@ function ResultWarnings({ warnings }) {
   );
 }
 
+// Brain tumour results: the atlas-based midline shift. It reads about 20% low (smooth warp),
+// so it's shown as approximate with how to measure it directly.
+function MidlineShift({ shift }) {
+  if (!shift) return null;
+  const text = shift.significant
+    ? `Midline shift ≈ ${shift.mm} mm toward the patient's ${shift.toward}`
+    : `No significant midline shift (≈ ${shift.mm} mm)`;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-0.5">
+      <p className={`m-0 text-[12px] leading-snug ${shift.significant ? "text-[#F59E0B]" : "text-[#CCCCCC]"}`}>{text}</p>
+      <p className="m-0 text-[11px] leading-snug text-[#868686]" title="On an axial slice at the foramen of Monro: draw the midline from the anterior to the posterior falx attachment, then measure the septum pellucidum's distance from it with the Length tool">
+        Atlas estimate, tends to read low — confirm with the Length tool
+      </p>
+    </div>
+  );
+}
+
 // Colour key for anatomy segmentations (one colour per structure): only the structures the
 // model found, largest first, with their volumes. Whole-body results can list 100+, so it
 // scrolls and can be filtered.
@@ -1879,6 +1896,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               </div>
               {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult?.class_volumes_cm3} structures={inferenceResult?.structures} />}
               <ResultWarnings warnings={inferenceResult?.warnings} />
+              <MidlineShift shift={inferenceResult?.volume_analysis?.midline_shift} />
             </div>
           )}
 
@@ -2142,6 +2160,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                       </div>
                       {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} structures={inferenceResult.structures} />}
                       <ResultWarnings warnings={inferenceResult.warnings} />
+                      <MidlineShift shift={inferenceResult.volume_analysis?.midline_shift} />
                     </div>
                   );
                 })()}

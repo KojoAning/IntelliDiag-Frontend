@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FiX } from "react-icons/fi";
 import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
+import SeriesDownloadPreview from "./SeriesDownloadPreview";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
 import { getSeriesForStudy, uploadDicom, getModels, authFetch, getStudy, updateStudy } from "../../../lib/api";
@@ -1594,8 +1595,14 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             <div className="flex flex-row gap-4 flex-1 min-h-0 overflow-hidden relative">
               {(imagesLoading || uploading) && (
                 <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 rounded-xl">
-                  <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
-                  <p className="text-[#6B6B6B] text-sm m-0">{uploading ? "Uploading…" : "Loading images…"}</p>
+                  {uploading ? (
+                    <>
+                      <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+                      <p className="text-[#6B6B6B] text-sm m-0">Uploading…</p>
+                    </>
+                  ) : (
+                    <SeriesDownloadPreview seriesId={activeSeries?.id} />
+                  )}
                 </div>
               )}
               {uploadError && (

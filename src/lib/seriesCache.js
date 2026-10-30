@@ -8,7 +8,7 @@
 // downloading again, as long as the series' image list hasn't changed.
 import { authFetch, getImagesForStudy } from "./api";
 import { readStoredSeries, writeStoredSeries, writeStoredThumbnail, deleteStoredSeries, storedSeriesIds, sameRecords } from "./seriesStore";
-import { renderDicomThumbnail, parseMultipartBody, parseDicomInstanceInfo, getDicomMetadata } from "./dicomUtils";
+import { renderDicomThumbnail, createMultipartReader, parseDicomInstanceInfo, getDicomMetadata } from "./dicomUtils";
 
 // Rendered thumbnails, keyed by image id, or `series:<id>` for a series card.
 export const thumbCache = new Map();
@@ -22,7 +22,8 @@ export const PROJECTION_MODALITIES = new Set(["CR", "DX", "MG", "XA", "RF", "IO"
 // Series past the budget still load normally when opened.
 export const MEMORY_BUDGET_BYTES = 1024 * 1024 * 1024;
 
-// seriesId -> { status: "loading" | "ready" | "error" | "skipped", promise, images, metadata, bytes }
+// seriesId -> { status: "loading" | "ready" | "error" | "skipped", promise, images, metadata, bytes,
+//   partial: { slices: [{ instanceNumber, buffer }], total } while it downloads }
 const entries = new Map();
 const listeners = new Set();
 let bytesHeld = 0;
@@ -34,6 +35,12 @@ function setEntry(id, patch) {
 
 export function getSeriesStatus(seriesId) {
   return entries.get(String(seriesId))?.status ?? "idle";
+}
+
+// The slices of a series downloaded so far (null when it isn't downloading), so the viewer
+// can show them before the whole series is in
+export function getSeriesPartial(seriesId) {
+  return entries.get(String(seriesId))?.partial ?? null;
 }
 
 export function subscribeSeriesCache(fn) {
@@ -101,7 +108,11 @@ export function pairPartsWithImages(parts, imgs) {
   return paired;
 }
 
-// Single bulk DICOM fetch for the whole series: one Blob (or null) per image record
+// Single bulk DICOM fetch for the whole series: one Blob (or null) per image record. The
+// response is read as it arrives, and the slices in so far are published as the entry's
+// `partial` (at most every PARTIAL_EVERY_MS).
+const PARTIAL_EVERY_MS = 300;
+
 async function fetchSeriesBulk(seriesId, imgs) {
   const token = await getSeriesToken(seriesId);
   const res = await fetch(
@@ -119,10 +130,38 @@ async function fetchSeriesBulk(seriesId, imgs) {
   const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
   if (!boundary) throw new Error(`No multipart boundary in bulk response. content-type: ${contentType}`);
 
-  const buffer = await res.arrayBuffer();
-  const parts = parseMultipartBody(buffer, boundary);
+  const reader = createMultipartReader(boundary);
+  const parts = [];
+  const slices = [];
+  const total = imgs.filter(img => img.type === "application/dicom").length;
+  let bytes = 0;
+  let published = 0;
+  const publish = () => {
+    published = Date.now();
+    setEntry(String(seriesId), { partial: { slices: slices.slice(), total } });
+  };
+  const take = (newParts) => {
+    for (const part of newParts) {
+      parts.push(part);
+      slices.push({ instanceNumber: parseDicomInstanceInfo(part).instanceNumber, buffer: part });
+    }
+    if (newParts.length && Date.now() - published > PARTIAL_EVERY_MS) publish();
+  };
+  if (res.body?.getReader) {
+    const stream = res.body.getReader();
+    for (;;) {
+      const { done, value } = await stream.read();
+      if (done) break;
+      bytes += value.byteLength;
+      take(reader.push(value));
+    }
+  } else {
+    const buffer = new Uint8Array(await res.arrayBuffer());
+    bytes = buffer.byteLength;
+    take(reader.push(buffer));
+  }
   const blobs = pairPartsWithImages(parts, imgs).map(part => part && new Blob([part], { type: "application/dicom" }));
-  return { blobs, bytes: buffer.byteLength };
+  return { blobs, bytes };
 }
 
 // The viewer's image list from the records and their blobs (downloaded or from disk): a
@@ -188,10 +227,10 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
         : writeStoredSeries(id, { records: imgs, blobs, bytes, thumbnail });
       keep?.catch(err => console.warn("[Series] couldn't keep the download on this device:", err));
       bytesHeld += bytes;
-      setEntry(id, { status: "ready", images, metadata, bytes });
+      setEntry(id, { status: "ready", images, metadata, bytes, partial: null });
       return { images, metadata };
     } catch (err) {
-      setEntry(id, { status: "error" });
+      setEntry(id, { status: "error", partial: null });
       if (!imgs.length) throw err;
       return { images: imgs, metadata: null };
     }

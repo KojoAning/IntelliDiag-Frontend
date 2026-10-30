@@ -59,6 +59,63 @@ export function parseMultipartBody(buffer, boundary) {
   return parts;
 }
 
+// The same parse as parseMultipartBody, a chunk at a time as a download arrives: push(chunk)
+// returns the parts completed by that chunk. Only the unfinished part is held (in a buffer
+// that doubles as needed, so a large part isn't copied again with every chunk), and the
+// parts can be used — and shown — before the response ends.
+export function createMultipartReader(boundary) {
+  const delim = new TextEncoder().encode(`--${boundary}`);
+  let buf = new Uint8Array(1 << 20);
+  let length = 0;      // bytes held in buf
+  let bufStart = 0;    // offset of buf[0] in the whole body
+  let scanFrom = 0;    // buf before this has been searched
+  let inPart = false;  // buf starts at a delimiter
+
+  const isDelimiterAt = (i) => {
+    for (let j = 0; j < delim.length; j++) if (buf[i + j] !== delim[j]) return false;
+    return bufStart + i === 0 || (i >= 2 && buf[i - 2] === 13 && buf[i - 1] === 10);
+  };
+  const payload = (start, end) => {
+    for (let i = start; i < end - 3; i++) {
+      if (buf[i] === 13 && buf[i + 1] === 10 && buf[i + 2] === 13 && buf[i + 3] === 10) {
+        return buf.slice(i + 4, end).buffer;
+      }
+    }
+    return null;
+  };
+
+  function push(chunk) {
+    if (length + chunk.length > buf.length) {
+      const grown = new Uint8Array(Math.max(buf.length * 2, length + chunk.length));
+      grown.set(buf.subarray(0, length));
+      buf = grown;
+    }
+    buf.set(chunk, length);
+    length += chunk.length;
+    const parts = [];
+    let i = Math.max(0, scanFrom - delim.length - 2);
+    for (;;) {
+      i = buf.subarray(0, length).indexOf(delim[0], i);
+      if (i < 0 || i > length - delim.length) break;
+      if (!isDelimiterAt(i)) { i++; continue; }
+      if (inPart) {
+        const part = payload(delim.length, i - 2);
+        if (part) parts.push(part);
+      }
+      // Drop everything before this delimiter
+      buf.copyWithin(0, i, length);
+      length -= i;
+      bufStart += i;
+      inPart = true;
+      i = delim.length;
+    }
+    scanFrom = length;
+    return parts;
+  }
+
+  return { push };
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
@@ -174,6 +231,23 @@ export async function getDicomMetadata(url) {
  * Returns null if the file cannot be parsed or has no pixel data.
  */
 export async function renderDicomThumbnail(file, thumbSize = 128) {
+  const canvas = await drawDicom(file);
+  if (!canvas) return null;
+  const thumb = document.createElement("canvas");
+  thumb.width = thumbSize; thumb.height = thumbSize;
+  thumb.getContext("2d").drawImage(canvas, 0, 0, thumbSize, thumbSize);
+  return thumb.toDataURL("image/jpeg", 0.8);
+}
+
+// A slice at its own proportions, for showing while the series downloads (uncompressed
+// pixel data only; null otherwise)
+export async function renderDicomPreview(file) {
+  const canvas = await drawDicom(file);
+  return canvas ? canvas.toDataURL("image/jpeg", 0.85) : null;
+}
+
+// The first frame on a canvas at native size, rescaled and windowed (embedded window, else min–max)
+async function drawDicom(file) {
   try {
     const buffer    = await file.arrayBuffer();
     const byteArray = new Uint8Array(buffer);
@@ -240,12 +314,7 @@ export async function renderDicomThumbnail(file, thumbSize = 128) {
       imgData.data[i * 4 + 3] = 255;
     }
     ctx.putImageData(imgData, 0, 0);
-
-    // Scale down to thumbnail
-    const thumb = document.createElement("canvas");
-    thumb.width = thumbSize; thumb.height = thumbSize;
-    thumb.getContext("2d").drawImage(canvas, 0, 0, thumbSize, thumbSize);
-    return thumb.toDataURL("image/jpeg", 0.8);
+    return canvas;
   } catch {
     return null;
   }

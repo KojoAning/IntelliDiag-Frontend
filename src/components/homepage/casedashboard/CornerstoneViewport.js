@@ -34,6 +34,7 @@ import { probePixel, mmPerCanvasPixel } from "../../../lib/viewportReadouts";
 import OrientationMarkers, { getOrientationMarkers } from "./OrientationMarkers";
 import ScaleBar from "./ScaleBar";
 import { listRois, suggestRoiName, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolume";
+import StackBrushLayer from "./StackBrushLayer";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -114,10 +115,13 @@ function applyVoi(viewport, imageId) {
  *   getDisplay() → display, applyDisplay(display)  for linked viewers
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onDisplayChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue },
+  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onDisplayChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue, brushRegions = null, onBrushRegionsChange },
   ref
 ) {
   const divRef = useRef(null);
+  // The brush layer needs the element once it's mounted (it listens to its render events)
+  const [element, setElement] = useState(null);
+  const setDivRef = (el) => { divRef.current = el; if (el !== element) setElement(el); };
   const arrowTextCbRef = useRef(onArrowTextRequest);
   arrowTextCbRef.current = onArrowTextRequest;
   const onIndexChangeCbRef = useRef(onIndexChange);
@@ -147,8 +151,10 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
   const LEFT_TOOLS = { wl: WindowLevelTool.toolName, pan: PanTool.toolName, pointer: null };
   const applyBindings = (toolGroup = ctx.current?.toolGroup) => {
     if (!toolGroup) return;
+    // The brush (StackBrushLayer) takes the left button itself
+    const brush = !readOnly && activeToolRef.current === "brush";
     applyHorosMouseBindings(toolGroup, {
-      primary: (readOnly ? null : TOOL_MAP[activeToolRef.current])
+      primary: brush ? null : (readOnly ? null : TOOL_MAP[activeToolRef.current])
         ?? (leftToolRef.current in LEFT_TOOLS ? LEFT_TOOLS[leftToolRef.current] : WindowLevelTool.toolName),
       interactiveTools: readOnly ? [] : ALL_ANNOTATION_TOOLS,
     });
@@ -677,14 +683,24 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
   return (
     <div className="relative" style={{ width: "100%", height: "100%" }}>
       <div
-        ref={divRef}
-        style={{ width: "100%", height: "100%" }}
+        ref={setDivRef}
+        style={{ width: "100%", height: "100%", cursor: activeTool === "brush" && !readOnly ? "none" : undefined }}
         onContextMenu={e => e.preventDefault()}
         onMouseMove={reportPixel}
         onMouseLeave={clearPixel}
       />
       <OrientationMarkers markers={orientation} />
       <ScaleBar mmPerPixel={scale.mmPerPixel} paneHeight={scale.height} />
+      {!readOnly && onBrushRegionsChange && (
+        <StackBrushLayer
+          getViewport={() => ctx.current?.viewport}
+          element={element}
+          imageIds={imageIds}
+          active={activeTool === "brush"}
+          regions={brushRegions}
+          onRegionsChange={onBrushRegionsChange}
+        />
+      )}
     </div>
   );
 });

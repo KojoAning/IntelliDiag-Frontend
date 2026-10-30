@@ -255,7 +255,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [activePlane, setActivePlane] = useState("axial");
 
   const switchViewMode = (mode) => {
-    if (mode !== "mpr") setActiveTool(t => (t === "brush" ? null : t));
+    if (mode === "3d") setActiveTool(t => (t === "brush" ? null : t));
     setViewMode(mode);
     onViewModeChange?.(mode);
   };
@@ -618,7 +618,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         setKeyImages(new Set(restoreKeyImages(annotations, imageIds, images)));
         setRecistReference(restoreRecistReference(annotations));
         // Keep any region drawn in the 3D view while this was loading
-        const savedRegions = restoreMprRegions(annotations);
+        const savedRegions = restoreMprRegions(annotations, imageIds, images);
         setMprRegions(prev => [...savedRegions, ...prev.filter(r => !savedRegions.some(s => s.uid === r.uid))]);
         annotationsRestoredForRef.current = seriesId;
         // Save what was drawn while this loaded (merged with the saved set) now, not at the next edit
@@ -1066,8 +1066,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     { name: "polygon", icon: <PiPolygonLight size={19} />, label: "Polygon ROI (D)" },
     { name: "pencil", icon: <TbPencil size={19} />, label: "Pencil — freehand line" },
     { name: "text", icon: <TbLetterT size={19} />, label: "Text label" },
-    // Painting needs the volume (and its segmentation layer) — 3-plane view only for now
-    ...(viewMode === "mpr" ? [{ name: "brush", icon: <TbBrush size={19} />, label: "Brush — paint a region; Alt erases, [ ] size" }] : []),
+    // 2D and 3-plane views (they share the painted regions); not the 3D rendering
+    ...(viewMode !== "3d" ? [{ name: "brush", icon: <TbBrush size={19} />, label: "Brush — paint a region; Alt erases, [ ] size" }] : []),
   ];
 
   const measureTools = [
@@ -1678,6 +1678,15 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onCameraChanged={handleCameraChanged}
                 onRoisChange={setRois}
                 onPixelValue={(probe) => pixelFeedRef.current?.(probe)}
+                brushRegions={mprRegions}
+                onBrushRegionsChange={(brushes) => {
+                  // The 2D view owns the per-slice brush regions while it's open; 3D-view polygons and
+                  // brush regions in the earlier whole-volume form (which it can't show) pass through
+                  const next = [...mprRegionsRef.current.filter(r => r.kind !== "brush" || !r.slices), ...brushes];
+                  setMprRegions(next);
+                  mprRegionsRef.current = next;
+                  scheduleSaveRef.current?.();
+                }}
               />
             ) : viewMode === "3d" ? (
               <CornerstoneVolume3D
@@ -2136,10 +2145,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                           <span className="text-[13px] text-[#0694FB] font-mono">{`${roi.volumeCm3.toFixed(2)} cm³`}</span>
                         </div>
                         {roi.sizeMm && (
-                          <div className="flex items-baseline justify-between" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
-                            <span className="text-[11px] text-[#868686]">Size</span>
-                            <span className="text-[12px] text-white font-mono">
-                              {formatSize(roi.sizeMm)} <span className="text-[10px] text-[#6B6B6B]">{SIZE_AXES_LABEL}</span>
+                          <div className="flex items-baseline justify-between gap-3" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
+                            <span className="text-[11px] text-[#868686] shrink-0">Size</span>
+                            <span className="flex flex-col items-end">
+                              <span className="text-[12px] text-white font-mono whitespace-nowrap">{formatSize(roi.sizeMm)}</span>
+                              <span className="text-[10px] text-[#6B6B6B] whitespace-nowrap">{SIZE_AXES_LABEL}</span>
                             </span>
                           </div>
                         )}

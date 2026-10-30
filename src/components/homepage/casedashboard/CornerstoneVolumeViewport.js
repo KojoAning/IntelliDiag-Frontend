@@ -38,6 +38,7 @@ import { uid } from "../../../lib/uid";
 import { snapshotMetadata } from "../../../lib/metadataSnapshot";
 import { loadVolume, failedSlicesNote } from "../../../lib/volumeLoad";
 import { createExtent, addPoint, extentSize, voxelFootprint, formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
+import { encodeSliceRuns, applyRuns } from "../../../lib/brushRuns";
 
 // Starting intensity window for growing a drawn region (mean ± this many SDs); the popup's
 // −/+ buttons tighten or loosen it within these bounds.
@@ -255,27 +256,6 @@ function labelByClass(classes, w, h, d, spacingMm) {
   stats.forEach(stat => { stat.volumeCm3 = stat.voxelCount * voxelVolumeCm3; });
   // A copy — manual ROIs get written into the label array, the class array stays as decoded
   return { labels: classes.slice(), stats };
-}
-
-// Runs of each wanted label along a label array: Map<label, [start, length, …]>
-function encodeLabelRuns(labels, wanted) {
-  const runs = new Map();
-  let current = 0;
-  let start = 0;
-  const close = (end) => {
-    if (!wanted.has(current)) return;
-    if (!runs.has(current)) runs.set(current, []);
-    runs.get(current).push(start, end - start);
-  };
-  for (let i = 0; i < labels.length; i++) {
-    const v = labels[i];
-    if (v === current) continue;
-    close(i);
-    current = v;
-    start = i;
-  }
-  close(labels.length);
-  return runs;
 }
 
 // Voxel count, slice range and volume of one label (a brush region after a stroke)
@@ -1294,9 +1274,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   // The drawn regions as saved with the series' measurements: { uid, outline, tolerance, number, voxelCount }.
   // A region that regrew to a different size keeps its saved size (and the popup's note)
   // until it's adjusted.
-  // Brush regions are saved as their voxels: { uid, kind: "brush", number, voxelCount,
-  // dims: [w, h, d], runs: [start, length, …] } — runs of the region along the volume's
-  // flattened voxel order.
+  // Brush regions are saved as their voxels per slice: { uid, kind: "brush", number,
+  // voxelCount, slices: { [imageId]: runs } } (lib/brushRuns) — the same form the 2D view
+  // paints in, so either view shows the other's regions.
   const listDrawnRegions = () => {
     const entries = [...growSeedsRef.current].filter(([label]) => manualLabelsRef.current.has(label));
     const polygons = entries
@@ -1306,12 +1286,14 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         voxelCount: info.savedVoxelCount ?? lesionStatsRef.current?.get(label)?.voxelCount ?? null,
       }));
     const brushes = entries.filter(([, info]) => info.brush);
-    if (!brushes.length || !labelArrayRef.current || !labelDimsRef.current) return polygons;
-    const runs = encodeLabelRuns(labelArrayRef.current, new Set(brushes.map(([label]) => label)));
-    const { w, h, d } = labelDimsRef.current;
+    const volumeImageIds = csCache.getVolume(volumeIdRef.current)?.imageIds;
+    if (!brushes.length || !labelArrayRef.current || !labelDimsRef.current || !volumeImageIds) return polygons;
+    const { w, h } = labelDimsRef.current;
+    const runs = encodeSliceRuns(labelArrayRef.current, new Set(brushes.map(([label]) => label)), w * h);
     return [...polygons, ...brushes.map(([label, info]) => ({
       uid: info.uid, kind: "brush", number: manualLabelNumberRef.current.get(label) ?? null,
-      voxelCount: lesionStatsRef.current?.get(label)?.voxelCount ?? null, dims: [w, h, d], runs: runs.get(label) ?? [],
+      voxelCount: lesionStatsRef.current?.get(label)?.voxelCount ?? null,
+      slices: Object.fromEntries([...(runs.get(label) ?? new Map())].map(([k, r]) => [volumeImageIds[k], r])),
     }))];
   };
   const reportRegions = () => onRegionsChangeCbRef.current?.(listDrawnRegions());
@@ -1565,24 +1547,29 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brushActive]);
 
-  // A saved brush region back into the segmentation layer — only on the same voxel grid it
-  // was painted on (the series' images haven't changed)
+  // A saved brush region back into the segmentation layer: per slice (painted here or in
+  // the 2D view), or the earlier whole-volume form — that only on the same voxel grid
   const restoreBrushRegion = (region) => {
     const volume = csCache.getVolume(volumeIdRef.current);
-    if (!volume?.imageData || !(region.runs?.length >= 2)) return false;
+    const hasSlices = region.slices && Object.keys(region.slices).length;
+    if (!volume?.imageData || (!hasSlices && !(region.runs?.length >= 2))) return false;
     const { segmentationId, dims, labelmapVolume } = ensureSegmentation(volume);
-    if (region.dims && (region.dims[0] !== dims.w || region.dims[1] !== dims.h || region.dims[2] !== dims.d)) {
+    if (!hasSlices && region.dims && (region.dims[0] !== dims.w || region.dims[1] !== dims.h || region.dims[2] !== dims.d)) {
       console.warn(`[MPR] brush region ${region.uid} was painted on a ${region.dims.join("×")} volume; this one is ${dims.w}×${dims.h}×${dims.d} — not restored`);
       return false;
     }
     const label = addManualLabel(segmentationId, { uid: region.uid, brush: true }, region.number ?? null);
     if (label == null) return false;
     const labels = labelArrayRef.current;
-    for (let r = 0; r + 1 < region.runs.length; r += 2) {
-      const end = Math.min(labels.length, region.runs[r] + region.runs[r + 1]);
-      for (let i = Math.max(0, region.runs[r]); i < end; i++) {
-        if (labels[i] === 0) labels[i] = label;
-      }
+    const sliceSize = dims.w * dims.h;
+    if (hasSlices) {
+      const kOf = new Map(volume.imageIds.map((id, k) => [id, k]));
+      Object.entries(region.slices).forEach(([imageId, runs]) => {
+        const k = kOf.get(imageId);
+        if (k !== undefined) applyRuns(labels, runs, label, k * sliceSize, sliceSize);
+      });
+    } else {
+      applyRuns(labels, region.runs, label);
     }
     labelmapVolume.voxelManager.setCompleteScalarDataArray(labels);
     csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId);

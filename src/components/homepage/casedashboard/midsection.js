@@ -22,6 +22,7 @@ import { renameRoi, deleteRoi, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolum
 import { getSeriesAnnotations, saveSeriesAnnotations } from "../../../lib/api";
 import { captureViewer, canvasBlob, download, copyImage, printImage, recordMovie, seriesZip } from "../../../lib/viewerExport";
 import { zipFiles } from "../../../lib/zipWriter";
+import { secondaryCapture } from "../../../lib/dicomWriter";
 import { eventTarget as csEventTarget, Enums as csEnums } from "@cornerstonejs/core";
 import { annotation as csAnnotation, Enums as csToolsEnums, CrosshairsTool, BidirectionalTool } from "@cornerstonejs/tools";
 import {
@@ -863,17 +864,26 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     if (!files.length) throw new Error("No key images");
     download(zipFiles(files), `${base}_key_images.zip`);
   });
-  // The open series' DICOM files; the token only goes to our backend (as Cornerstone's loader does)
-  const downloadSeries = (anonymize, keyOnly = false) => runExport(anonymize ? "Anonymising series" : "Zipping series", async () => {
+  // An image record's DICOM file; the token only goes to our backend (as Cornerstone's loader does)
+  const imageBytes = async (img) => {
     const apiBase = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
-    const getBytes = async (img) => {
-      const src = img.blobUrl ?? img.url;
-      const token = localStorage.getItem("token");
-      const auth = token && !src.startsWith("blob:") && (!apiBase || src.includes(apiBase));
-      const res = await fetch(src, auth ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-      if (!res.ok) throw new Error(`HTTP ${res.status} for ${img.name ?? src}`);
-      return res.arrayBuffer();
-    };
+    const src = img.blobUrl ?? img.url;
+    const token = localStorage.getItem("token");
+    const auth = token && !src.startsWith("blob:") && (!apiBase || src.includes(apiBase));
+    const res = await fetch(src, auth ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${img.name ?? src}`);
+    return res.arrayBuffer();
+  };
+  // The picture as a DICOM Secondary Capture, with the series' patient and study, for a PACS
+  const saveDicomCapture = () => runExport("Saving DICOM", async () => {
+    const canvas = await captureViewer(viewportWrapRef.current);
+    const sourceImage = images[fileOfFrame(currentIndexRef.current)] ?? images.find(isDicomImage);
+    const source = sourceImage && isDicomImage(sourceImage) ? await imageBytes(sourceImage).catch(() => null) : null;
+    download(new Blob([secondaryCapture(canvas, source)], { type: "application/dicom" }), `${exportBaseName()}.dcm`);
+  });
+  // The open series' DICOM files
+  const downloadSeries = (anonymize, keyOnly = false) => runExport(anonymize ? "Anonymising series" : "Zipping series", async () => {
+    const getBytes = imageBytes;
     // Key images: their files (a multi-frame file once, whole)
     const chosen = keyOnly ? [...new Set(keyIndices().map(fileOfFrame))].sort((a, b) => a - b).map(i => images[i]).filter(Boolean) : images;
     const { blob, name, count } = await seriesZip(chosen, getBytes, {
@@ -1616,6 +1626,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[230px] py-1">
                   <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Image (without patient details)</span>
                   {item("Save as PNG", saveImage)}
+                  {item("Save as DICOM", saveDicomCapture, { hint: "A secondary-capture image with this patient and study, to send to a PACS" })}
                   {item("Copy to clipboard", copyViewerImage, { disabled: !window.ClipboardItem, hint: window.ClipboardItem ? undefined : "This browser can't copy images" })}
                   {item("Print", printViewer)}
                   {item(`Save movie (${frameCount} slices)`, saveMovie, {

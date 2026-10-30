@@ -29,9 +29,10 @@ export function encodeSliceRuns(labels, wanted, sliceSize) {
   return out;
 }
 
-// Paint runs into a label array at an offset (a slice's start), only over unlabelled
-// pixels — a region never overwrites an AI finding or another region. Returns the count.
-export function applyRuns(target, runs, label, offset = 0, sliceSize = Infinity) {
+// Paint runs into a label array at an offset (a slice's start), only over pixels
+// canPaint allows (by default unlabelled ones — a region never overwrites an AI finding or
+// another region). Returns the count.
+export function applyRuns(target, runs, label, offset = 0, sliceSize = Infinity, canPaint = v => v === 0) {
   let painted = 0;
   for (let r = 0; r + 1 < runs.length; r += 2) {
     const from = Math.max(0, runs[r]);
@@ -39,8 +40,59 @@ export function applyRuns(target, runs, label, offset = 0, sliceSize = Infinity)
     for (let i = from; i < to; i++) {
       const idx = offset + i;
       if (idx >= target.length) break;
-      if (target[idx] === 0) { target[idx] = label; painted++; }
+      if (canPaint(target[idx])) { target[idx] = label; painted++; }
     }
   }
   return painted;
+}
+
+// Compact form for saving: each run as (gap since the previous run's end, length), as
+// unsigned LEB128 varints, base64 — a few times smaller than the JSON number list, which
+// keeps a save under the 64 KB limit of a request sent while the tab closes. unpackRuns
+// also takes the plain number list (older saves).
+export function packRuns(runs) {
+  const bytes = [];
+  const varint = (v) => {
+    let n = Math.max(0, Math.floor(v));
+    do {
+      let b = n & 0x7f;
+      n = Math.floor(n / 128);
+      if (n > 0) b |= 0x80;
+      bytes.push(b);
+    } while (n > 0);
+  };
+  let end = 0;
+  for (let i = 0; i + 1 < runs.length; i += 2) {
+    varint(runs[i] - end);
+    varint(runs[i + 1]);
+    end = runs[i] + runs[i + 1];
+  }
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+export function unpackRuns(packed) {
+  if (Array.isArray(packed)) return packed;
+  if (typeof packed !== "string") return [];
+  const binary = atob(packed);
+  const runs = [];
+  let i = 0;
+  const varint = () => {
+    let n = 0, mult = 1, b;
+    do {
+      b = binary.charCodeAt(i++);
+      n += (b & 0x7f) * mult;
+      mult *= 128;
+    } while (b & 0x80 && i < binary.length);
+    return n;
+  };
+  let end = 0;
+  while (i < binary.length) {
+    const start = end + varint();
+    const length = varint();
+    runs.push(start, length);
+    end = start + length;
+  }
+  return runs;
 }

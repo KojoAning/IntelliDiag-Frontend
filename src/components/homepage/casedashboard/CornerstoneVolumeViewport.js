@@ -886,6 +886,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
         segmentationIdRef.current = null;
         labelmapVolumeRef.current = null;
         labelArrayRef.current = null;
+        classArrayRef.current = null; // no anatomy under the regions any more
         labelDimsRef.current = null;
         lesionStatsRef.current = null;
         nextLesionLabelRef.current = 0;
@@ -968,7 +969,8 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           let nextLabel = Math.max(0, ...lesionStats.keys());
           for (let voxelIdx = 0; voxelIdx < priorLabelArray.length; voxelIdx++) {
             const oldLabel = priorLabelArray[voxelIdx];
-            if (!oldLabel || !priorManualLabels.has(oldLabel) || componentLabels[voxelIdx] !== 0) continue;
+            // AI findings win where they overlap; anatomy structures don't (a lesion drawn on an organ stays)
+            if (!oldLabel || !priorManualLabels.has(oldLabel) || (componentLabels[voxelIdx] !== 0 && !colorByClassRef.current)) continue;
             let newLabel = remap.get(oldLabel);
             if (newLabel === undefined) {
               if (nextLabel >= 254) continue;
@@ -1107,6 +1109,36 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     refreshSegmentationStyle(segmentationId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLesion]);
+
+  // Drawn and painted regions go over unlabelled voxels — and, on an anatomy result, over the
+  // structures too (a lesion inside the liver is drawn on the liver); never over AI
+  // findings or another region. A voxel a region leaves goes back to what was under it.
+  const paintable = (current) => current === 0
+    || (colorByClassRef.current && !!classArrayRef.current && !manualLabelsRef.current.has(current));
+  const underlying = (idx) => (colorByClassRef.current && classArrayRef.current ? classArrayRef.current[idx] : 0);
+
+  // Which anatomy structures a region sits on (anatomy results only): [{ name, pct }],
+  // largest first, those under 5% left out
+  const anatomyLocation = (label) => {
+    const classes = classArrayRef.current;
+    const labels = labelArrayRef.current;
+    if (!colorByClassRef.current || !classes || !labels) return null;
+    const counts = new Map();
+    let total = 0;
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i] !== label) continue;
+      total++;
+      const c = classes[i];
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    if (!total) return null;
+    const legend = maskLegendRef.current ?? [];
+    const rows = [...counts]
+      .map(([c, n]) => ({ name: c ? (legend[c - 1]?.clinical_name ?? legend[c - 1]?.name ?? `structure ${c}`) : "outside the segmented structures", pct: Math.round((100 * n) / total) }))
+      .filter(r => r.pct >= 5)
+      .sort((a, b) => b.pct - a.pct);
+    return rows.length ? rows : null;
+  };
 
   // The segmentation layer drawn regions and brush strokes go into: the AI layer if there
   // is one, otherwise an empty one made for them
@@ -1279,11 +1311,18 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
   // paints in, so either view shows the other's regions.
   const listDrawnRegions = () => {
     const entries = [...growSeedsRef.current].filter(([label]) => manualLabelsRef.current.has(label));
+    // Measurements for the report (and the saved record): volume, size, anatomy under it
+    const summaryOf = (label) => {
+      const stat = lesionStatsRef.current?.get(label);
+      if (!stat) return null;
+      return { volumeCm3: stat.volumeCm3, sizeMm: regionSizeOf(label, stat), location: anatomyLocation(label) };
+    };
     const polygons = entries
       .filter(([, info]) => info.outline)
       .map(([label, info]) => ({
         uid: info.uid, outline: info.outline, tolerance: info.tolerance, number: manualLabelNumberRef.current.get(label) ?? null,
         voxelCount: info.savedVoxelCount ?? lesionStatsRef.current?.get(label)?.voxelCount ?? null,
+        summary: summaryOf(label),
       }));
     const brushes = entries.filter(([, info]) => info.brush);
     const volumeImageIds = csCache.getVolume(volumeIdRef.current)?.imageIds;
@@ -1294,6 +1333,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       uid: info.uid, kind: "brush", number: manualLabelNumberRef.current.get(label) ?? null,
       voxelCount: lesionStatsRef.current?.get(label)?.voxelCount ?? null,
       slices: Object.fromEntries([...(runs.get(label) ?? new Map())].map(([k, r]) => [volumeImageIds[k], r])),
+      summary: summaryOf(label),
     }))];
   };
   const reportRegions = () => onRegionsChangeCbRef.current?.(listDrawnRegions());
@@ -1408,11 +1448,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           const current = labels[idx];
           if (stroke.erase) {
             if (!erasable.has(current)) continue;
-            labels[idx] = 0;
-            voxelManager.setAtIndex(idx, 0);
+            labels[idx] = underlying(idx);
+            voxelManager.setAtIndex(idx, labels[idx]);
             stroke.touched.add(current);
           } else {
-            if (current !== 0) continue;
+            if (current === stroke.label || !paintable(current)) continue;
             labels[idx] = stroke.label;
             voxelManager.setAtIndex(idx, stroke.label);
           }
@@ -1566,10 +1606,10 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       const kOf = new Map(volume.imageIds.map((id, k) => [id, k]));
       Object.entries(region.slices).forEach(([imageId, runs]) => {
         const k = kOf.get(imageId);
-        if (k !== undefined) applyRuns(labels, runs, label, k * sliceSize, sliceSize);
+        if (k !== undefined) applyRuns(labels, runs, label, k * sliceSize, sliceSize, paintable);
       });
     } else {
-      applyRuns(labels, region.runs, label);
+      applyRuns(labels, region.runs, label, 0, Infinity, paintable);
     }
     labelmapVolume.voxelManager.setCompleteScalarDataArray(labels);
     csSegmentation.triggerSegmentationEvents.triggerSegmentationDataModified(segmentationId);
@@ -1726,6 +1766,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       isManual,
       polygonNumber: isManual ? manualLabelNumberRef.current.get(label) : null,
       isBrush: isManual && !!growSeedsRef.current.get(label)?.brush,
+      location: isManual ? anatomyLocation(label) : null,
       savedVoxelCount: isManual ? growSeedsRef.current.get(label)?.savedVoxelCount ?? null : null,
       confidence,
       regionName: isManual ? null : regionName,
@@ -1818,7 +1859,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     const volDims = [w, h, d];
 
     for (let idx = 0; idx < labelArray.length; idx++) {
-      if (labelArray[idx] === label) labelArray[idx] = 0; // drop the previous growth
+      if (labelArray[idx] === label) labelArray[idx] = underlying(idx); // drop the previous growth
     }
     const { voxels, sliceMin, sliceMax } = growRegionThroughSlices({
       scalars: getVolumeScalars(mainVolume),
@@ -1828,7 +1869,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       fixedValue: info.fixedValue,
       varyingAxes: info.varyingAxes,
       tolerance: info.tolerance,
-      isFree: (idx) => labelArray[idx] === 0 || labelArray[idx] === label,
+      isFree: (idx) => labelArray[idx] === label || paintable(labelArray[idx]),
     });
     voxels.forEach(idx => { labelArray[idx] = label; });
 
@@ -1846,7 +1887,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
           coord[info.varyingAxes[1]] = b;
           coord[info.fixedAxis] = f;
           const idx = coord[2] * w * h + coord[1] * w + coord[0];
-          if (labelArray[idx] === 0) labelArray[idx] = label;
+          if (paintable(labelArray[idx])) labelArray[idx] = label;
         });
       });
     }
@@ -1886,7 +1927,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     if (!labelArray || !segmentationId || !labelmapVolume) return;
 
     for (let idx = 0; idx < labelArray.length; idx++) {
-      if (labelArray[idx] === label) labelArray[idx] = 0;
+      if (labelArray[idx] === label) labelArray[idx] = underlying(idx);
     }
     lesionStatsRef.current?.delete(label);
     manualLabelsRef.current.delete(label);
@@ -2264,6 +2305,11 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
                 {selectedLesion.sizeMm && row("Size", (
                   <span className="text-[12px] text-white font-mono" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
                     {formatSize(selectedLesion.sizeMm)} <span className="text-[10px] text-[#6B6B6B]">{SIZE_AXES_LABEL}</span>
+                  </span>
+                ))}
+                {selectedLesion.location && row("Location", (
+                  <span className="text-[11px] text-white text-right" title="From the anatomy model's structures under the region">
+                    {selectedLesion.location.map(l => `${l.name} ${l.pct}%`).join(", ")}
                   </span>
                 ))}
                 {row("Voxels", <span className="text-[11px] text-[#949494] font-mono">{selectedLesion.voxelCount.toLocaleString()}</span>)}

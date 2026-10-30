@@ -115,7 +115,7 @@ function applyVoi(viewport, imageId) {
  *   getDisplay() → display, applyDisplay(display)  for linked viewers
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onDisplayChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue, brushRegions = null, onBrushRegionsChange },
+  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onDisplayChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue, brushRegions = null, brushReady = true, onBrushRegionsChange },
   ref
 ) {
   const divRef = useRef(null);
@@ -698,6 +698,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
           imageIds={imageIds}
           active={activeTool === "brush"}
           regions={brushRegions}
+          ready={brushReady}
           onRegionsChange={onBrushRegionsChange}
         />
       )}

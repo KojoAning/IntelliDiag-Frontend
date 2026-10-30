@@ -9,6 +9,7 @@ import {
   LengthTool, AngleTool, EllipticalROITool, CircleROITool, RectangleROITool,
   ArrowAnnotateTool, ProbeTool, PlanarFreehandROITool, BidirectionalTool, CobbAngleTool, LabelTool,
 } from "@cornerstonejs/tools";
+import { packRuns, unpackRuns } from "./brushRuns";
 
 // Freehand open-line drawing: a second PlanarFreehandROI instance under its own name, so
 // pencil strokes are never treated as named ROIs (see the viewers' tool groups)
@@ -90,14 +91,14 @@ export function serializeAnnotations(imageIds, images, { keyImageIds = [], recis
     : [];
   const brushSlices = (slices) => Object.fromEntries(Object.entries(slices ?? {})
     .filter(([imageId, runs]) => keyByImageId.has(imageId) && runs?.length)
-    .map(([imageId, runs]) => [keyByImageId.get(imageId), runs]));
-  const regions = mprRegions.map(({ uid, kind, outline, tolerance, number, voxelCount = null, slices, dims, runs }) => toPlainJson({
+    .map(([imageId, runs]) => [keyByImageId.get(imageId), packRuns(runs)]));
+  const regions = mprRegions.map(({ uid, kind, outline, tolerance, number, voxelCount = null, slices, dims, runs, summary = null }) => toPlainJson({
     annotationUID: `mpr-region-${uid}`,
     metadata: { toolName: MPR_REGION_TYPE },
     data: kind === "brush"
       // dims/runs: the earlier whole-volume form, passed through until it's repainted
-      ? (slices ? { uid, kind, number, voxelCount, slices: brushSlices(slices) } : { uid, kind, number, voxelCount, dims, runs })
-      : { uid, outline, tolerance, number, voxelCount },
+      ? (slices ? { uid, kind, number, voxelCount, summary, slices: brushSlices(slices) } : { uid, kind, number, voxelCount, summary, dims, runs })
+      : { uid, outline, tolerance, number, voxelCount, summary },
   }));
   return [...measurements, ...keyImages, ...reference, ...regions];
 }
@@ -141,11 +142,12 @@ export function restoreRecistReference(saved) {
 export function restoreMprRegions(saved, imageIds = [], images = []) {
   const { imageIdByKey } = buildKeyMaps(imageIds, images);
   const brush = (data) => {
-    const base = { uid: data.uid, kind: "brush", number: data.number ?? null, voxelCount: data.voxelCount ?? null };
+    const base = { uid: data.uid, kind: "brush", number: data.number ?? null, voxelCount: data.voxelCount ?? null, summary: data.summary ?? null };
     if (data.slices && typeof data.slices === "object") {
       const slices = Object.fromEntries(Object.entries(data.slices)
-        .filter(([key, runs]) => imageIdByKey.has(key) && Array.isArray(runs) && runs.length >= 2)
-        .map(([key, runs]) => [imageIdByKey.get(key), runs]));
+        .filter(([key]) => imageIdByKey.has(key))
+        .map(([key, packed]) => [imageIdByKey.get(key), unpackRuns(packed)])
+        .filter(([, runs]) => runs.length >= 2));
       return Object.keys(slices).length ? { ...base, slices } : null;
     }
     return Array.isArray(data.runs) && data.runs.length >= 2 ? { ...base, dims: data.dims ?? null, runs: data.runs } : null;
@@ -155,7 +157,7 @@ export function restoreMprRegions(saved, imageIds = [], images = []) {
     .map(({ data }) => (data.kind === "brush"
       ? brush(data)
       : (data.outline?.length >= 3
-        ? { uid: data.uid, outline: data.outline, tolerance: data.tolerance, number: data.number ?? null, voxelCount: data.voxelCount ?? null }
+        ? { uid: data.uid, outline: data.outline, tolerance: data.tolerance, number: data.number ?? null, voxelCount: data.voxelCount ?? null, summary: data.summary ?? null }
         : null)))
     .filter(Boolean);
 }

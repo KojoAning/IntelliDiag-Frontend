@@ -26,6 +26,7 @@ import * as dicomImageLoader from "@cornerstonejs/dicom-image-loader";
 import { volumeLoader, cornerstoneStreamingImageVolumeLoader } from "@cornerstonejs/core";
 import loadWebImage from "./webImageLoader";
 import { installMetadataSnapshot } from "./metadataSnapshot";
+import { installSuvScaling } from "./suvScaling";
 
 let initialized = false;
 let initPromise = null;
@@ -90,6 +91,8 @@ export async function initCornerstone() {
 
     // Keep each image's geometry once read, so it survives cache eviction
     installMetadataSnapshot();
+    // PET pixel values in SUV (body weight)
+    installSuvScaling();
 
     // Register loader for plain web/blob image URLs (PNG/JPG)
     imageLoader.registerImageLoader("web", loadWebImage);

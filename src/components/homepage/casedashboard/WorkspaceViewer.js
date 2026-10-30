@@ -17,7 +17,29 @@ const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "")
 // Add Study form calls "indication", and reports print as "Clinical history"). The latest
 // text per study is kept here too, since the workspace remounts on every series switch.
 const historyByStudy = new Map();
+const examByStudy = new Map();
 const HISTORY_SAVE_DELAY_MS = 800;
+
+// The exam as the radiologist has it on the study ("CT · CT ABDOMEN PELVIS · abdomen"),
+// sent as confirmed; null when it's empty
+function confirmedExam(exam) {
+  if (!exam) return null;
+  const text = [exam.modality, exam.studyName, exam.bodyRegion].map(v => (v || "").trim()).filter(Boolean).join(" · ");
+  return text || null;
+}
+
+// Drawn / painted regions with measurements, as the report takes them
+function markedRegionsForReport(regions) {
+  const rows = (regions ?? [])
+    .filter(r => r.summary?.volumeCm3 != null)
+    .map(r => ({
+      name: `${r.kind === "brush" ? "Brush" : "Region"} ${r.number ?? ""}`.trim(),
+      volume_cm3: Math.round(r.summary.volumeCm3 * 100) / 100,
+      size_mm: r.summary.sizeMm ?? null,
+      location: r.summary.location ?? null,
+    }));
+  return rows.length ? rows : null;
+}
 
 // What the inference worker works out for the report — which model ran, what kind of scan
 // it is, structure / lesion sizes — passed through as the result holds it
@@ -31,6 +53,7 @@ function reportFacts(results) {
     lesions: vol.lesions?.length ? vol.lesions : null,
     largest_lesion_size_mm: vol.largest_lesion_size_mm ?? null,
     tumour_parts_cm3: vol.tumour_parts_cm3 ?? null,
+    midline_shift: vol.midline_shift ?? null,
   };
 }
 
@@ -98,14 +121,22 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
   // saved until it has loaded, so a failed load can't wipe the stored text.
   const historyLoadedForRef = useRef(historyByStudy.has(String(studyId)) ? String(studyId) : null);
   const historyDirtyRef = useRef(false); // typed before the load finished — keep what was typed
+  // The exam as recorded on the study (modality, name, body region) — editable next to the
+  // history, saved with it, and sent to the report as confirmed by the radiologist
+  const [exam, setExam] = useState(null); // { modality, studyName, bodyRegion, edited }
+  const examRef = useRef(exam);
+  examRef.current = exam;
+  // Regions the radiologist drew or painted on the open series (midsection), for the report
+  const markedRegionsRef = useRef([]);
   const patientHistoryRef = useRef(patientHistory);
   patientHistoryRef.current = patientHistory;
   const historyTimerRef = useRef(null);
   useEffect(() => {
     const id = studyId && String(studyId);
     if (!id || historyLoadedForRef.current === id) return;
-    if (historyByStudy.has(id)) {
+    if (historyByStudy.has(id) && examByStudy.has(id)) {
       setPatientHistory(historyByStudy.get(id));
+      setExam(examByStudy.get(id));
       historyLoadedForRef.current = id;
       return;
     }
@@ -113,6 +144,9 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
     getStudy(id)
       .then(study => {
         if (cancelled) return;
+        const loadedExam = { modality: study?.modality ?? "", studyName: study?.study_name ?? "", bodyRegion: study?.body_region ?? "", edited: false };
+        setExam(loadedExam);
+        examByStudy.set(id, loadedExam);
         const saved = study?.clinical_indication ?? "";
         if (!historyDirtyRef.current) setPatientHistory(saved);
         historyByStudy.set(id, historyDirtyRef.current ? patientHistoryRef.current : saved);
@@ -128,9 +162,24 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
     historyTimerRef.current = null;
     const id = historyLoadedForRef.current;
     if (!id) return;
-    updateStudy(id, { clinical_indication: patientHistoryRef.current.trim() || null }, options)
+    const examNow = examRef.current;
+    updateStudy(id, {
+      clinical_indication: patientHistoryRef.current.trim() || null,
+      ...(examNow?.edited && examNow.studyName.trim() ? { study_name: examNow.studyName.trim() } : {}),
+      ...(examNow?.edited ? { body_region: examNow.bodyRegion.trim() } : {}),
+    }, options)
       .catch(err => console.warn("[History] couldn't save the clinical history:", err));
   }, []);
+  const handleExamChange = (change) => {
+    const id = historyLoadedForRef.current;
+    if (!id || !examRef.current) return;
+    const next = { ...examRef.current, ...change, edited: true };
+    setExam(next);
+    examRef.current = next;
+    examByStudy.set(id, next);
+    clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
+  };
   const handlePatientHistoryChange = (text) => {
     setPatientHistory(text);
     patientHistoryRef.current = text;
@@ -347,6 +396,8 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
             detection_location: vol.detection_location ?? null,
             ...reportFacts(results),
+            exam_confirmed: confirmedExam(examRef.current),
+            marked_regions: markedRegionsForReport(markedRegionsRef.current),
           }),
         });
 
@@ -927,6 +978,8 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
             detection_location: vol.detection_location ?? null,
             ...reportFacts(results),
+            exam_confirmed: confirmedExam(examRef.current),
+            marked_regions: markedRegionsForReport(markedRegionsRef.current),
           }),
         });
 
@@ -1586,13 +1639,14 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
                 onCloseTranslation={() => { setTranslationActive(false); setTranslationResult(null); setTranslationProgress(null); setTranslationLoading(false); }}
                 jobStatus={jobStatus}
                 onViewModeChange={setViewMode}
+                onMarkedRegionsChange={(regions) => { markedRegionsRef.current = regions; }}
                 layout={layout}
                 onLayoutChange={onLayoutChange}
                 seriesList={seriesList}
                 onSelectSeries={handleSelectSeries}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={handlePatientHistoryChange} reportTab={reportTab} onReportTabChange={setReportTab} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={handlePatientHistoryChange} exam={exam} onExamChange={handleExamChange} reportTab={reportTab} onReportTabChange={setReportTab} />
               </div>
             </div>
 

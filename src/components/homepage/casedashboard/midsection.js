@@ -19,7 +19,8 @@ import { suggestLesionName } from "../../../lib/recist";
 import { formatPixelValue } from "../../../lib/viewportReadouts";
 import { renameRoi, deleteRoi, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolume";
 import { getSeriesAnnotations, saveSeriesAnnotations } from "../../../lib/api";
-import { eventTarget as csEventTarget } from "@cornerstonejs/core";
+import { captureViewer, canvasBlob, download, copyImage, printImage, recordMovie, seriesZip } from "../../../lib/viewerExport";
+import { eventTarget as csEventTarget, Enums as csEnums } from "@cornerstonejs/core";
 import { annotation as csAnnotation, Enums as csToolsEnums, CrosshairsTool, BidirectionalTool } from "@cornerstonejs/tools";
 import {
   FiZoomIn, FiZoomOut, FiMaximize2, FiRotateCw, FiRotateCcw,
@@ -27,7 +28,7 @@ import {
   FiTrash2, FiDelete,
   FiPlay, FiPause, FiSkipBack, FiSkipForward,
   FiX, FiInfo, FiMove, FiCrosshair, FiMousePointer, FiChevronDown, FiHelpCircle, FiList, FiEdit2,
-  FiLoader, FiCheck,
+  FiLoader, FiCheck, FiDownload,
 } from "react-icons/fi";
 import { BsDiamondFill } from "react-icons/bs";
 import { MdFlip, MdInvertColors } from "react-icons/md";
@@ -245,7 +246,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 // The Enhance button's collapsed width (it widens on hover)
 const ENHANCE_BTN_REST_PX = 28;
 
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange, layout, onLayoutChange, seriesList = [], onSelectSeries }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange, layout, onLayoutChange, seriesList = [], onSelectSeries, onMarkedRegionsChange }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -365,6 +366,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
       if (layoutMenuRef.current && !layoutMenuRef.current.contains(e.target)) setLayoutMenuOpen(false);
       if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target)) setOverflowMenuOpen(false);
       if (presetMenuRef.current && !presetMenuRef.current.contains(e.target)) setPresetMenuOpen(false);
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) setExportMenuOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
@@ -395,6 +397,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const multi = lay.panes.length > 1 && !translationActive; // translation has its own split view
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
   const layoutMenuRef = useRef(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
+  const [exportStatus, setExportStatus] = useState(null); // { text, error } while exporting / after a failure
   const [dropSlot, setDropSlot] = useState(null); // pane a series card is dragged over
   const paneHandlesRef = useRef({});  // slot -> SeriesPane handle
   const geometryRef = useRef({});     // "active" | slot -> slice positions (lib/slicePositions)
@@ -428,6 +433,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [mprRegions, setMprRegions] = useState([]);
   const mprRegionsRef = useRef(mprRegions);
   mprRegionsRef.current = mprRegions;
+  // The regions drawn or painted on this series, for the report
+  const onMarkedRegionsChangeRef = useRef(onMarkedRegionsChange);
+  onMarkedRegionsChangeRef.current = onMarkedRegionsChange;
+  useEffect(() => { onMarkedRegionsChangeRef.current?.(mprRegions); }, [mprRegions]);
   const pixelFeedRef = useRef(null); // PixelValueLine's setter (see above)
 
   // Overlay card position — null means default (top-right corner)
@@ -598,6 +607,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // failed load can never overwrite the saved set with an empty one.
   const annotationsRestoredForRef = useRef(null); // series id whose saved set is loaded
   const changedWhileLoadingRef = useRef(false);    // an edit came in before it had loaded
+  // Series whose saved regions have loaded — the 2D brush waits for it, so a new region
+  // isn't numbered before the saved ones are known
+  const [regionsLoadedFor, setRegionsLoadedFor] = useState(null);
   const scheduleSaveRef = useRef(null);
   const imageIdsRef = useRef(imageIds);
   imageIdsRef.current = imageIds;
@@ -621,13 +633,17 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         const savedRegions = restoreMprRegions(annotations, imageIds, images);
         setMprRegions(prev => [...savedRegions, ...prev.filter(r => !savedRegions.some(s => s.uid === r.uid))]);
         annotationsRestoredForRef.current = seriesId;
+        setRegionsLoadedFor(seriesId);
         // Save what was drawn while this loaded (merged with the saved set) now, not at the next edit
         if (changedWhileLoadingRef.current) {
           changedWhileLoadingRef.current = false;
           scheduleSaveRef.current?.();
         }
       })
-      .catch(err => console.warn("[Annotations] couldn't load saved measurements:", err));
+      .catch(err => {
+        console.warn("[Annotations] couldn't load saved measurements:", err);
+        if (!cancelled) setRegionsLoadedFor(seriesId); // don't hold the brush back for ever
+      });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSeries?.id, imageIds]);
@@ -751,6 +767,78 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [images, frameMap, frameCount, onSelectImage]);
+
+  // ── Export: the active viewer as a picture / movie / print, the series as a ZIP ──
+  const exportBaseName = () => {
+    const parts = [activeSeries?.modality ?? dicomMeta?.modality, dicomMeta?.seriesDescription, viewMode === "stack" ? `slice${currentIndex + 1}` : viewMode];
+    return parts.filter(Boolean).join("_").replace(/[^\w.-]+/g, "_") || "image";
+  };
+  const exportFailed = (what, err) => {
+    console.error(`[Export] ${what}:`, err);
+    setExportStatus({ text: `${what} failed`, error: true });
+    setTimeout(() => setExportStatus(null), 4000);
+  };
+  const runExport = async (what, job) => {
+    setExportMenuOpen(false);
+    setExportStatus({ text: what });
+    try { await job(); setExportStatus(null); }
+    catch (err) { exportFailed(what, err); }
+  };
+  const saveImage = () => runExport("Saving image", async () => {
+    download(await canvasBlob(await captureViewer(viewportWrapRef.current)), `${exportBaseName()}.png`);
+  });
+  // Not through runExport: Safari only allows the clipboard write if it starts in the click
+  const copyViewerImage = () => {
+    setExportMenuOpen(false);
+    copyImage(captureViewer(viewportWrapRef.current).then(c => canvasBlob(c)))
+      .then(() => { setExportStatus({ text: "Copied" }); setTimeout(() => setExportStatus(null), 1500); })
+      .catch(err => exportFailed("Copy", err));
+  };
+  const printViewer = () => runExport("Preparing print", async () => {
+    printImage((await captureViewer(viewportWrapRef.current)).toDataURL("image/png"), "IntelliDiag image");
+  });
+  // A movie through every slice of the 2D stack, back on the slice it started from
+  const saveMovie = () => runExport("Recording movie", async () => {
+    setPlaying(false);
+    const root = viewportWrapRef.current;
+    const start = currentIndexRef.current;
+    // Resolves once the slice has been drawn (IMAGE_RENDERED doesn't bubble: listen in capture)
+    const showSlice = (i) => new Promise(resolve => {
+      const done = () => { root.removeEventListener(csEnums.Events.IMAGE_RENDERED, done, true); clearTimeout(timer); requestAnimationFrame(() => resolve()); };
+      const timer = setTimeout(done, 2000);
+      root.addEventListener(csEnums.Events.IMAGE_RENDERED, done, true);
+      if ((vpRef.current?.getCurrentIndex?.() ?? -1) === i) { vpRef.current?.render?.(); setTimeout(done, 50); }
+      else goTo(i);
+    });
+    try {
+      const { blob, extension } = await recordMovie(root, frameCount, showSlice, {
+        fps, onProgress: pct => setExportStatus({ text: `Recording movie ${pct}%` }),
+      });
+      download(blob, `${exportBaseName().replace(/_slice\d+$/, "")}_movie.${extension}`);
+    } finally {
+      goTo(start);
+    }
+  });
+  // The open series' DICOM files; the token only goes to our backend (as Cornerstone's loader does)
+  const downloadSeries = (anonymize) => runExport(anonymize ? "Anonymising series" : "Zipping series", async () => {
+    const apiBase = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+    const getBytes = async (img) => {
+      const src = img.blobUrl ?? img.url;
+      const token = localStorage.getItem("token");
+      const auth = token && !src.startsWith("blob:") && (!apiBase || src.includes(apiBase));
+      const res = await fetch(src, auth ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${img.name ?? src}`);
+      return res.arrayBuffer();
+    };
+    const { blob, name, count } = await seriesZip(images, getBytes, {
+      anonymize,
+      patient: dicomMeta?.patientName,
+      series: dicomMeta?.seriesDescription || activeSeries?.modality,
+      onProgress: pct => setExportStatus({ text: `${anonymize ? "Anonymising" : "Zipping"} ${pct}%` }),
+    });
+    if (!count) throw new Error("No DICOM files in this series");
+    download(blob, name);
+  });
 
   // Stable imageIds for the translation viewport — only recomputed when translationResult changes
   const translationImageIds = useMemo(() => {
@@ -921,7 +1009,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // After each render: still overflowing → one tier down (before paint, so no flicker).
   // Runs after every render on purpose — it only ever steps down, and stops at the last tier.
   // Not while a menu is open: the toolbar mustn't rearrange under the pointer.
-  const toolbarMenuOpen = mprMenuOpen || slabMenuOpen || fusionMenuOpen || layoutMenuOpen || overflowMenuOpen || presetMenuOpen;
+  const toolbarMenuOpen = mprMenuOpen || slabMenuOpen || fusionMenuOpen || layoutMenuOpen || overflowMenuOpen || presetMenuOpen || exportMenuOpen;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const bar = toolbarRef.current;
@@ -1444,6 +1532,51 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             )}
           </div>
 
+          {/* ── Always visible: export (picture, movie, print, DICOM ZIP) ── */}
+          <div ref={exportMenuRef} className="relative ml-1">
+            <button
+              onClick={() => setExportMenuOpen(v => !v)}
+              disabled={imageIds.length === 0 || (!!exportStatus && !exportStatus.error)}
+              title={exportStatus?.text ?? "Export — save, copy or print the image, record a movie, download the series"}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 disabled:cursor-not-allowed ${exportStatus?.error
+                ? "bg-red-700 text-white"
+                : exportStatus ? "bg-[#1a1a1a] text-white"
+                : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white disabled:opacity-40"
+                }`}
+            >
+              {exportStatus && !exportStatus.error ? <FiLoader size={14} className="animate-spin" /> : <FiDownload size={14} />}
+              {exportStatus ? exportStatus.text : toolbarCompact ? null : "Export"}
+            </button>
+            {exportMenuOpen && (() => {
+              const item = (label, onClick, { disabled, hint } = {}) => (
+                <button
+                  onClick={onClick}
+                  disabled={disabled}
+                  title={hint}
+                  className="w-full flex items-center px-3 py-2 text-left text-[12px] bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white border-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  {label}
+                </button>
+              );
+              return (
+                <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[230px] py-1">
+                  <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Image (without patient details)</span>
+                  {item("Save as PNG", saveImage)}
+                  {item("Copy to clipboard", copyViewerImage, { disabled: !window.ClipboardItem, hint: window.ClipboardItem ? undefined : "This browser can't copy images" })}
+                  {item("Print", printViewer)}
+                  {item(`Save movie (${frameCount} slices)`, saveMovie, {
+                    disabled: viewMode !== "stack" || frameCount < 2 || !window.MediaRecorder,
+                    hint: viewMode !== "stack" ? "Movies are recorded from the 2D view" : frameCount < 2 ? "Only one slice" : undefined,
+                  })}
+                  <div className="h-px bg-[#2a2a2a] my-1" />
+                  <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Series DICOM files</span>
+                  {item("Download as ZIP", () => downloadSeries(false))}
+                  {item("Download anonymised ZIP", () => downloadSeries(true), { hint: "Names, IDs, addresses and institution removed; dates kept to the year" })}
+                </div>
+              );
+            })()}
+          </div>
+
           <VDivider />
 
           {/* ── Always visible: Enhance button ── */}
@@ -1679,6 +1812,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onRoisChange={setRois}
                 onPixelValue={(probe) => pixelFeedRef.current?.(probe)}
                 brushRegions={mprRegions}
+                brushReady={regionsLoadedFor != null && String(regionsLoadedFor) === String(activeSeries?.id)}
                 onBrushRegionsChange={(brushes) => {
                   // The 2D view owns the per-slice brush regions while it's open; 3D-view polygons and
                   // brush regions in the earlier whole-volume form (which it can't show) pass through
@@ -1720,7 +1854,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             renders in stack mode, but the mask is a real labelmap volume here too,
             so give it an equivalent (lighter) control. ── */}
           {viewMode === "mpr" && segmentationMaskSlices && (
-            <div className="absolute top-3 right-3 z-30 w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg">
+            <div data-export-skip className="absolute top-3 right-3 z-30 w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg">
               <div className="px-3 py-2 flex items-center gap-2">
                 <span className="text-[12px] font-semibold text-white flex-1">Segmentation</span>
                 <button
@@ -1762,7 +1896,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 ["Layout", [["Double-click", "Make a viewer the active one"], ["Drag series card", "Show it in a viewer"]]],
               ];
               return (
-                <motion.div
+                <motion.div data-export-skip
                   className="fixed inset-0 z-[999] flex items-center justify-center"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
@@ -1830,7 +1964,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── Job failed banner ── */}
           <AnimatePresence>
             {jobStatus === "failed" && (
-              <motion.div
+              <motion.div data-export-skip
                 className="absolute top-3 left-1/2 z-30 flex items-center gap-2 bg-red-600 border border-red-500/30 rounded-full px-4 py-2 pointer-events-none"
                 style={{ x: "-50%" }}
                 initial={{ y: -60, opacity: 0 }}
@@ -1938,7 +2072,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   const signalLabel = conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
 
                   return (
-                    <div
+                    <div data-export-skip
                       className="absolute z-30 w-[300px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg"
                       style={overlayPos ? { left: overlayPos.x, top: overlayPos.y } : { top: 12, right: 12 }}
                     >

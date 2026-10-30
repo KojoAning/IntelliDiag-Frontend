@@ -37,7 +37,7 @@ const toPixel = (world, pl) => {
 };
 const toWorld = (col, row, pl) => [0, 1, 2].map(i => pl.origin[i] + col * pl.colSp * pl.rowCos[i] + row * pl.rowSp * pl.colCos[i]);
 
-export default function StackBrushLayer({ getViewport, element, imageIds, active, regions, onRegionsChange }) {
+export default function StackBrushLayer({ getViewport, element, imageIds, active, regions, ready = true, onRegionsChange }) {
   const canvasRef = useRef(null);
   const masksRef = useRef(new Map());     // imageId -> Uint8Array(rows × columns) of labels
   const pendingRef = useRef(new Map());   // imageId -> [[label, runs]] waiting for that image's geometry
@@ -52,6 +52,7 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
   const sizeRef = useRef(size); sizeRef.current = size;
   const eraseRef = useRef(erase); eraseRef.current = erase;
   const activeRef = useRef(active); activeRef.current = active;
+  const readyRef = useRef(ready); readyRef.current = ready;
   const cardRef = useRef(card); cardRef.current = card;
   const onChangeRef = useRef(onRegionsChange); onChangeRef.current = onRegionsChange;
   const imageIdsRef = useRef(imageIds); imageIdsRef.current = imageIds;
@@ -185,10 +186,21 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
   };
 
   const statsOf = (label) => {
+    // Saved paint on slices not shown yet counts too: bring in those whose geometry is known
+    [...pendingRef.current.keys()].forEach(imageId => maskOf(imageId));
     const spacing = sliceSpacing();
     const extent = createExtent();
     let voxels = 0, mm3 = 0, slices = 0;
     let footprint = [0, 0, 0];
+    // …and the rest (never loaded, so no geometry yet) by pixel count at a known slice's pixel size
+    const known = [...masksRef.current.keys()].map(planeOf).find(Boolean);
+    pendingRef.current.forEach(entries => entries.forEach(([l, runs]) => {
+      if (l !== label || !known) return;
+      const here = runs.reduce((n, v, i) => n + (i % 2 ? v : 0), 0);
+      if (!here) return;
+      voxels += here; slices++;
+      mm3 += here * known.colSp * known.rowSp * spacing;
+    }));
     masksRef.current.forEach((mask, imageId) => {
       const pl = planeOf(imageId);
       if (!pl) return;
@@ -227,7 +239,11 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
     const list = [...regionsRef.current].filter(([label]) => slicesByLabel.has(label)).map(([label, r]) => {
       const slices = slicesByLabel.get(label);
       const voxelCount = Object.values(slices).reduce((n, runs) => n + runs.reduce((s, v, i) => s + (i % 2 ? v : 0), 0), 0);
-      return { uid: r.uid, kind: "brush", number: r.number, voxelCount, slices };
+      const st = statsOf(label);
+      return {
+        uid: r.uid, kind: "brush", number: r.number, voxelCount, slices,
+        summary: st ? { volumeCm3: st.volumeCm3, sizeMm: st.sizeMm, location: null } : null,
+      };
     });
     onChangeRef.current?.(list);
   };
@@ -285,7 +301,7 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
   useEffect(() => {
     if (!element) return undefined;
     const down = (e) => {
-      if (!activeRef.current || e.button !== 0 || e.shiftKey) return;
+      if (!activeRef.current || !readyRef.current || e.button !== 0 || e.shiftKey) return;
       const vp = getViewport();
       const imageId = vp?.getCurrentImageId?.();
       const mask = imageId && maskOf(imageId);
@@ -403,7 +419,7 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
             title="Brush diameter ( [ and ] )"
           />
           <span className="text-[11px] font-mono text-white w-[38px]">{`${size} mm`}</span>
-          <span className="text-[10px] text-[#6B6B6B]">Paint each slice · Alt erases · [ ] size</span>
+          <span className="text-[10px] text-[#6B6B6B]">{ready ? "Paint each slice · Alt erases · [ ] size" : "Loading saved regions…"}</span>
         </div>
       )}
       {card && (

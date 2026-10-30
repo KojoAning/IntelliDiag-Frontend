@@ -38,6 +38,7 @@ function markedRegionsForReport(regions) {
       volume_cm3: Math.round(r.summary.volumeCm3 * 100) / 100,
       size_mm: r.summary.sizeMm ?? null,
       location: r.summary.location ?? null,
+      level: r.summary.level ?? null,
     }));
   return rows.length ? rows : null;
 }

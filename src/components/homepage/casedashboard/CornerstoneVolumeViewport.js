@@ -39,6 +39,7 @@ import { snapshotMetadata } from "../../../lib/metadataSnapshot";
 import { loadVolume, failedSlicesNote } from "../../../lib/volumeLoad";
 import { createExtent, addPoint, extentSize, voxelFootprint, formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
 import { encodeSliceRuns, applyRuns } from "../../../lib/brushRuns";
+import { levelOfLegend, vertebraExtents, levelAt } from "../../../lib/vertebralLevel";
 
 // Starting intensity window for growing a drawn region (mean ± this many SDs); the popup's
 // −/+ buttons tighten or loosen it within these bounds.
@@ -1140,6 +1141,31 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     return rows.length ? rows : null;
   };
 
+  // The vertebral level of a region on a whole-body result ("L3", lib/vertebralLevel).
+  // Each vertebra's extent is worked out once per result.
+  const vertebraExtentsRef = useRef({ classes: null, extents: null });
+  const vertebralLevel = (label) => {
+    const classes = classArrayRef.current;
+    const labels = labelArrayRef.current;
+    const dims = labelDimsRef.current;
+    const volume = csCache.getVolume(volumeIdRef.current);
+    const levels = levelOfLegend(maskLegendRef.current);
+    if (!colorByClassRef.current || !classes || !labels || !dims || !volume?.direction || !levels.some(Boolean)) return null;
+    const { w, h } = dims;
+    const { origin, direction: dir, spacing } = volume;
+    const zStep = [0, 1, 2].map(a => dir[a * 3 + 2] * spacing[a]); // world z per i, j, k step
+    const zAt = (idx) => {
+      const k = Math.floor(idx / (w * h)), rem = idx % (w * h);
+      return origin[2] + (rem % w) * zStep[0] + Math.floor(rem / w) * zStep[1] + k * zStep[2];
+    };
+    if (vertebraExtentsRef.current.classes !== classes) {
+      vertebraExtentsRef.current = { classes, extents: vertebraExtents(classes, levels, zAt) };
+    }
+    let sum = 0, n = 0;
+    for (let i = 0; i < labels.length; i++) if (labels[i] === label) { sum += zAt(i); n++; }
+    return n ? levelAt(sum / n, vertebraExtentsRef.current.extents, levels) : null;
+  };
+
   // The segmentation layer drawn regions and brush strokes go into: the AI layer if there
   // is one, otherwise an empty one made for them
   const ensureSegmentation = (mainVolume) => {
@@ -1315,7 +1341,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
     const summaryOf = (label) => {
       const stat = lesionStatsRef.current?.get(label);
       if (!stat) return null;
-      return { volumeCm3: stat.volumeCm3, sizeMm: regionSizeOf(label, stat), location: anatomyLocation(label) };
+      return { volumeCm3: stat.volumeCm3, sizeMm: regionSizeOf(label, stat), location: anatomyLocation(label), level: vertebralLevel(label) };
     };
     const polygons = entries
       .filter(([, info]) => info.outline)
@@ -1767,6 +1793,7 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
       polygonNumber: isManual ? manualLabelNumberRef.current.get(label) : null,
       isBrush: isManual && !!growSeedsRef.current.get(label)?.brush,
       location: isManual ? anatomyLocation(label) : null,
+      level: isManual ? vertebralLevel(label) : null,
       savedVoxelCount: isManual ? growSeedsRef.current.get(label)?.savedVoxelCount ?? null : null,
       confidence,
       regionName: isManual ? null : regionName,
@@ -2311,6 +2338,9 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
                   <span className="text-[11px] text-white text-right" title="From the anatomy model's structures under the region">
                     {selectedLesion.location.map(l => `${l.name} ${l.pct}%`).join(", ")}
                   </span>
+                ))}
+                {selectedLesion.level && row("Level", (
+                  <span className="text-[11px] text-white" title="The vertebra at the height of the region's centre, from the whole-body model">{`${selectedLesion.level} vertebra`}</span>
                 ))}
                 {row("Voxels", <span className="text-[11px] text-[#949494] font-mono">{selectedLesion.voxelCount.toLocaleString()}</span>)}
                 {selectedLesion.savedVoxelCount != null && (

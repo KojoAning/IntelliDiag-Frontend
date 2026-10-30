@@ -2,7 +2,8 @@
 //   { cols, rows, panes: (series | null)[cols × rows], activeSlot, linked }
 // panes[activeSlot] is always the open series — the full viewer with tools, measurements
 // and AI; the other panes are lighter viewers (see SeriesPane). linked: panes showing the
-// same patient position scroll together.
+// same patient position scroll together. A pane can also show a series of an earlier study
+// (series.prior: { studyId, studyName, date }) to compare with; it never becomes the active one.
 //
 // The layout lives above the workspace (which remounts per open series), so making
 // another pane active keeps the rest of the layout where it was.
@@ -48,7 +49,8 @@ export function normalizeLayout(layout, activeSeries, seriesList = []) {
   const known = seriesList.length ? new Set(seriesList.map(s => String(s.id))) : null;
   let panes = Array.from({ length: count }, (_, i) => {
     const s = base.panes?.[i] ?? null;
-    return s && known && !known.has(String(s.id)) && !sameSeries(s, activeSeries) ? null : s;
+    // Series of an earlier study (s.prior) are shown for comparison, not part of this one
+    return s && known && !known.has(String(s.id)) && !s.prior && !sameSeries(s, activeSeries) ? null : s;
   });
   let activeSlot = Math.min(Math.max(base.activeSlot ?? 0, 0), count - 1);
   if (activeSeries) {
@@ -108,5 +110,6 @@ export function clearPane(layout, slot) {
 
 // Make another pane the active one; open its series
 export function activatePane(layout, slot) {
+  if (layout.panes[slot]?.prior) return { layout, open: null };
   return { layout: { ...layout, activeSlot: slot }, open: layout.panes[slot] ?? null };
 }

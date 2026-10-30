@@ -120,3 +120,32 @@ export function matchSlice(source, target) {
   const tolerance = Math.max((target.spacing ?? 0) * 0.75, MIN_TOLERANCE_MM);
   return bestDistance <= tolerance ? best : null;
 }
+
+// ── Locked to a prior study ──
+// A study from another day has its own frame of reference, so positions can't be matched
+// directly. Instead the radiologist lines the two up by eye and locks them: from then on
+// they scroll together keeping that offset along the scan direction (depth, in mm).
+
+// The slice's depth along a direction (a unit normal)
+export const depthAlong = (slice, normal) => dot(slice.position, normal);
+
+// Whether a series is cut in the same plane as a direction (so depths compare)
+export const parallelTo = (geometry, normal) => {
+  const s = geometry?.slices.find(Boolean);
+  return !!s && !!normal && Math.abs(dot(s.normal, normal)) >= PARALLEL_COS;
+};
+
+// The index of target's slice nearest a depth along normal, or null when it has none
+// within its slice spacing (the depth is beyond the range it covers)
+export function sliceAtDepth(target, normal, depth) {
+  if (!parallelTo(target, normal)) return null;
+  let best = null;
+  let bestDistance = Infinity;
+  target.slices.forEach((slice, i) => {
+    if (!slice) return;
+    const distance = Math.abs(dot(slice.position, normal) - depth);
+    if (distance < bestDistance) { bestDistance = distance; best = i; }
+  });
+  const tolerance = Math.max((target.spacing ?? 0) * 0.75, MIN_TOLERANCE_MM);
+  return best != null && bestDistance <= tolerance ? best : null;
+}

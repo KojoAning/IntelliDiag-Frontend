@@ -8,11 +8,13 @@ import SliceScrubber from "./SliceScrubber";
 import DicomTagPanel from "./DicomTagPanel";
 import RecistPanel from "./RecistPanel";
 import KeyImagesPanel from "./KeyImagesPanel";
+import PriorStudyPicker from "./PriorStudyPicker";
+import { latestResult, compareLesions, formatStudyDate } from "../../../lib/priorStudies";
 import SeriesPane, { EmptyPane } from "./SeriesPane";
 import { translationPairsFor } from "./rightsection/TranslationPanel";
 import { getLabelsAlwaysOn, setLabelsAlwaysOn } from "../../../lib/cornerstoneSetup";
 import { LAYOUTS, SERIES_DRAG_TYPE, normalizeLayout, resizeLayout, placeSeries, clearPane, activatePane } from "../../../lib/viewerLayout";
-import { readSlicePositions, matchSlice, canLink } from "../../../lib/slicePositions";
+import { readSlicePositions, matchSlice, canLink, depthAlong, parallelTo, sliceAtDepth } from "../../../lib/slicePositions";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
 import { CT_WINDOW_PRESETS } from "../../../lib/windowPresets";
 import { serializeAnnotations, restoreAnnotations, restoreKeyImages, restoreRecistReference, restoreMprRegions, SAVED_TOOL_NAMES } from "../../../lib/annotationPersistence";
@@ -42,7 +44,7 @@ import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
 import { PiPolygonLight, PiSparkleFill } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
-import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption, TbBrush, TbStars } from "react-icons/tb";
+import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption, TbBrush, TbStars, TbHistory } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 import { Sparkle } from "lucide-react";
 import { formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
@@ -109,6 +111,22 @@ function MidlineShift({ shift }) {
       <p className="m-0 text-[11px] leading-snug text-[#868686]" title="On an axial slice at the foramen of Monro: draw the midline from the anterior to the posterior falx attachment, then measure the septum pellucidum's distance from it with the Length tool">
         Atlas estimate, tends to read low — confirm with the Length tool
       </p>
+    </div>
+  );
+}
+
+// Lesion totals against the same model's result on the earlier study shown beside
+function PriorComparison({ comparison: c }) {
+  if (!c) return null;
+  const change = c.changePct == null ? "" : ` (${c.changePct > 0 ? "+" : ""}${c.changePct}%)`;
+  const tone = c.changePct == null || Math.abs(c.changePct) < 20 ? "text-[#CCCCCC]" : c.changePct > 0 ? "text-[#f87171]" : "text-[#34C759]";
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-0.5">
+      <span className="text-[11px] text-[#868686]">{`Since ${formatStudyDate(c.date)} (prior, same model)`}</span>
+      <span className={`text-[12px] ${tone}`}>{`Total lesion volume ${c.before} → ${c.now} cm³${change}`}</span>
+      {c.countBefore != null && c.countNow != null && (
+        <span className="text-[11px] text-[#999]">{`Lesions ${c.countBefore} → ${c.countNow}${c.largestBefore != null && c.largestNow != null ? ` · largest ${c.largestBefore} → ${c.largestNow} cm³` : ""}`}</span>
+      )}
     </div>
   );
 }
@@ -291,7 +309,7 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 // The Enhance button's collapsed width (it widens on hover)
 const ENHANCE_BTN_REST_PX = 28;
 
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange, layout, onLayoutChange, seriesList = [], onSelectSeries, onMarkedRegionsChange }) {
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange, layout, onLayoutChange, seriesList = [], onSelectSeries, onMarkedRegionsChange, caseId, studyId, studyDate, modelId, onPriorComparisonChange }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -450,6 +468,12 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const geometryRef = useRef({});     // "active" | slot -> slice positions (lib/slicePositions)
   const [, setGeometryVersion] = useState(0); // re-render when positions arrive (link badges)
   const syncDriverRef = useRef("active");
+  // Earlier-study panes locked to the active viewer: slot -> depth offset (mm) along the
+  // active series' scan direction, set when Lock is pressed (lib/slicePositions)
+  const [priorLocks, setPriorLocks] = useState({});
+  const priorLocksRef = useRef(priorLocks);
+  const [priorPicker, setPriorPicker] = useState(null); // { slot } while choosing a study to compare with
+  const [priorComparison, setPriorComparison] = useState(null);
   const currentIndexRef = useRef(0);
   const frameCountRef = useRef(0);       // for the cine interval
   const fileSrcOfFrameRef = useRef(() => null);
@@ -1154,18 +1178,60 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multi, imageIds]);
 
-  // A viewer's slice changed: if it's the one being scrolled, move the others to match
+  // A viewer's slice changed: if it's the one being scrolled, move the others to match.
+  // Same-frame series match by position (when linked); locked earlier studies by depth
+  // along the active series' scan direction, plus their offset.
   const syncFrom = (source, index) => {
-    if (!linkActive || syncDriverRef.current !== source) return;
-    const from = geometryRef.current[source]?.slices[index];
+    if (!multi || viewMode !== "stack" || syncDriverRef.current !== source) return;
+    const geos = geometryRef.current;
+    const locks = priorLocksRef.current;
+    const from = geos[source]?.slices[index];
     if (!from) return;
-    Object.entries(geometryRef.current).forEach(([key, geometry]) => {
-      if (key === source) return;
-      const target = matchSlice(from, geometry);
+    const normal = geos.active?.slices.find(Boolean)?.normal;
+    // The source's place as a depth in the active series
+    const activeDepth = !normal ? null
+      : source === "active" || canLink(geos.active, geos[source]) ? depthAlong(from, normal)
+      : locks[source] != null ? depthAlong(from, normal) - locks[source]
+      : null;
+    // A locked prior being scrolled moves the active viewer first; the others follow that
+    let anchor = from;
+    if (source !== "active" && locks[source] != null) {
+      const target = activeDepth == null ? null : sliceAtDepth(geos.active, normal, activeDepth);
+      if (target == null) return;
+      vpRef.current?.setImageIndex(target);
+      anchor = geos.active.slices[target];
+    }
+    Object.entries(geos).forEach(([key, geometry]) => {
+      if (key === source || (key === "active" && locks[source] != null)) return;
+      let target = null;
+      if (locks[key] != null) target = activeDepth == null ? null : sliceAtDepth(geometry, normal, activeDepth + locks[key]);
+      else if (linkActive) target = matchSlice(anchor, geometry);
       if (target == null) return;
       if (key === "active") vpRef.current?.setImageIndex(target);
       else paneHandlesRef.current[key]?.setImageIndex(target);
     });
+  };
+  // Lock an earlier-study pane to the active viewer where the two are now (the radiologist
+  // has scrolled it to the matching slice), or unlock it
+  const toggleLock = (slot) => {
+    const key = String(slot);
+    const locks = { ...priorLocksRef.current };
+    if (locks[key] != null) delete locks[key];
+    else {
+      const geos = geometryRef.current;
+      const normal = geos.active?.slices.find(Boolean)?.normal;
+      const here = geos.active?.slices[currentIndexRef.current];
+      const there = geos[key]?.slices[paneHandlesRef.current[key]?.getImageIndex?.() ?? -1];
+      if (!normal || !here || !there || !parallelTo(geos[key], normal)) return;
+      locks[key] = depthAlong(there, normal) - depthAlong(here, normal);
+    }
+    priorLocksRef.current = locks;
+    setPriorLocks(locks);
+  };
+  const lockStateOf = (slot) => {
+    const normal = geometryRef.current.active?.slices.find(Boolean)?.normal;
+    if (viewMode !== "stack" || !parallelTo(geometryRef.current[String(slot)], normal)) return null;
+    return priorLocks[String(slot)] != null ? "locked" : "unlocked";
   };
   // Window/level, invert, zoom and pan follow too. Window only between CT series (HU
   // mean the same in each; MR intensities don't), pan only within one frame of reference.
@@ -1201,6 +1267,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const onPaneGeometry = (key, geometry) => {
     if (geometry) geometryRef.current[key] = geometry;
     else delete geometryRef.current[key];
+    if (!geometry && priorLocksRef.current[key] != null) { // the pane closed or shows another series
+      const { [key]: _gone, ...rest } = priorLocksRef.current;
+      priorLocksRef.current = rest;
+      setPriorLocks(rest);
+    }
     setGeometryVersion(v => v + 1);
     if (geometry) alignPane(key);
   };
@@ -1209,6 +1280,31 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     onLayoutChange?.(next);
     if (next.linked) setTimeout(() => Object.keys(paneHandlesRef.current).forEach(key => alignPaneRef.current(key))); // after the re-render
   };
+
+  // Show a series of an earlier study beside the open one: in the chosen pane, else the
+  // first empty one, else the next one (two viewers side by side when there was one)
+  const pickPrior = (series) => {
+    let base = multi ? lay : resizeLayout(lay, 2, 1, seriesList);
+    const others = base.panes.map((_, i) => i).filter(i => i !== base.activeSlot);
+    const slot = priorPicker?.slot ?? others.find(i => !base.panes[i]) ?? others.find(i => base.panes[i]?.prior) ?? others[0];
+    setPriorPicker(null);
+    const later = !!studyDate && new Date(series.prior.date) > new Date(studyDate);
+    applyLayout({ layout: placeSeries(base, slot, { ...series, prior: { ...series.prior, later } }).layout, open: null });
+  };
+  const priorPane = lay.panes.find((s, i) => i !== lay.activeSlot && s?.prior) ?? null;
+
+  // Lesion sizes against the earlier study's result from the same model, when there is one
+  useEffect(() => {
+    setPriorComparison(null);
+    if (inferenceResult?.volume_analysis?.total_volume_cm3 == null || !priorPane || priorPane.prior.later || !modelId) return;
+    let cancelled = false;
+    latestResult(priorPane.id, modelId)
+      .then(prior => { if (!cancelled) setPriorComparison(compareLesions(inferenceResult, prior, priorPane.prior.date)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inferenceResult, priorPane?.id, modelId]);
+  useEffect(() => { onPriorComparisonChange?.(priorComparison); }, [priorComparison]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mouse-over picks the driver; series cards can be dropped on any viewer
   const paneHandlers = (key, slot) => ({
@@ -1617,6 +1713,14 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   {lay.linked ? <TbLink size={16} className="text-[#0694FB]" /> : <TbLinkOff size={16} />}
                   <span className="flex-1">Scroll viewers together</span>
                   {lay.linked && <FiCheck size={13} className="text-[#0694FB]" />}
+                </button>
+                <button
+                  onClick={() => { setLayoutMenuOpen(false); setPriorPicker({ slot: null }); }}
+                  title="Open a series of the patient's earlier (or later) study beside this one"
+                  className="w-full flex items-center gap-3 px-3 py-2 text-left text-[12px] bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white border-none cursor-pointer"
+                >
+                  <TbHistory size={16} />
+                  <span className="flex-1">Compare with another study…</span>
                 </button>
               </div>
             )}
@@ -2254,6 +2358,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                       <ResultWarnings warnings={inferenceResult.warnings} />
                       <MidlineShift shift={inferenceResult.volume_analysis?.midline_shift} />
                       <AtlasRegions legend={inferenceResult.atlas_legend} shown={atlasShown} onToggle={setAtlasShown} />
+                      <PriorComparison comparison={priorComparison} />
                     </div>
                   );
                 })()}
@@ -2278,6 +2383,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 series={series}
                 leftTool={leftTool}
                 linked={linkActive && canLink(geometryRef.current.active, geometryRef.current[slot])}
+                lockState={series.prior ? lockStateOf(slot) : null}
+                onToggleLock={() => toggleLock(slot)}
                 onIndexChange={(index) => syncFrom(String(slot), index)}
                 onDisplayChange={(display) => syncDisplayFrom(String(slot), display)}
                 onGeometry={(geometry) => onPaneGeometry(String(slot), geometry)}
@@ -2285,7 +2392,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 onRemove={() => applyLayout({ layout: clearPane(lay, slot), open: null })}
               />
             ) : (
-              <EmptyPane series={unshownSeries} onPick={(s) => applyLayout(placeSeries(lay, slot, s))} />
+              <EmptyPane series={unshownSeries} onPick={(s) => applyLayout(placeSeries(lay, slot, s))} onPickPrior={() => setPriorPicker({ slot })} />
             )}
             {dropHighlight(slot)}
           </div>
@@ -2425,6 +2532,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         )}
 
         {/* ── RECIST 1.1 ── */}
+        {priorPicker && (
+          <PriorStudyPicker caseId={caseId} studyId={studyId} openStudyDate={studyDate} onPick={pickPrior} onClose={() => setPriorPicker(null)} />
+        )}
+
         {keyPanelOpen && viewMode === "stack" && (
           <KeyImagesPanel
             keyed={keyIndices().map(index => ({

@@ -129,6 +129,8 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
   examRef.current = exam;
   // Regions the radiologist drew or painted on the open series (midsection), for the report
   const markedRegionsRef = useRef([]);
+  // Lesion totals against the same model's result on an earlier study shown beside (midsection)
+  const priorComparisonRef = useRef(null);
   const patientHistoryRef = useRef(patientHistory);
   patientHistoryRef.current = patientHistory;
   const historyTimerRef = useRef(null);
@@ -145,7 +147,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
     getStudy(id)
       .then(study => {
         if (cancelled) return;
-        const loadedExam = { modality: study?.modality ?? "", studyName: study?.study_name ?? "", bodyRegion: study?.body_region ?? "", edited: false };
+        const loadedExam = { modality: study?.modality ?? "", studyName: study?.study_name ?? "", bodyRegion: study?.body_region ?? "", date: study?.study_date ?? null, edited: false };
         setExam(loadedExam);
         examByStudy.set(id, loadedExam);
         const saved = study?.clinical_indication ?? "";
@@ -399,6 +401,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             ...reportFacts(results),
             exam_confirmed: confirmedExam(examRef.current),
             marked_regions: markedRegionsForReport(markedRegionsRef.current),
+            prior_comparison: priorComparisonRef.current,
           }),
         });
 
@@ -981,6 +984,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
             ...reportFacts(results),
             exam_confirmed: confirmedExam(examRef.current),
             marked_regions: markedRegionsForReport(markedRegionsRef.current),
+            prior_comparison: priorComparisonRef.current,
           }),
         });
 
@@ -1647,6 +1651,11 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
                 jobStatus={jobStatus}
                 onViewModeChange={setViewMode}
                 onMarkedRegionsChange={(regions) => { markedRegionsRef.current = regions; }}
+                onPriorComparisonChange={(comparison) => { priorComparisonRef.current = comparison; }}
+                caseId={caseId}
+                studyId={studyId}
+                studyDate={exam?.date}
+                modelId={currentModelId}
                 layout={layout}
                 onLayoutChange={onLayoutChange}
                 seriesList={seriesList}

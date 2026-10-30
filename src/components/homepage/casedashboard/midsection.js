@@ -113,6 +113,31 @@ function MidlineShift({ shift }) {
   );
 }
 
+// Brain tumour results: the atlas regions (lobes) the location is worked out from, shown
+// faintly under the mask when switched on
+function AtlasRegions({ legend, shown, onToggle }) {
+  if (!legend?.length) return null;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" checked={shown} onChange={e => onToggle(e.target.checked)} className="accent-[#0694FB] cursor-pointer" />
+        <span className="text-[12px] text-[#CCCCCC]">Brain regions</span>
+        <span className="text-[11px] text-[#6B6B6B]">atlas estimate</span>
+      </label>
+      {shown && (
+        <div className="flex flex-wrap gap-x-2.5 gap-y-1">
+          {legend.map(({ name, rgb }) => (
+            <span key={name} className="flex items-center gap-1 text-[11px] text-[#999]">
+              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: `rgb(${rgb.join(",")})` }} />
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Colour key for anatomy segmentations (one colour per structure): only the structures the
 // model found, largest first, with their volumes. Whole-body results can list 100+, so it
 // scrolls and can be filtered.
@@ -431,6 +456,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   // Mask overlay opacity (0–1) — controlled by the user slider
   const [maskOpacity, setMaskOpacity] = useState(0.5);
+  const [atlasShown, setAtlasShown] = useState(false);
   // Named ROIs in the 2D viewer, Horos-style (see lib/roiVolume) and the ROI list panel
   const [rois, setRois] = useState([]);
   const [roiPanelOpen, setRoiPanelOpen] = useState(false);
@@ -2087,6 +2113,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             if (!overlay && sliceData?.predicted_class == null) return null;
             const isBase64 = overlay && !overlay.startsWith("http") && !overlay.startsWith("data:");
             const overlaySrc = !overlay ? null : isBase64 ? `data:image/png;base64,${overlay}` : overlay;
+            const atlasSrc = atlasShown && sliceData?.atlas ? `data:image/png;base64,${sliceData.atlas}` : null;
 
             // GradCAM: predicted_class / scores are non-null; segmentation: both null
             const isGradCam = sliceData?.predicted_class != null;
@@ -2114,8 +2141,23 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               overlayLabel = "Segmentation";
             }
 
+            const overlayTransform = [
+              `translate(${maskTransform.panX}px, ${maskTransform.panY}px)`,
+              `scale(${maskTransform.zoom})`,
+              `rotate(${maskTransform.rotation}deg)`,
+              maskTransform.flipH ? "scaleX(-1)" : "",
+              maskTransform.flipV ? "scaleY(-1)" : "",
+            ].filter(Boolean).join(" ");
+
             return (
               <>
+                {/* Atlas regions (brain lobes), under the mask */}
+                {atlasSrc && <img
+                  src={atlasSrc}
+                  alt="brain regions"
+                  style={{ transformOrigin: "center center", transform: overlayTransform }}
+                  className="absolute inset-0 w-full h-full object-contain z-[19] pointer-events-none"
+                />}
                 {/* Overlay image — screen blend so white regions light up over the DICOM,
                   coloured orange-red via CSS filter for clinical clarity */}
                 {overlaySrc && <img
@@ -2127,13 +2169,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                     mixBlendMode: segmentationIsAnatomy ? "normal" : "screen",
                     filter: segmentationIsAnatomy ? "none" : "sepia(1) saturate(8) hue-rotate(320deg)",
                     transformOrigin: "center center",
-                    transform: [
-                      `translate(${maskTransform.panX}px, ${maskTransform.panY}px)`,
-                      `scale(${maskTransform.zoom})`,
-                      `rotate(${maskTransform.rotation}deg)`,
-                      maskTransform.flipH ? "scaleX(-1)" : "",
-                      maskTransform.flipV ? "scaleY(-1)" : "",
-                    ].filter(Boolean).join(" "),
+                    transform: overlayTransform,
                   }}
                   className="absolute inset-0 w-full h-full object-contain z-20 pointer-events-none"
                 />}
@@ -2217,6 +2253,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                       {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} structures={inferenceResult.structures} />}
                       <ResultWarnings warnings={inferenceResult.warnings} />
                       <MidlineShift shift={inferenceResult.volume_analysis?.midline_shift} />
+                      <AtlasRegions legend={inferenceResult.atlas_legend} shown={atlasShown} onToggle={setAtlasShown} />
                     </div>
                   );
                 })()}

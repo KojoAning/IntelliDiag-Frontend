@@ -24,22 +24,23 @@ export function parseDicomInstanceInfo(buffer) {
 
 export function parseMultipartBody(buffer, boundary) {
   const bytes = new Uint8Array(buffer);
-  const enc   = new TextEncoder();
-  const sep   = enc.encode(`\r\n--${boundary}`);
+  const delim = new TextEncoder().encode(`--${boundary}`);
   const parts = [];
 
-  // Collect positions of every boundary marker
+  // Every delimiter line: "--boundary" at the very start of the body (no line break before
+  // it — servers usually send it that way, and the first part used to be dropped) or after
+  // a CRLF. The closing "--boundary--" matches too and ends the last part.
   const positions = [];
-  outer: for (let i = 0; i <= bytes.length - sep.length; i++) {
-    for (let j = 0; j < sep.length; j++) {
-      if (bytes[i + j] !== sep[j]) continue outer;
+  outer: for (let i = 0; i <= bytes.length - delim.length; i++) {
+    for (let j = 0; j < delim.length; j++) {
+      if (bytes[i + j] !== delim[j]) continue outer;
     }
-    positions.push(i);
+    if (i === 0 || (bytes[i - 2] === 13 && bytes[i - 1] === 10)) positions.push(i);
   }
 
   for (let p = 0; p < positions.length - 1; p++) {
-    const partStart = positions[p] + sep.length;
-    const partEnd   = positions[p + 1];
+    const partStart = positions[p] + delim.length;
+    const partEnd   = positions[p + 1] - 2; // the CRLF before the next delimiter isn't data
 
     // Skip past the part headers to find \r\n\r\n
     let dataStart = partStart;

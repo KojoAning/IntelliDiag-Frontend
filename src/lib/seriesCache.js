@@ -170,7 +170,10 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
       if (listed.error && !stored) throw listed.error;
       imgs = listed.records ?? stored.records; // offline: open the last downloaded copy
       const thumbKey = `series:${id}`;
-      const fromDisk = !!stored && sameRecords(stored.records, imgs);
+      // A stored copy missing a DICOM file (downloads before the multipart fix dropped the
+      // first one) is downloaded again rather than streaming that slice from the backend
+      const fromDisk = !!stored && sameRecords(stored.records, imgs)
+        && imgs.every((img, i) => img.type !== "application/dicom" || stored.blobs?.[i]);
       let blobs, bytes;
       if (fromDisk) {
         ({ blobs, bytes } = stored);

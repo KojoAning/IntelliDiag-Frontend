@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useSyncExternalStore } from "react";
 import { FiUploadCloud, FiCheckCircle, FiAlertCircle } from "react-icons/fi";
 import { authFetch, getImagesForStudy } from "../../../lib/api";
-import { thumbCache, PROJECTION_MODALITIES, getSeriesStatus, subscribeSeriesCache } from "../../../lib/seriesCache";
+import { thumbCache, PROJECTION_MODALITIES, getSeriesStatus, subscribeSeriesCache, storedSeriesThumbnail } from "../../../lib/seriesCache";
+import { SERIES_DRAG_TYPE } from "../../../lib/viewerLayout";
 
 async function fetchAuthenticatedThumb(url) {
   try {
@@ -94,7 +95,9 @@ function SliceThumb({ img, index, selected, onSelect, hasTumor }) {
   );
 }
 
-function SeriesCard({ series, active, images, onSelect }) {
+// Click opens the series in the active viewer; drag it onto any viewer of a multi-viewer layout.
+// shown: it's in one of the layout's other viewers
+function SeriesCard({ series, active, shown, images, onSelect }) {
   const cacheKey = `series:${series.id}`;
   const [thumbSrc, setThumbSrc] = useState(() => thumbCache.get(cacheKey) ?? null);
   const [thumbLoading, setThumbLoading] = useState(!thumbSrc);
@@ -121,7 +124,14 @@ function SeriesCard({ series, active, images, onSelect }) {
     setThumbLoading(true);
 
     (async () => {
-      let src = null;
+      // Kept on this device with the series' download? Then no server calls
+      let src = await storedSeriesThumbnail(series.id);
+      if (cancelled) return;
+      if (src) {
+        setThumbSrc(src);
+        setThumbLoading(false);
+        return;
+      }
       try {
         const records = (await getImagesForStudy(series.id) ?? []).filter(r => r.status === "uploaded");
         const record = records[Math.floor(records.length / 2)];
@@ -149,6 +159,12 @@ function SeriesCard({ series, active, images, onSelect }) {
   return (
     <div
       onClick={() => !active && onSelect(series)}
+      draggable
+      onDragStart={e => {
+        const { id, name, description, modality, image_count } = series;
+        e.dataTransfer.setData(SERIES_DRAG_TYPE, JSON.stringify({ id, name, description, modality, image_count }));
+        e.dataTransfer.effectAllowed = "copy";
+      }}
       className={`flex flex-col gap-1.5 p-1.5 rounded-xl border shrink-0 transition-all duration-150 ${
         active
           ? "border-[#0694FB] bg-[rgba(6,148,251,0.08)]"
@@ -176,6 +192,7 @@ function SeriesCard({ series, active, images, onSelect }) {
         <p className="text-[#868686] text-[10px] m-0">
           {imageCount ?? 0} image{imageCount === 1 ? "" : "s"}{series.modality ? ` · ${series.modality}` : ""}
         </p>
+        {shown && <p className="text-[#0694FB] text-[10px] m-0">In a viewer</p>}
         {status === "loading" && <p className="text-[#0694FB] text-[10px] m-0">Downloading…</p>}
         {status === "ready" && (
           <p className="flex items-center gap-1 text-[#22C55E] text-[10px] m-0"><FiCheckCircle size={10} /> Available offline</p>
@@ -189,7 +206,7 @@ function SeriesCard({ series, active, images, onSelect }) {
   );
 }
 
-function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, loading, inferenceResult, seriesList = [], activeSeries, onSelectSeries }) {
+function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, loading, inferenceResult, seriesList = [], activeSeries, onSelectSeries, shownSeriesIds = [] }) {
   // The open series may be missing from the fetched list (e.g. opened from the Jobs page
   // before the study's series have loaded) — always show it.
   const allSeries = activeSeries && !seriesList.some(s => String(s.id) === String(activeSeries.id))
@@ -221,7 +238,7 @@ function Sidepanel({ images = [], onUploadClick, onSelectImage, selectedImage, l
           const active = String(series.id) === String(activeSeries?.id);
           return (
             <React.Fragment key={series.id}>
-              <SeriesCard series={series} active={active} images={loading ? [] : images} onSelect={onSelectSeries} />
+              <SeriesCard series={series} active={active} shown={!active && shownSeriesIds.includes(String(series.id))} images={loading ? [] : images} onSelect={onSelectSeries} />
 
               {/* Per-image thumbnails only for projection studies, nested under the open series */}
               {active && showImageThumbs && (

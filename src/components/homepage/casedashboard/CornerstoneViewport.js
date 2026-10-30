@@ -1,11 +1,12 @@
 import React, {
   useEffect,
   useRef,
+  useState,
   forwardRef,
   useImperativeHandle,
 } from "react";
-import { RenderingEngine, Enums, metaData } from "@cornerstonejs/core";
-import { annotation as csAnnotation } from "@cornerstonejs/tools";
+import { RenderingEngine, Enums, metaData, eventTarget as csEventTarget } from "@cornerstonejs/core";
+import { annotation as csAnnotation, utilities as csToolsUtilities } from "@cornerstonejs/tools";
 import {
   ToolGroupManager,
   Enums as csToolsEnums,
@@ -21,8 +22,19 @@ import {
   ProbeTool,
   PlanarFreehandROITool,
   StackScrollTool,
+  BidirectionalTool,
+  CobbAngleTool,
+  LabelTool,
+  MagnifyTool,
 } from "@cornerstonejs/tools";
 import { initCornerstone } from "../../../lib/cornerstoneSetup";
+import { applyHorosMouseBindings } from "../../../lib/mouseBindings";
+import { PENCIL_TOOL_NAME } from "../../../lib/annotationPersistence";
+import { probePixel, mmPerCanvasPixel } from "../../../lib/viewportReadouts";
+import OrientationMarkers, { getOrientationMarkers } from "./OrientationMarkers";
+import ScaleBar from "./ScaleBar";
+import { listRois, suggestRoiName, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolume";
+import StackBrushLayer from "./StackBrushLayer";
 
 const { MouseBindings } = csToolsEnums;
 
@@ -35,9 +47,15 @@ const TOOL_MAP = {
   angle:    AngleTool.toolName,
   marker:   ProbeTool.toolName,
   polygon:  PlanarFreehandROITool.toolName,
+  bidirectional: BidirectionalTool.toolName,
+  cobb:     CobbAngleTool.toolName,
+  text:     LabelTool.toolName,
+  pencil:   PENCIL_TOOL_NAME,
+  magnify:  MagnifyTool.toolName, // stack viewports only — not offered in MPR
 };
 
-const ALL_ANNOTATION_TOOLS = Object.values(TOOL_MAP);
+// Everything but the magnifier draws an annotation that stays grabbable
+const ALL_ANNOTATION_TOOLS = Object.values(TOOL_MAP).filter(name => name !== MagnifyTool.toolName);
 
 let instanceCounter = 0;
 
@@ -82,6 +100,8 @@ function applyVoi(viewport, imageId) {
  *   imageIds    – string[]  Cornerstone imageIds  (use toImageId() helper for blob/http URLs)
  *   activeTool  – string | null  one of the keys in TOOL_MAP, or null for default W/L
  *   onIndexChange – (index: number) => void
+ *   onDisplayChange – (display) => void  the user changed window/level, invert, zoom or pan
+ *                     (see displayOf; not fired for loading, resizing or applyDisplay)
  *
  * Ref methods (use a React ref):
  *   zoomIn(), zoomOut(), resetFit()
@@ -92,18 +112,97 @@ function applyVoi(viewport, imageId) {
  *   getCurrentIndex() → number
  *   getZoom() → number
  *   getProperties() → object
+ *   getDisplay() → display, applyDisplay(display)  for linked viewers
  */
 const CornerstoneViewport = forwardRef(function CornerstoneViewport(
-  { imageIds = [], activeTool = null, windowLevel = false, onIndexChange, onArrowTextRequest, onCameraChanged },
+  { imageIds = [], activeTool = null, leftTool = "wl", readOnly = false, onIndexChange, onDisplayChange, onArrowTextRequest, onCameraChanged, onRoisChange, onPixelValue, brushRegions = null, brushReady = true, onBrushRegionsChange },
   ref
 ) {
   const divRef = useRef(null);
+  // The brush layer needs the element once it's mounted (it listens to its render events)
+  const [element, setElement] = useState(null);
+  const setDivRef = (el) => { divRef.current = el; if (el !== element) setElement(el); };
   const arrowTextCbRef = useRef(onArrowTextRequest);
   arrowTextCbRef.current = onArrowTextRequest;
   const onIndexChangeCbRef = useRef(onIndexChange);
   onIndexChangeCbRef.current = onIndexChange;
   const onCameraChangedCbRef = useRef(onCameraChanged);
+  const onDisplayChangeCbRef = useRef(onDisplayChange);
+  onDisplayChangeCbRef.current = onDisplayChange;
   onCameraChangedCbRef.current = onCameraChanged;
+  const onRoisChangeCbRef = useRef(onRoisChange);
+  onRoisChangeCbRef.current = onRoisChange;
+  const imageIdsRef = useRef(imageIds);
+  imageIdsRef.current = imageIds;
+  const activeToolRef = useRef(activeTool);
+  activeToolRef.current = activeTool;
+  const onPixelValueCbRef = useRef(onPixelValue);
+  onPixelValueCbRef.current = onPixelValue;
+  const [orientation, setOrientation] = useState(null);
+  const orientationKeyRef = useRef("");
+  const [scale, setScale] = useState({ mmPerPixel: null, height: 0 }); // for the scale bar
+  const pointerRef = useRef(null); // last canvas point under the mouse, for the pixel readout
+  const leftToolRef = useRef(leftTool);
+  leftToolRef.current = leftTool;
+
+  // readOnly (the layout's other panes): measurements are drawn but can't be grabbed or
+  // edited, since only the active viewer saves them
+  // pointer: left button does nothing to the image — only grabs measurements
+  const LEFT_TOOLS = { wl: WindowLevelTool.toolName, pan: PanTool.toolName, pointer: null };
+  const applyBindings = (toolGroup = ctx.current?.toolGroup) => {
+    if (!toolGroup) return;
+    // The brush (StackBrushLayer) takes the left button itself
+    const brush = !readOnly && activeToolRef.current === "brush";
+    applyHorosMouseBindings(toolGroup, {
+      primary: brush ? null : (readOnly ? null : TOOL_MAP[activeToolRef.current])
+        ?? (leftToolRef.current in LEFT_TOOLS ? LEFT_TOOLS[leftToolRef.current] : WindowLevelTool.toolName),
+      interactiveTools: readOnly ? [] : ALL_ANNOTATION_TOOLS,
+    });
+    if (readOnly) ALL_ANNOTATION_TOOLS.forEach(name => { try { toolGroup.setToolEnabled(name); } catch (_) {} });
+  };
+
+  // Named ROIs, Horos-style (see lib/roiVolume): a contour gets a name when it's finished,
+  // and the ROI list is reported whenever contours are drawn, edited, renamed or removed
+  // (debounced, and only when it actually changes). Mean intensity needs a contour's stats,
+  // which appear once it renders — hence also recomputing after renders.
+  useEffect(() => {
+    const el = divRef.current;
+    if (!el) return;
+    let timer = null;
+    let last = "";
+    const recompute = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const rois = listRois(imageIdsRef.current, AREA_ROI_TOOL_NAMES);
+        const key = JSON.stringify(rois);
+        if (key === last) return;
+        last = key;
+        onRoisChangeCbRef.current?.(rois);
+      }, 150);
+    };
+    const nameNewContour = (evt) => {
+      const annotation = evt.detail?.annotation;
+      if (!AREA_ROI_TOOL_NAMES.has(annotation?.metadata?.toolName) || annotation.data?.label) return;
+      // The event is shared with the MPR/translation viewers — only name contours on this stack
+      if (!imageIdsRef.current.includes(annotation.metadata.referencedImageId)) return;
+      csToolsUtilities.setAnnotationLabel(annotation, el, suggestRoiName(annotation, imageIdsRef.current, AREA_ROI_TOOL_NAMES));
+      recompute();
+    };
+    const events = [
+      csToolsEnums.Events.ANNOTATION_ADDED,
+      csToolsEnums.Events.ANNOTATION_MODIFIED,
+      csToolsEnums.Events.ANNOTATION_REMOVED,
+    ];
+    el.addEventListener(csToolsEnums.Events.ANNOTATION_RENDERED, recompute);
+    events.forEach(name => csEventTarget.addEventListener(name, recompute));
+    csEventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameNewContour);
+    return () => {
+      clearTimeout(timer);
+      el.removeEventListener(csToolsEnums.Events.ANNOTATION_RENDERED, recompute);
+      events.forEach(name => csEventTarget.removeEventListener(name, recompute));
+      csEventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameNewContour);
+    };
+  }, []);
 
   // Everything stateful about this viewport lives here so we can access it
   // from imperative handles and effects without stale closures.
@@ -135,7 +234,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     setRotation(deg) {
       const vp = ctx.current.viewport;
       if (!vp) return;
-      vp.setProperties({ rotation: ((deg % 360) + 360) % 360 });
+      vp.setViewPresentation({ rotation: ((deg % 360) + 360) % 360 });
       vp.render();
     },
     flipH() {
@@ -152,21 +251,38 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       vp.setCamera({ flipVertical: !cam.flipVertical });
       vp.render();
     },
+    // Window presets (lib/windowPresets) and "0 = the image's own window"
+    setWindow(center, width) {
+      const vp = ctx.current.viewport;
+      if (!vp) return;
+      vp.setProperties({ voiRange: { lower: center - width / 2, upper: center + width / 2 } });
+      vp.render();
+    },
+    resetWindow() {
+      const vp = ctx.current.viewport;
+      if (!vp) return;
+      applyVoi(vp, vp.getCurrentImageId?.() ?? "");
+      vp.render();
+    },
     toggleInvert() {
       const vp = ctx.current.viewport;
       if (!vp) return;
       const { invert = false } = vp.getProperties();
       vp.setProperties({ invert: !invert });
       vp.render();
+      // Cornerstone has no event for invert
+      if (ctx.current.stackLoaded) onDisplayChangeCbRef.current?.(displayOf(vp));
     },
+    // Before the stack has loaded (a linked viewer moved while this one opens) the slice is
+    // kept and shown once it has, rather than racing the stack's own first load
     setImageIndex(n) {
       const vp = ctx.current.viewport;
-      if (!vp || n < 0) return;
-      const numImages = vp.getImageIds?.()?.length ?? 0;
-      if (n < numImages) {
-        vp.setImageIdIndex(n);
-        vp.render();
+      if (n < 0) return;
+      if (!vp || !ctx.current.stackLoaded) {
+        ctx.current.pendingIndex = n;
+        return;
       }
+      showIndex(vp, n);
     },
     getCurrentIndex() {
       return ctx.current.viewport?.getCurrentImageIdIndex() ?? 0;
@@ -181,6 +297,19 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     },
     getProperties() {
       return ctx.current.viewport?.getProperties() ?? {};
+    },
+    getDisplay() {
+      return ctx.current.viewport && ctx.current.stackLoaded ? displayOf(ctx.current.viewport) : null;
+    },
+    // Show another viewer's window/level, invert, zoom or pan (any subset). Kept until the
+    // stack has loaded if it hasn't yet, so loading doesn't overwrite it.
+    applyDisplay(display) {
+      if (!display) return;
+      if (!ctx.current.viewport || !ctx.current.stackLoaded) {
+        ctx.current.pendingDisplay = { ...ctx.current.pendingDisplay, ...display };
+        return;
+      }
+      quietly(() => applyDisplayTo(ctx.current.viewport, display));
     },
     /** Delete whichever annotations are currently selected. Returns true if any were removed. */
     deleteSelectedAnnotations() {
@@ -213,11 +342,81 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
     }
   }
 
+  // What linked viewers share: window, invert, and zoom / pan relative to the fitted image
+  // (pan in patient mm, so it only means the same in a series with the same frame of reference)
+  function displayOf(vp) {
+    const { voiRange, invert = false } = vp.getProperties();
+    const cam = vp.getCamera();
+    const centre = ctx.current.imageCenterWorld;
+    return {
+      voiRange: voiRange ? { lower: voiRange.lower, upper: voiRange.upper } : null,
+      invert,
+      zoom: cam.parallelScale && ctx.current.baseScale ? ctx.current.baseScale / cam.parallelScale : 1,
+      pan: centre && cam.focalPoint ? [0, 1, 2].map(k => cam.focalPoint[k] - centre[k]) : [0, 0, 0],
+    };
+  }
+  const near = (a, b, eps) => Math.abs(a - b) <= eps;
+  function applyDisplayTo(vp, { voiRange, invert, zoom, pan }) {
+    const now = displayOf(vp);
+    let changed = false;
+    if (voiRange && !(now.voiRange && near(now.voiRange.lower, voiRange.lower, 1e-3) && near(now.voiRange.upper, voiRange.upper, 1e-3))) {
+      vp.setProperties({ voiRange });
+      changed = true;
+    }
+    if (invert != null && invert !== now.invert) {
+      vp.setProperties({ invert });
+      changed = true;
+    }
+    const cam = vp.getCamera();
+    const camera = {};
+    if (zoom > 0 && ctx.current.baseScale && !near(zoom, now.zoom, 1e-3)) camera.parallelScale = ctx.current.baseScale / zoom;
+    const centre = ctx.current.imageCenterWorld;
+    if (pan && centre && cam.focalPoint && cam.position && pan.some((v, k) => !near(v, now.pan[k], 1e-2))) {
+      const shift = [0, 1, 2].map(k => centre[k] + pan[k] - cam.focalPoint[k]);
+      camera.focalPoint = cam.focalPoint.map((v, k) => v + shift[k]);
+      camera.position = cam.position.map((v, k) => v + shift[k]);
+    }
+    if (Object.keys(camera).length) {
+      vp.setCamera(camera);
+      changed = true;
+    }
+    if (changed) vp.render();
+  }
+  // Runs fn without reporting onDisplayChange (Cornerstone fires its events synchronously)
+  function quietly(fn) {
+    ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
+    try { return fn(); } finally { ctx.current.quiet -= 1; }
+  }
+  // Cornerstone rejects a failed image load with a plain object; nothing else awaits it here
+  function showIndex(vp, n) {
+    if (n >= (vp.getImageIds?.()?.length ?? 0)) return;
+    vp.setImageIdIndex(n)
+      ?.catch?.(err => console.warn("[Viewer] couldn't show slice", n + 1, err?.error ?? err));
+    vp.render();
+  }
+
+  // After a stack loads: the fitted camera is the reference for zoom / pan, then any
+  // display a linked viewer sent while loading
+  function stackReady(vp) {
+    const cam = vp.getCamera();
+    ctx.current.baseScale = cam.parallelScale ?? 1;
+    ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
+    ctx.current.stackLoaded = true;
+    const pending = ctx.current.pendingDisplay;
+    ctx.current.pendingDisplay = null;
+    if (pending) quietly(() => applyDisplayTo(vp, pending));
+    const pendingIndex = ctx.current.pendingIndex;
+    ctx.current.pendingIndex = null;
+    if (pendingIndex != null) showIndex(vp, pendingIndex);
+  }
+
+  // Cornerstone 4 moved rotation out of setProperties/getProperties (it's silently ignored
+  // there) into the view presentation.
   function rotate(delta) {
     const vp = ctx.current.viewport;
     if (!vp) return;
-    const { rotation = 0 } = vp.getProperties();
-    vp.setProperties({ rotation: ((rotation + delta) % 360 + 360) % 360 });
+    const rotation = vp.getRotation?.() ?? 0;
+    vp.setViewPresentation({ rotation: ((rotation + delta) % 360 + 360) % 360 });
     vp.render();
   }
 
@@ -248,6 +447,12 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
 
       const viewport = engine.getViewport(viewportId);
       ctx.current.viewport = viewport;
+      const reportDisplay = () => {
+        if (ctx.current.quiet || !ctx.current.stackLoaded || !onDisplayChangeCbRef.current) return;
+        onDisplayChangeCbRef.current(displayOf(viewport));
+      };
+      divRef.current.addEventListener(Enums.Events.VOI_MODIFIED, reportDisplay);
+      divRef.current.addEventListener(Enums.Events.CAMERA_MODIFIED, reportDisplay);
 
       // ── Tool group ─────────────────────────────────────────────────────
       const toolGroup = ToolGroupManager.createToolGroup(toolGroupId);
@@ -259,38 +464,46 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         EllipticalROITool, CircleROITool, RectangleROITool,
         ArrowAnnotateTool, ProbeTool,
         PlanarFreehandROITool, StackScrollTool,
+        BidirectionalTool, CobbAngleTool, LabelTool, MagnifyTool,
       ];
       tools.forEach(T => toolGroup.addTool(T.toolName));
+      // Pencil: freehand strokes without area stats, kept apart from the named ROIs
+      toolGroup.addToolInstance(PENCIL_TOOL_NAME, PlanarFreehandROITool.toolName, { calculateStats: false });
+
+      // ROI name as the first line of each area contour's label, above its usual stats
+      AREA_ROI_TOOL_NAMES.forEach(name => {
+        const tool = toolGroup.getToolInstance(name);
+        const baseTextLines = tool?.configuration?.getTextLines;
+        if (!baseTextLines) return;
+        tool.configuration.getTextLines = (data, targetId) => [
+          ...(data.label ? [data.label] : []),
+          ...(baseTextLines(data, targetId) ?? []),
+        ];
+      });
       toolGroup.addViewport(viewportId, engineId);
 
-      // Override ArrowAnnotateTool's prompt with a custom React dialog callback
-      const arrowTool = toolGroup.getToolInstance(ArrowAnnotateTool.toolName);
-      if (arrowTool) {
-        arrowTool.configuration.getTextCallback = (doneChangingTextCallback) => {
+      // Arrow and text labels ask for their text in the app's own dialog, not prompt() —
+      // when drawn, and when double-clicked to edit (pre-filled with the current text)
+      [ArrowAnnotateTool, LabelTool].map(T => toolGroup.getToolInstance(T.toolName)).filter(Boolean).forEach(textTool => {
+        textTool.configuration.getTextCallback = (doneChangingTextCallback) => {
           if (arrowTextCbRef.current) {
             arrowTextCbRef.current(doneChangingTextCallback);
           } else {
             doneChangingTextCallback(prompt("Enter your annotation:"));
           }
         };
-      }
-
-      // Bring annotation tools to Enabled state (addTool leaves them Disabled)
-      // so setToolActive() can transition them cleanly later
-      ALL_ANNOTATION_TOOLS.forEach(name => {
-        try { toolGroup.setToolEnabled(name); } catch (_) {}
+        textTool.configuration.changeTextCallback = (annotation, _evt, doneChangingTextCallback) => {
+          const current = annotation?.data?.label ?? "";
+          if (arrowTextCbRef.current) {
+            arrowTextCbRef.current(doneChangingTextCallback, current);
+          } else {
+            doneChangingTextCallback(prompt("Edit your annotation:", current) ?? current);
+          }
+        };
       });
 
-      // Defaults: Pan on left, W/L on middle, Zoom on right
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Auxiliary }],
-      });
-      toolGroup.setToolActive(ZoomTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Secondary }],
-      });
+      // Horos mouse layout: left = W/L (or the chosen tool), middle = pan, right = zoom
+      applyBindings(toolGroup);
       // StackScrollTool stays disabled until the stack has images — activating
       // it on an empty stack causes "Stack Viewport has no images" errors.
 
@@ -301,6 +514,21 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       const onRendered = () => {
         const vp = ctx.current.viewport;
         if (!vp) return;
+
+        // Orientation letters — only for DICOM carrying patient orientation, not plain PNG/JPG
+        const plane = metaData.get("imagePlaneModule", vp.getCurrentImageId?.() ?? "");
+        const markers = plane?.rowCosines ? getOrientationMarkers(vp.getCamera()) : null;
+        const markersKey = JSON.stringify(markers);
+        if (markersKey !== orientationKeyRef.current) {
+          orientationKeyRef.current = markersKey;
+          setOrientation(markers);
+        }
+
+        // Scale bar follows zoom; the pixel readout follows the slice under a still mouse
+        const mmPerPixel = mmPerCanvasPixel(vp);
+        const height = divRef.current?.clientHeight ?? 0;
+        setScale(prev => (prev.mmPerPixel === mmPerPixel && prev.height === height ? prev : { mmPerPixel, height }));
+        if (pointerRef.current) onPixelValueCbRef.current?.(probePixel(vp, pointerRef.current));
 
         const idx = vp.getCurrentImageIdIndex?.() ?? -1;
         if (idx !== lastIndex && idx >= 0) {
@@ -313,7 +541,7 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
           try {
             const cam = vp.getCamera();
             const zoom = ctx.current.baseScale / (cam.parallelScale ?? ctx.current.baseScale);
-            const { rotation = 0, invert: _i } = vp.getProperties();
+            const rotation = vp.getRotation?.() ?? 0;
             const el = divRef.current;
             const cw = el?.clientWidth ?? 1;
             const ch = el?.clientHeight ?? 1;
@@ -340,15 +568,19 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       divRef.current?.addEventListener(Enums.Events.IMAGE_RENDERED, onRendered);
 
       // Load initial images
-      if (imageIds.length) {
-        await viewport.setStack(imageIds);
-        // Apply the DICOM's embedded WindowCenter/Width so CT looks correct immediately.
-        applyVoi(viewport, imageIds[0]);
-        viewport.render();
+      // The latest imageIds: they may have arrived while Cornerstone was starting
+      const initialIds = imageIdsRef.current;
+      if (initialIds.length) {
+        ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
+        try {
+          await viewport.setStack(initialIds);
+          // Apply the DICOM's embedded WindowCenter/Width so CT looks correct immediately.
+          applyVoi(viewport, initialIds[0]);
+          viewport.render();
+        } finally { ctx.current.quiet -= 1; }
+        if (cancelled) return;
         // Store base parallelScale for zoom calculation and image center for mask alignment
-        const initCam = viewport.getCamera();
-        ctx.current.baseScale = initCam.parallelScale ?? 1;
-        ctx.current.imageCenterWorld = initCam.focalPoint ? [...initCam.focalPoint] : null;
+        stackReady(viewport);
         // Now safe to enable scroll
         toolGroup.setToolActive(StackScrollTool.toolName, {
           bindings: [{ mouseButton: MouseBindings.Wheel }],
@@ -379,32 +611,40 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
       const vp = ctx.current.viewport;
       if (!engine || !vp) return;
       try {
-        engine.resize(true, false);
-        // Re-fit the image to the new container size so the mask stays aligned.
-        // This resets user pan/zoom on resize, which is acceptable for split-screen transitions.
-        vp.resetCamera();
-        vp.render();
-        const cam = vp.getCamera();
-        ctx.current.baseScale = cam.parallelScale ?? 1;
-        ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
+        quietly(() => {
+          // Re-fit to the new size (the fit is what zoom / pan and the mask overlay are
+          // measured from), then put back the zoom and pan the user had on top of it
+          const before = ctx.current.stackLoaded ? displayOf(vp) : null;
+          engine.resize(true, false);
+          vp.resetCamera();
+          const cam = vp.getCamera();
+          ctx.current.baseScale = cam.parallelScale ?? 1;
+          ctx.current.imageCenterWorld = cam.focalPoint ? [...cam.focalPoint] : null;
+          if (before) applyDisplayTo(vp, { zoom: before.zoom, pan: before.pan });
+          vp.render();
+        });
       } catch (_) {}
     });
 
     ro.observe(el);
     return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Update image stack when imageIds prop changes ─────────────────────────
   useEffect(() => {
     const vp = ctx.current.viewport;
     if (!vp || !imageIds.length) return;
+    ctx.current.stackLoaded = false;
+    ctx.current.quiet = (ctx.current.quiet ?? 0) + 1;
     vp.setStack(imageIds)
       .then(() => {
         applyVoi(vp, imageIds[0]);
         vp.render();
-        const updatedCam = vp.getCamera();
-        ctx.current.baseScale = updatedCam.parallelScale ?? 1;
-        ctx.current.imageCenterWorld = updatedCam.focalPoint ? [...updatedCam.focalPoint] : null;
+      })
+      .finally(() => { ctx.current.quiet -= 1; })
+      .then(() => {
+        stackReady(vp);
         // Enable stack scroll now that the stack is populated
         const tg = ctx.current.toolGroup;
         if (tg) {
@@ -416,59 +656,53 @@ const CornerstoneViewport = forwardRef(function CornerstoneViewport(
         }
       })
       .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageIds]);
 
-  // ── Switch active annotation tool ─────────────────────────────────────────
+  // ── Mouse buttons (Horos layout, see lib/mouseBindings) ──────────────────
+  // An annotation tool, when chosen, takes the left button; otherwise it's the
+  // selected left-button tool (window/level by default, or pan).
   useEffect(() => {
-    const { toolGroup } = ctx.current;
-    if (!toolGroup) return;
+    applyBindings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTool, leftTool]);
 
-    if (!activeTool || !TOOL_MAP[activeTool]) {
-      // No annotation tool active — restore default Pan on left button
-      ALL_ANNOTATION_TOOLS.forEach(name => {
-        try { toolGroup.setToolEnabled(name); } catch (_) {}
-      });
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-      return;
-    }
-
-    // Release Pan from primary button, bring all annotation tools to Enabled,
-    // then activate the chosen one
-    try { toolGroup.setToolEnabled(PanTool.toolName); } catch (_) {}
-    ALL_ANNOTATION_TOOLS.forEach(name => {
-      try { toolGroup.setToolEnabled(name); } catch (_) {}
-    });
-
-    toolGroup.setToolActive(TOOL_MAP[activeTool], {
-      bindings: [{ mouseButton: MouseBindings.Primary }],
-    });
-  }, [activeTool]);
-
-  // ── Window/Level toggle ───────────────────────────────────────────────────
-  useEffect(() => {
-    const { toolGroup } = ctx.current;
-    if (!toolGroup) return;
-    if (windowLevel) {
-      try { toolGroup.setToolEnabled(PanTool.toolName); } catch (_) {}
-      toolGroup.setToolActive(WindowLevelTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-    } else {
-      try { toolGroup.setToolEnabled(WindowLevelTool.toolName); } catch (_) {}
-      toolGroup.setToolActive(PanTool.toolName, {
-        bindings: [{ mouseButton: MouseBindings.Primary }],
-      });
-    }
-  }, [windowLevel]);
+  // ── Pixel value under the cursor (HU on CT) ──────────────────────────────
+  const reportPixel = (e) => {
+    const vp = ctx.current.viewport;
+    const rect = divRef.current?.getBoundingClientRect();
+    if (!vp || !rect) return;
+    pointerRef.current = [e.clientX - rect.left, e.clientY - rect.top];
+    onPixelValueCbRef.current?.(probePixel(vp, pointerRef.current));
+  };
+  const clearPixel = () => {
+    pointerRef.current = null;
+    onPixelValueCbRef.current?.(null);
+  };
 
   return (
-    <div
-      ref={divRef}
-      style={{ width: "100%", height: "100%" }}
-      onContextMenu={e => e.preventDefault()}
-    />
+    <div className="relative" style={{ width: "100%", height: "100%" }}>
+      <div
+        ref={setDivRef}
+        style={{ width: "100%", height: "100%", cursor: activeTool === "brush" && !readOnly ? "none" : undefined }}
+        onContextMenu={e => e.preventDefault()}
+        onMouseMove={reportPixel}
+        onMouseLeave={clearPixel}
+      />
+      <OrientationMarkers markers={orientation} />
+      <ScaleBar mmPerPixel={scale.mmPerPixel} paneHeight={scale.height} />
+      {!readOnly && onBrushRegionsChange && (
+        <StackBrushLayer
+          getViewport={() => ctx.current?.viewport}
+          element={element}
+          imageIds={imageIds}
+          active={activeTool === "brush"}
+          regions={brushRegions}
+          ready={brushReady}
+          onRegionsChange={onBrushRegionsChange}
+        />
+      )}
+    </div>
   );
 });
 

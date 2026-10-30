@@ -11,6 +11,7 @@ import {
   FiDownload, FiMaximize2, FiSearch,
   FiFileText, FiChevronDown, FiChevronUp, FiX, FiTrash2,
 } from "react-icons/fi";
+import { normalizeUrgency } from "../casespage/CasesPage";
 import { requestDocumentUpload, uploadToSignedUrl, confirmDocumentUpload, getDocumentsForPatient, getDocumentDownloadUrl, deleteDocument, getPatientById, deleteStudy, authFetch } from "../../../lib/api";
 
 const fadeUp = {
@@ -688,24 +689,31 @@ function PatientDetailsPage() {
     }
     if (!id) return;
     setPatientLoading(true);
+    // /patients/{id} returns the backend shape (full_name); the page reads the
+    // shape the cases list passes in.
     getPatientById(id)
-      .then(data => { setPatient(data); })
+      .then(data => { setPatient({ ...data, name: data.full_name }); })
       .catch(() => { setPatient(null); })
       .finally(() => setPatientLoading(false));
   }, [id, state?.patient]);
 
-  // Fetch case_id if not available from navigation state
+  // Fetch the case if navigation state didn't bring it (case_id, urgency)
+  const [caseUrgency, setCaseUrgency] = useState(null);
+  const fromCasesList = Boolean(state?.patient);
   useEffect(() => {
-    if (caseId || !id) return;
+    if (!id || (caseId && fromCasesList)) return;
     const baseURL = process.env.REACT_APP_API_URL || "";
     authFetch(`${baseURL}/cases/?limit=100`)
       .then(res => res.ok ? res.json() : [])
       .then(cases => {
-        const match = cases.find(c => (c.patient?.id || c.patient_id) === id);
-        if (match) setCaseId(match.id);
+        const match = cases.find(c => caseId && String(c.id) === String(caseId))
+          || cases.find(c => (c.patient?.id || c.patient_id) === id);
+        if (!match) return;
+        if (!caseId) setCaseId(match.id);
+        setCaseUrgency(normalizeUrgency(match.urgency));
       })
       .catch(() => { });
-  }, [id, caseId]);
+  }, [id, fromCasesList]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [deleteConfirm, setDeleteConfirm] = useState(null); // { id, label }
   const [deleteReportConfirm, setDeleteReportConfirm] = useState(null); // { id, title }
@@ -841,7 +849,7 @@ function PatientDetailsPage() {
                     {[
                       { label: "Sex", value: patient.gender },
                       { label: "Blood", value: "A+" },
-                      { label: "Urgency", value: patient.urgency },
+                      { label: "Urgency", value: patient.urgency || caseUrgency },
                       { label: "Study Date", value: patient.studyDate },
 
                     ].map(({ label, value }) => (

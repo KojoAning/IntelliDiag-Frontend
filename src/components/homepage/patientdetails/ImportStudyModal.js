@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FiX, FiUploadCloud, FiLoader, FiFolder, FiLayers, FiAlertCircle } from "react-icons/fi";
 import { ingestDicom } from "../../../lib/api";
 import { parseDicomForIngest } from "../../../lib/dicomUtils";
+import { unzipFiles, isZip } from "../../../lib/unzip";
 
 // How many files to send to /dicom/ingest at once. The backend shares the
 // study/series by UID and is race-safe, but a small pool keeps things gentle.
@@ -116,10 +117,22 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
   const tree = useMemo(() => buildTree(parsed), [parsed]);
 
   const addFiles = async (fileList) => {
-    const files = Array.from(fileList);
+    let files = Array.from(fileList);
     if (!files.length) return;
     setParsing(true);
     setError(null);
+    // A zipped study: its files go through the same checks as any others
+    const expanded = [];
+    for (const file of files) {
+      if (!isZip(file)) { expanded.push(file); continue; }
+      try {
+        (await unzipFiles(file)).forEach(entry => expanded.push(entry.file));
+      } catch (err) {
+        console.warn(`[Import] couldn't read ${file.name}:`, err);
+        setError(`Couldn't open ${file.name}: ${err.message}`);
+      }
+    }
+    files = expanded;
     setSkippedNonDicom(0); // reset on each new selection
     let nonDicom = 0;
     const results = [];
@@ -218,7 +231,7 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
                   <h2 className="text-white text-[17px] font-medium m-0">Import DICOM Study</h2>
                 </div>
                 <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
-                  Drop a study's .dcm files. Studies &amp; series are detected automatically.
+                  Drop a study's DICOM files, a ZIP of them, or a folder (e.g. a CD). Studies &amp; series are detected automatically.
                 </p>
               </div>
               <button
@@ -245,20 +258,20 @@ function ImportStudyModal({ isOpen, onClose, caseId, onCreated }) {
               >
                 <FiUploadCloud size={22} color={dragging ? "#0694FB" : "#3a3a3a"} />
                 <p className={`text-[13px] m-0 transition-colors ${dragging ? "text-[#0694FB]" : "text-[#4a4a4a]"}`}>
-                  Drop .dcm files here or <span className="text-[#0694FB]">browse</span>
+                  Drop DICOM files or a ZIP here, or <span className="text-[#0694FB]">browse</span>
                 </p>
                 <button
                   onClick={e => { e.stopPropagation(); folderInputRef.current?.click(); }}
                   className="flex items-center gap-1.5 text-[#6B6B6B] hover:text-white text-[13px] bg-transparent border-none cursor-pointer transition-colors mt-0.5"
                 >
-                  <FiFolder size={14} /> Select a folder instead
+                  <FiFolder size={14} /> Select a folder (e.g. a CD) instead
                 </button>
               </div>
 
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".dcm,application/dicom"
+                accept=".dcm,application/dicom,.zip,application/zip"
                 multiple
                 className="hidden"
                 onChange={e => { addFiles(e.target.files); e.target.value = null; }}

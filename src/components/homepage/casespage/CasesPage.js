@@ -27,7 +27,7 @@ const URGENCY_MAP = {
   routine: "Routine",
 };
 
-function normalizeUrgency(raw) {
+export function normalizeUrgency(raw) {
   if (!raw) return "Routine";
   return URGENCY_MAP[raw.toLowerCase().replace(/-/g, "_").trim()] ?? raw;
 }

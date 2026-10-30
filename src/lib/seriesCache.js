@@ -4,8 +4,11 @@
 // one series at a time, so a radiologist can keep switching series and scrolling slices
 // after the network drops. Each series is held as raw DICOM blobs only — decoding into
 // a volume still happens on open, and Cornerstone's own cache bounds that part.
+// Downloads are also kept on disk (lib/seriesStore), so a reload reuses them instead of
+// downloading again, as long as the series' image list hasn't changed.
 import { authFetch, getImagesForStudy } from "./api";
-import { renderDicomThumbnail, parseMultipartBody, parseDicomInstanceInfo, getDicomMetadata } from "./dicomUtils";
+import { readStoredSeries, writeStoredSeries, writeStoredThumbnail, deleteStoredSeries, storedSeriesIds, sameRecords } from "./seriesStore";
+import { renderDicomThumbnail, createMultipartReader, parseDicomInstanceInfo, getDicomMetadata } from "./dicomUtils";
 
 // Rendered thumbnails, keyed by image id, or `series:<id>` for a series card.
 export const thumbCache = new Map();
@@ -19,7 +22,8 @@ export const PROJECTION_MODALITIES = new Set(["CR", "DX", "MG", "XA", "RF", "IO"
 // Series past the budget still load normally when opened.
 export const MEMORY_BUDGET_BYTES = 1024 * 1024 * 1024;
 
-// seriesId -> { status: "loading" | "ready" | "error" | "skipped", promise, images, metadata, bytes }
+// seriesId -> { status: "loading" | "ready" | "error" | "skipped", promise, images, metadata, bytes,
+//   partial: { slices: [{ instanceNumber, buffer }], total } while it downloads }
 const entries = new Map();
 const listeners = new Set();
 let bytesHeld = 0;
@@ -31,6 +35,12 @@ function setEntry(id, patch) {
 
 export function getSeriesStatus(seriesId) {
   return entries.get(String(seriesId))?.status ?? "idle";
+}
+
+// The slices of a series downloaded so far (null when it isn't downloading), so the viewer
+// can show them before the whole series is in
+export function getSeriesPartial(seriesId) {
+  return entries.get(String(seriesId))?.partial ?? null;
 }
 
 export function subscribeSeriesCache(fn) {
@@ -56,6 +66,7 @@ export async function fetchSeriesImages(seriesId) {
       name: fname || fallbackName,
       type: isDicom ? "application/dicom" : "image",
       file: null,
+      sopInstanceUid: record.sop_instance_uid ?? null, // pairs the record with its file in the bulk download
     };
   });
 }
@@ -70,9 +81,39 @@ async function getSeriesToken(seriesId) {
   return data.token;
 }
 
-// Single bulk DICOM fetch for the whole series. Returns the imgs array with blobUrl
-// attached to each entry, so Cornerstone never touches /stream.
-async function fetchSeriesBulk(seriesId, imgs, { renderThumbs }) {
+// Which downloaded file belongs to which image record: matched on SOP Instance UID, so a
+// series with repeated or missing instance numbers, plain JPEG/PNG records (no file in the
+// download) or files of since-deleted images still pairs correctly. Records without a UID
+// fall back to the leftover files in instance-number order. Returns one part (or null) per record.
+export function pairPartsWithImages(parts, imgs) {
+  const infos = parts.map(part => {
+    try { return { part, ...parseDicomInstanceInfo(part) }; }
+    catch { return { part, instanceNumber: null, sopUid: null }; }
+  });
+  const byUid = new Map(infos.filter(info => info.sopUid).map(info => [info.sopUid, info]));
+  const used = new Set();
+  const paired = imgs.map(img => {
+    const info = img.sopInstanceUid && byUid.get(img.sopInstanceUid);
+    if (!info || used.has(info)) return null;
+    used.add(info);
+    return info.part;
+  });
+  const leftover = infos
+    .filter(info => !used.has(info))
+    .sort((a, b) => (a.instanceNumber ?? Infinity) - (b.instanceNumber ?? Infinity));
+  imgs.forEach((img, i) => {
+    if (paired[i] || img.sopInstanceUid || img.type !== "application/dicom" || !leftover.length) return;
+    paired[i] = leftover.shift().part;
+  });
+  return paired;
+}
+
+// Single bulk DICOM fetch for the whole series: one Blob (or null) per image record. The
+// response is read as it arrives, and the slices in so far are published as the entry's
+// `partial` (at most every PARTIAL_EVERY_MS).
+const PARTIAL_EVERY_MS = 300;
+
+async function fetchSeriesBulk(seriesId, imgs) {
   const token = await getSeriesToken(seriesId);
   const res = await fetch(
     `${process.env.REACT_APP_API_BASE}/dicom/series/${seriesId}/bulk`,
@@ -89,56 +130,65 @@ async function fetchSeriesBulk(seriesId, imgs, { renderThumbs }) {
   const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2];
   if (!boundary) throw new Error(`No multipart boundary in bulk response. content-type: ${contentType}`);
 
-  const buffer = await res.arrayBuffer();
-  const parts = parseMultipartBody(buffer, boundary);
-
-  // Parse instance numbers and sort clinically. Wrapped in try/catch so a
-  // parse failure degrades to original order rather than aborting the bulk fetch.
-  let orderedParts = parts;
-  try {
-    const annotated = parts.map(part => {
-      const { instanceNumber } = parseDicomInstanceInfo(part);
-      return { part, instanceNumber };
-    });
-    if (annotated.some(a => a.instanceNumber != null)) {
-      annotated.sort((a, b) => {
-        if (a.instanceNumber != null && b.instanceNumber != null) return a.instanceNumber - b.instanceNumber;
-        if (a.instanceNumber != null) return -1;
-        if (b.instanceNumber != null) return 1;
-        return 0;
-      });
-      orderedParts = annotated.map(a => a.part);
+  const reader = createMultipartReader(boundary);
+  const parts = [];
+  const slices = [];
+  const total = imgs.filter(img => img.type === "application/dicom").length;
+  let bytes = 0;
+  let published = 0;
+  const publish = () => {
+    published = Date.now();
+    setEntry(String(seriesId), { partial: { slices: slices.slice(), total } });
+  };
+  const take = (newParts) => {
+    for (const part of newParts) {
+      parts.push(part);
+      slices.push({ instanceNumber: parseDicomInstanceInfo(part).instanceNumber, buffer: part });
     }
-  } catch (sortErr) {
-    // instance sort failed, using original order
+    if (newParts.length && Date.now() - published > PARTIAL_EVERY_MS) publish();
+  };
+  if (res.body?.getReader) {
+    const stream = res.body.getReader();
+    for (;;) {
+      const { done, value } = await stream.read();
+      if (done) break;
+      bytes += value.byteLength;
+      take(reader.push(value));
+    }
+  } else {
+    const buffer = new Uint8Array(await res.arrayBuffer());
+    bytes = buffer.byteLength;
+    take(reader.push(buffer));
   }
+  const blobs = pairPartsWithImages(parts, imgs).map(part => part && new Blob([part], { type: "application/dicom" }));
+  return { blobs, bytes };
+}
 
-  const middle = Math.floor(orderedParts.length / 2);
-  const blobUrls = new Array(imgs.length).fill(null);
-  await Promise.all(orderedParts.map(async (part, i) => {
-    if (!imgs[i]) return;
-    const blob = new Blob([part], { type: "application/dicom" });
-    blobUrls[i] = URL.createObjectURL(blob);
+// The viewer's image list from the records and their blobs (downloaded or from disk): a
+// blobUrl on each image that has one, so Cornerstone never touches /stream; thumbnails;
+// and the series' DICOM metadata from its first slice.
+async function finishSeries(seriesId, imgs, blobs, { renderThumbs }) {
+  const blobUrls = blobs.map(blob => blob && URL.createObjectURL(blob));
 
-    // Per-image thumbnails only where the side panel shows them; the middle slice
-    // always becomes the series card's thumbnail so it renders offline too.
-    if (renderThumbs && !thumbCache.has(imgs[i].id)) {
-      const src = await renderDicomThumbnail(blob);
-      if (src) thumbCache.set(imgs[i].id, src);
-    }
-    if (i === middle && !thumbCache.has(`series:${seriesId}`)) {
-      const src = thumbCache.get(imgs[i].id) ?? await renderDicomThumbnail(blob);
-      if (src) thumbCache.set(`series:${seriesId}`, src);
+  // Per-image thumbnails only where the side panel shows them; the middle slice
+  // always becomes the series card's thumbnail so it renders offline too.
+  const middle = Math.floor(imgs.length / 2);
+  await Promise.all(imgs.map(async (img, i) => {
+    if (blobs[i] && renderThumbs && !thumbCache.has(img.id)) {
+      const src = await renderDicomThumbnail(blobs[i]);
+      if (src) thumbCache.set(img.id, src);
     }
   }));
+  const thumbIndex = blobs[middle] ? middle : blobs.findIndex(Boolean);
+  if (thumbIndex >= 0 && !thumbCache.has(`series:${seriesId}`)) {
+    const src = thumbCache.get(imgs[thumbIndex].id) ?? await renderDicomThumbnail(blobs[thumbIndex]);
+    if (src) thumbCache.set(`series:${seriesId}`, src);
+  }
 
   const images = imgs.map((img, i) => blobUrls[i] ? { ...img, blobUrl: blobUrls[i] } : img);
-
-  // Extract DICOM metadata from the first available slice
   const firstBlobUrl = blobUrls.find(Boolean);
   const metadata = firstBlobUrl ? await getDicomMetadata(firstBlobUrl).catch(() => null) : null;
-
-  return { images, metadata, bytes: buffer.byteLength };
+  return { images, metadata };
 }
 
 // Load a series, or return the in-flight / finished load. Resolves to { images, metadata };
@@ -151,13 +201,36 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
   const promise = (async () => {
     let imgs = [];
     try {
-      imgs = await fetchSeriesImages(id);
-      const { images, metadata, bytes } = await fetchSeriesBulk(id, imgs, { renderThumbs });
+      // The stored copy and the server's image list (to check it's still current) together
+      const [stored, listed] = await Promise.all([
+        readStoredSeries(id).catch(() => null),
+        fetchSeriesImages(id).then(records => ({ records }), error => ({ error })),
+      ]);
+      if (listed.error && !stored) throw listed.error;
+      imgs = listed.records ?? stored.records; // offline: open the last downloaded copy
+      const thumbKey = `series:${id}`;
+      // A stored copy missing a DICOM file (downloads before the multipart fix dropped the
+      // first one) is downloaded again rather than streaming that slice from the backend
+      const fromDisk = !!stored && sameRecords(stored.records, imgs)
+        && imgs.every((img, i) => img.type !== "application/dicom" || stored.blobs?.[i]);
+      let blobs, bytes;
+      if (fromDisk) {
+        ({ blobs, bytes } = stored);
+        if (stored.thumbnail && !thumbCache.has(thumbKey)) thumbCache.set(thumbKey, stored.thumbnail);
+      } else {
+        ({ blobs, bytes } = await fetchSeriesBulk(id, imgs));
+      }
+      const { images, metadata } = await finishSeries(id, imgs, blobs, { renderThumbs });
+      const thumbnail = thumbCache.get(thumbKey) ?? null;
+      const keep = fromDisk
+        ? (!stored.thumbnail && thumbnail ? writeStoredThumbnail(id, thumbnail) : null)
+        : writeStoredSeries(id, { records: imgs, blobs, bytes, thumbnail });
+      keep?.catch(err => console.warn("[Series] couldn't keep the download on this device:", err));
       bytesHeld += bytes;
-      setEntry(id, { status: "ready", images, metadata, bytes });
+      setEntry(id, { status: "ready", images, metadata, bytes, partial: null });
       return { images, metadata };
     } catch (err) {
-      setEntry(id, { status: "error" });
+      setEntry(id, { status: "error", partial: null });
       if (!imgs.length) throw err;
       return { images: imgs, metadata: null };
     }
@@ -166,9 +239,20 @@ export function loadSeries(seriesId, { renderThumbs = false } = {}) {
   return promise;
 }
 
+// The series card's thumbnail without the network: rendered this session, or kept with
+// the series' copy on disk (null if neither)
+export async function storedSeriesThumbnail(seriesId) {
+  const key = `series:${seriesId}`;
+  if (thumbCache.has(key)) return thumbCache.get(key);
+  const thumbnail = (await readStoredSeries(String(seriesId)).catch(() => null))?.thumbnail ?? null;
+  if (thumbnail) thumbCache.set(key, thumbnail);
+  return thumbnail;
+}
+
 // Drop a series (e.g. after new images were uploaded to it) so the next load refetches.
 export function invalidateSeries(seriesId) {
   const id = String(seriesId);
+  deleteStoredSeries(id).catch(() => {});
   const entry = entries.get(id);
   if (!entry) return;
   entry.images?.forEach(img => img.blobUrl && URL.revokeObjectURL(img.blobUrl));
@@ -191,6 +275,12 @@ export function prefetchSeriesInBackground(seriesList) {
   if (draining) return;
   draining = true;
   (async () => {
+    // Series already on this device need no download: open them all now, so their cards
+    // don't wait behind downloads
+    const stored = await storedSeriesIds().catch(() => new Set());
+    const local = queue.filter(q => stored.has(q.id));
+    queue.splice(0, queue.length, ...queue.filter(q => !stored.has(q.id)));
+    await Promise.all(local.map(({ id, renderThumbs }) => (entries.has(id) ? null : loadSeries(id, { renderThumbs }).catch(() => {}))));
     while (queue.length) {
       const { id, renderThumbs } = queue.shift();
       if (entries.has(id)) continue; // opened by the user meanwhile

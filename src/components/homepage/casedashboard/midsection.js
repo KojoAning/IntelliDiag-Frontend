@@ -1,16 +1,39 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import CornerstoneViewport from "./CornerstoneViewport";
-import CornerstoneVolumeViewport from "./CornerstoneVolumeViewport";
+import CornerstoneVolumeViewport, { SLAB_MODES, slabLabel, FUSION_COLORMAPS } from "./CornerstoneVolumeViewport";
+import { loadSeries } from "../../../lib/seriesCache";
+import CornerstoneVolume3D, { presetsFor } from "./CornerstoneVolume3D";
+import SliceScrubber from "./SliceScrubber";
+import DicomTagPanel from "./DicomTagPanel";
+import RecistPanel from "./RecistPanel";
+import KeyImagesPanel from "./KeyImagesPanel";
+import PriorStudyPicker from "./PriorStudyPicker";
+import { latestResult, compareLesions, formatStudyDate } from "../../../lib/priorStudies";
+import SeriesPane, { EmptyPane } from "./SeriesPane";
+import { translationPairsFor } from "./rightsection/TranslationPanel";
+import { getLabelsAlwaysOn, setLabelsAlwaysOn } from "../../../lib/cornerstoneSetup";
+import { LAYOUTS, SERIES_DRAG_TYPE, normalizeLayout, resizeLayout, placeSeries, clearPane, activatePane } from "../../../lib/viewerLayout";
+import { readSlicePositions, matchSlice, canLink, depthAlong, parallelTo, sliceAtDepth } from "../../../lib/slicePositions";
 import { buildImageIds, getDicomMetadata, isDicomImage } from "../../../lib/dicomUtils";
-import { annotation as csAnnotation, Enums as csToolsEnums, CrosshairsTool } from "@cornerstonejs/tools";
+import { CT_WINDOW_PRESETS } from "../../../lib/windowPresets";
+import { serializeAnnotations, restoreAnnotations, restoreKeyImages, restoreRecistReference, restoreMprRegions, SAVED_TOOL_NAMES } from "../../../lib/annotationPersistence";
+import { suggestLesionName } from "../../../lib/recist";
+import { formatPixelValue } from "../../../lib/viewportReadouts";
+import { renameRoi, deleteRoi, AREA_ROI_TOOL_NAMES } from "../../../lib/roiVolume";
+import { getSeriesAnnotations, saveSeriesAnnotations } from "../../../lib/api";
+import { captureViewer, canvasBlob, download, copyImage, printImage, recordMovie, seriesZip } from "../../../lib/viewerExport";
+import { zipFiles } from "../../../lib/zipWriter";
+import { secondaryCapture } from "../../../lib/dicomWriter";
+import { eventTarget as csEventTarget, Enums as csEnums } from "@cornerstonejs/core";
+import { annotation as csAnnotation, Enums as csToolsEnums, CrosshairsTool, BidirectionalTool } from "@cornerstonejs/tools";
 import {
   FiZoomIn, FiZoomOut, FiMaximize2, FiRotateCw, FiRotateCcw,
   FiChevronLeft, FiChevronRight,
   FiTrash2, FiDelete,
   FiPlay, FiPause, FiSkipBack, FiSkipForward,
-  FiX, FiInfo,
-  FiLoader, FiCheck,
+  FiX, FiInfo, FiMove, FiCrosshair, FiMousePointer, FiChevronDown, FiHelpCircle, FiList, FiEdit2,
+  FiLoader, FiCheck, FiDownload,
 } from "react-icons/fi";
 import { BsDiamondFill } from "react-icons/bs";
 import { MdFlip, MdInvertColors } from "react-icons/md";
@@ -21,9 +44,10 @@ import { GoArrowUpRight } from "react-icons/go";
 import { IoSquareOutline } from "react-icons/io5";
 import { PiPolygonLight, PiSparkleFill } from "react-icons/pi";
 import { RiSketching } from "react-icons/ri";
-import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360 } from "react-icons/tb";
+import { TbRulerMeasure, TbAngle, TbCirclePlus, TbView360, TbArrowsCross, TbLetterT, TbPencil, TbZoomIn, TbStar, TbStarFilled, TbTags, TbVectorBezier, TbTargetArrow, TbLayoutGrid, TbLink, TbLinkOff, TbTextCaption, TbBrush, TbStars, TbHistory } from "react-icons/tb";
 import { CiEraser } from "react-icons/ci";
 import { Sparkle } from "lucide-react";
+import { formatSize, SIZE_AXES_LABEL } from "../../../lib/regionSize";
 
 // ── Small top-bar button ───────────────────────────────────────────────────────
 function ViewBtn({ icon, label, active, onClick, disabled }) {
@@ -62,6 +86,144 @@ function ToolBtn({ icon, label, active, onClick }) {
 
 function HDivider() { return <div className="w-6 h-px bg-[#1E1E1E]" />; }
 
+// Caveats the model reported about its input (e.g. a brain MR that isn't skull-stripped)
+function ResultWarnings({ warnings }) {
+  if (!warnings?.length) return null;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
+      {warnings.map(text => (
+        <p key={text} className="m-0 text-[11px] leading-snug text-[#F59E0B]">{text}</p>
+      ))}
+    </div>
+  );
+}
+
+// Brain tumour results: the atlas-based midline shift. It reads about 20% low (smooth warp),
+// so it's shown as approximate with how to measure it directly.
+function MidlineShift({ shift }) {
+  if (!shift) return null;
+  const text = shift.significant
+    ? `Midline shift ≈ ${shift.mm} mm toward the patient's ${shift.toward}`
+    : `No significant midline shift (≈ ${shift.mm} mm)`;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-0.5">
+      <p className={`m-0 text-[12px] leading-snug ${shift.significant ? "text-[#F59E0B]" : "text-[#CCCCCC]"}`}>{text}</p>
+      <p className="m-0 text-[11px] leading-snug text-[#868686]" title="On an axial slice at the foramen of Monro: draw the midline from the anterior to the posterior falx attachment, then measure the septum pellucidum's distance from it with the Length tool">
+        Atlas estimate, tends to read low — confirm with the Length tool
+      </p>
+    </div>
+  );
+}
+
+// Lesion totals against the same model's result on the earlier study shown beside
+function PriorComparison({ comparison: c }) {
+  if (!c) return null;
+  const change = c.changePct == null ? "" : ` (${c.changePct > 0 ? "+" : ""}${c.changePct}%)`;
+  const tone = c.changePct == null || Math.abs(c.changePct) < 20 ? "text-[#CCCCCC]" : c.changePct > 0 ? "text-[#f87171]" : "text-[#34C759]";
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-0.5">
+      <span className="text-[11px] text-[#868686]">{`Since ${formatStudyDate(c.date)} (prior, same model)`}</span>
+      <span className={`text-[12px] ${tone}`}>{`Total lesion volume ${c.before} → ${c.now} cm³${change}`}</span>
+      {c.countBefore != null && c.countNow != null && (
+        <span className="text-[11px] text-[#999]">{`Lesions ${c.countBefore} → ${c.countNow}${c.largestBefore != null && c.largestNow != null ? ` · largest ${c.largestBefore} → ${c.largestNow} cm³` : ""}`}</span>
+      )}
+    </div>
+  );
+}
+
+// Brain tumour results: the atlas regions (lobes) the location is worked out from, shown
+// faintly under the mask when switched on
+function AtlasRegions({ legend, shown, onToggle }) {
+  if (!legend?.length) return null;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" checked={shown} onChange={e => onToggle(e.target.checked)} className="accent-[#0694FB] cursor-pointer" />
+        <span className="text-[12px] text-[#CCCCCC]">Brain regions</span>
+        <span className="text-[11px] text-[#6B6B6B]">atlas estimate</span>
+      </label>
+      {shown && (
+        <div className="flex flex-wrap gap-x-2.5 gap-y-1">
+          {legend.map(({ name, rgb }) => (
+            <span key={name} className="flex items-center gap-1 text-[11px] text-[#999]">
+              <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: `rgb(${rgb.join(",")})` }} />
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Colour key for anatomy segmentations (one colour per structure): only the structures the
+// model found, largest first, with their volumes. Whole-body results can list 100+, so it
+// scrolls and can be filtered.
+const capitalize = text => text.charAt(0).toUpperCase() + text.slice(1);
+
+// Results from before the worker named structures fall back to the raw name, and
+// without "structures" there are no sizes.
+function SegmentationLegend({ legend, volumes, structures }) {
+  const [query, setQuery] = useState("");
+  const rows = useMemo(() => {
+    const entryByName = new Map((legend ?? []).map(entry => [entry.name, entry]));
+    const sizeByName = new Map((structures ?? []).map(s => [s.name, s]));
+    return Object.entries(volumes ?? {})
+      .filter(([name]) => entryByName.has(name))
+      .map(([name, volume]) => {
+        const entry = entryByName.get(name);
+        const measured = sizeByName.get(name);
+        return {
+          name,
+          label: capitalize(entry.clinical_name ?? measured?.clinical_name ?? name.replace(/_/g, " ")),
+          volume,
+          rgb: entry.rgb,
+          size: measured?.size_mm ? formatSize(measured.size_mm) : null,
+        };
+      })
+      .sort((a, b) => b.volume - a.volume);
+  }, [legend, volumes, structures]);
+  if (!rows.length) return null;
+  const q = query.trim().toLowerCase();
+  const shown = q ? rows.filter(r => r.label.toLowerCase().includes(q) || r.name.toLowerCase().replace(/_/g, " ").includes(q)) : rows;
+  return (
+    <div className="border-t border-[#1E1E1E] px-3 py-2 flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-[#868686]">{`${rows.length} structure${rows.length === 1 ? "" : "s"}`}</span>
+        {rows.length > 8 && (
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Filter"
+            className="w-[100px] bg-[#111] border border-[#1E1E1E] focus:border-[#0694FB] rounded-md px-1.5 py-0.5 text-white text-[11px] outline-none placeholder-[#4a4a4a]"
+          />
+        )}
+      </div>
+      <div className="flex flex-col gap-1 max-h-[160px] overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}>
+        {shown.map(r => (
+          <div key={r.name} className="flex items-center gap-2 text-[11px]">
+            <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: `rgb(${r.rgb.join(",")})` }} />
+            <span className="flex-1 min-w-0 truncate text-[#CCCCCC]" title={r.size ? `${r.label} — ${r.volume} cm³, ${r.size} (${SIZE_AXES_LABEL})` : r.label}>{r.label}</span>
+            <span className="text-[#6B6B6B] font-mono shrink-0" title={r.size ? `Maximum extent ${SIZE_AXES_LABEL}` : undefined}>
+              {r.size ? `${r.volume} cm³ · ${r.size}` : `${r.volume} cm³`}
+            </span>
+          </div>
+        ))}
+        {!shown.length && <span className="text-[11px] text-[#6B6B6B]">No match</span>}
+      </div>
+    </div>
+  );
+}
+
+// Tiny picture of a viewer grid, for the layout menu
+function LayoutGlyph({ cols, rows }) {
+  return (
+    <span className="grid gap-[2px] w-4 h-4 shrink-0" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}>
+      {Array.from({ length: cols * rows }, (_, i) => <span key={i} className="rounded-[2px] border border-current" />)}
+    </span>
+  );
+}
+
 // ── DICOM corner overlays ──────────────────────────────────────────────────────
 function MetaLine({ label, value, bright }) {
   if (!value && value !== 0) return null;
@@ -72,14 +234,29 @@ function MetaLine({ label, value, bright }) {
   );
 }
 
-function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, inverted }) {
+// Pixel value under the cursor (HU on CT) and its column/row. Its own component, fed
+// through a ref rather than Midsection state, so moving the mouse re-renders one line
+// instead of the whole viewer.
+function PixelValueLine({ feed }) {
+  const [probe, setProbe] = useState(null);
+  useEffect(() => {
+    feed.current = setProbe;
+    return () => { feed.current = null; };
+  }, [feed]);
+  if (!probe) return null;
+  return <MetaLine label={probe.unit ? null : "Val"} value={`${formatPixelValue(probe)}  (${probe.i}, ${probe.j})`} bright />;
+}
+
+// viewMode: in the 3-plane view the patient block starts lower, clear of the axial pane's
+// own labels (plane, slab, fusion); a 3D rendering has no slice, zoom or window to show.
+function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, inverted, pixelFeed, isKeyImage, viewMode = "stack" }) {
   const wc = wl?.wc != null ? Math.round(wl.wc) : (meta?.windowCenter != null ? Math.round(meta.windowCenter) : null);
   const ww = wl?.ww != null ? Math.round(wl.ww) : (meta?.windowWidth != null ? Math.round(meta.windowWidth) : null);
 
   return (
     <>
       {/* ── Top-left: Patient ── */}
-      <div className="absolute top-3 left-3 z-20 flex flex-col gap-0.5 pointer-events-none select-none">
+      <div className={`absolute ${viewMode === "mpr" ? "top-14" : "top-3"} left-3 z-20 flex flex-col gap-0.5 pointer-events-none select-none`}>
         <MetaLine value={meta?.patientName} bright />
         <MetaLine label="ID" value={meta?.patientId} />
         <MetaLine label="DOB" value={meta?.patientDob} />
@@ -96,8 +273,10 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
         {meta?.accessionNumber && <MetaLine label="Acc" value={meta.accessionNumber} />}
       </div>
 
+      {viewMode !== "3d" && <>
       {/* ── Bottom-left: Image geometry + view state ── */}
       <div className="absolute bottom-3 left-3 z-20 flex flex-col gap-0.5 pointer-events-none select-none">
+        {pixelFeed && <PixelValueLine feed={pixelFeed} />}
         {meta?.rows && meta?.columns && (
           <MetaLine value={`${meta.columns} × ${meta.rows} px`} />
         )}
@@ -114,18 +293,23 @@ function DicomOverlay({ meta, currentIndex, total, wl, zoomPct, rotation, invert
 
       {/* ── Bottom-right: W/L + slice counter ── */}
       <div className="absolute bottom-3 right-3 z-20 flex flex-col items-end gap-0.5 pointer-events-none select-none">
+        {isKeyImage && <span className="text-[11px] leading-tight text-[#FACC15]">★ Key image</span>}
         {wc != null && <MetaLine label="WC" value={wc} bright />}
         {ww != null && <MetaLine label="WW" value={ww} />}
         <MetaLine
           value={total > 0 ? `${currentIndex + 1} / ${total}` : "— / —"}
         />
       </div>
+      </>}
     </>
   );
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
-function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange }) {
+// The Enhance button's collapsed width (it widens on hover)
+const ENHANCE_BTN_REST_PX = 28;
+
+function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, activeSeries, onRunEnhancement, enhancementLoading, enhancementProgress, enhancementResult, onRunAnalysis, aiLoading, inferenceProgress, inferenceResult, onInferenceResult, onRunTranslation, translationActive, translationLoading, translationProgress, translationResult, translationMode, onCloseTranslation, jobStatus, onViewModeChange, layout, onLayoutChange, seriesList = [], onSelectSeries, onMarkedRegionsChange, caseId, studyId, studyDate, modelId, onPriorComparisonChange }) {
   const [activeTool, setActiveTool] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -135,6 +319,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [activePlane, setActivePlane] = useState("axial");
 
   const switchViewMode = (mode) => {
+    if (mode === "3d") setActiveTool(t => (t === "brush" ? null : t));
     setViewMode(mode);
     onViewModeChange?.(mode);
   };
@@ -144,12 +329,54 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     if (translationActive && viewMode !== "stack") switchViewMode("stack");
   }, [translationActive]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mprMenuOpen, setMprMenuOpen] = useState(false);
+  // Thick-slab MIP / MinIP / average in the 3D view (mode "off" = single plane)
+  const [slab, setSlab] = useState({ mode: "off", mm: 10 });
+  const [slabMenuOpen, setSlabMenuOpen] = useState(false);
+  const slabMenuRef = useRef(null);
+  // Fusion in the 3-plane view: a PET / NM series of this study drawn over the open one.
+  // { seriesId, label, colormap, opacity, imageIds (once loaded) }
+  const [fusion, setFusion] = useState(null);
+  const [fusionMenuOpen, setFusionMenuOpen] = useState(false);
+  const fusionMenuRef = useRef(null);
+  const fusionCandidates = seriesList.filter(s =>
+    String(s.id) !== String(activeSeries?.id) && ["PT", "NM"].includes((s.modality || "").toUpperCase()));
+  useEffect(() => { setFusion(null); }, [activeSeries?.id]);
+  const fuseWith = async (series) => {
+    const label = `${(series.modality || "").toUpperCase()} ${series.description || series.name || ""}`.trim();
+    setFusion(prev => ({ colormap: FUSION_COLORMAPS[0][0], opacity: 0.6, ...prev, seriesId: series.id, label, imageIds: null }));
+    try {
+      const { images } = await loadSeries(series.id);
+      const ids = await buildImageIds(images);
+      setFusion(prev => (prev?.seriesId === series.id ? { ...prev, imageIds: ids, key: `${series.id}:${ids.length}` } : prev));
+    } catch (err) {
+      console.warn("[Fusion] couldn't load the series:", err);
+      setFusion(prev => (prev?.seriesId === series.id ? null : prev));
+    }
+  };
+
+  // 3D rendering preset (viewMode "3d")
+  const render3dRef = useRef(null);
+  const [renderPreset, setRenderPreset] = useState(null);
+  // A CT preset means nothing on an MR — each series starts on its modality's first one
+  useEffect(() => { setRenderPreset(null); }, [activeSeries?.id]);
   const [enhancementActive, setEnhancementActive] = useState(false);
   const [enhancementDone, setEnhancementDone] = useState(false);
   const [enhancementHovered, setEnhancementHovered] = useState(false);
   const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
-  const [toolbarNarrow, setToolbarNarrow] = useState(false);
+  // Toolbar tiers, stepped down only while it doesn't fit: 0 everything inline · 1 view
+  // tools in the ··· menu · 2 buttons shrink to icons / short labels · 3 wraps onto a
+  // second row rather than cutting anything off
+  const [toolbarTier, setToolbarTier] = useState(0);
+  const [toolbarWidth, setToolbarWidth] = useState(0);
+  const toolbarLeftRef = useRef(null);
+  const toolbarRightRef = useRef(null);
+  const enhanceBtnRef = useRef(null);
+  const toolbarNarrow = toolbarTier >= 1;
+  const toolbarCompact = toolbarTier >= 2;
   const overflowMenuRef = useRef(null);
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const presetMenuRef = useRef(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const toolbarRef = useRef(null);
   const mprMenuRef = useRef(null);
   const volumeVpRef = useRef(null);
@@ -161,7 +388,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [flipH, setFlipH] = useState(false);
   const [flipV, setFlipV] = useState(false);
   const [inverted, setInverted] = useState(false);
-  const [wlActive, setWlActive] = useState(false);
+  // Left-button tool when no annotation tool is chosen (Horos default: window/level)
+  const [leftTool, setLeftTool] = useState("wl");
 
   // Cine playback
   const [playing, setPlaying] = useState(false);
@@ -169,20 +397,23 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const playRef = useRef(null);
 
   useEffect(() => {
-    if (!playing || images.length <= 1) {
+    if (!playing || frameCount <= 1) {
       clearInterval(playRef.current);
       playRef.current = null;
       return;
     }
+    syncDriverRef.current = "active"; // linked viewers follow the cine
     playRef.current = setInterval(() => {
       setCurrentIndex(prev => {
-        const next = prev + 1 >= images.length ? 0 : prev + 1;
-        onSelectImage?.(images[next]?.blobUrl ?? images[next]?.url);
+        const next = prev + 1 >= frameCountRef.current ? 0 : prev + 1;
+        const src = fileSrcOfFrameRef.current(next);
+        if (src) onSelectImage?.(src);
         vpRef.current?.setImageIndex(next);
         return next;
       });
     }, 1000 / fps);
     return () => clearInterval(playRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, fps, images, onSelectImage]);
 
   // Stop cine when images change
@@ -193,18 +424,21 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     const handler = (e) => {
       if (infoRef.current && !infoRef.current.contains(e.target)) setInfoOpen(false);
       if (mprMenuRef.current && !mprMenuRef.current.contains(e.target)) setMprMenuOpen(false);
+      if (slabMenuRef.current && !slabMenuRef.current.contains(e.target)) setSlabMenuOpen(false);
+      if (fusionMenuRef.current && !fusionMenuRef.current.contains(e.target)) setFusionMenuOpen(false);
+      if (layoutMenuRef.current && !layoutMenuRef.current.contains(e.target)) setLayoutMenuOpen(false);
       if (overflowMenuRef.current && !overflowMenuRef.current.contains(e.target)) setOverflowMenuOpen(false);
+      if (presetMenuRef.current && !presetMenuRef.current.contains(e.target)) setPresetMenuOpen(false);
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) setExportMenuOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Toolbar ResizeObserver — switches to overflow menu when toolbar gets narrow
+  // Toolbar width → start again from the full toolbar; the layout effect below steps down
   useEffect(() => {
     if (!toolbarRef.current) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setToolbarNarrow(entry.contentRect.width < 1000);
-    });
+    const ro = new ResizeObserver(([entry]) => setToolbarWidth(Math.round(entry.contentRect.width)));
     ro.observe(toolbarRef.current);
     return () => ro.disconnect();
   }, []);
@@ -214,16 +448,67 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Live W/L values read from the viewport
   const [wl, setWl] = useState(null);
 
-  // Draggable tool panel
   const viewportWrapRef = useRef(null);
-  const [panelPos, setPanelPos] = useState({ x: 8, y: 60 });
-  const [panelDragging, setPanelDragging] = useState(false);
 
   const vpRef = useRef(null); // CornerstoneViewport imperative handle
   const vpRef2 = useRef(null); // Right panel (translation result)
 
+  // ── Multi-viewer layout (lib/viewerLayout) — kept above the workspace, so it survives
+  // switching the open series. Linked viewers scroll together by patient position: only
+  // the viewer being scrolled (the "driver") moves the others, so they never feed back.
+  const lay = useMemo(() => normalizeLayout(layout, activeSeries, seriesList), [layout, activeSeries, seriesList]);
+  const multi = lay.panes.length > 1 && !translationActive; // translation has its own split view
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const layoutMenuRef = useRef(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef(null);
+  const [exportStatus, setExportStatus] = useState(null); // { text, error } while exporting / after a failure
+  const [dropSlot, setDropSlot] = useState(null); // pane a series card is dragged over
+  const paneHandlesRef = useRef({});  // slot -> SeriesPane handle
+  const geometryRef = useRef({});     // "active" | slot -> slice positions (lib/slicePositions)
+  const [, setGeometryVersion] = useState(0); // re-render when positions arrive (link badges)
+  const syncDriverRef = useRef("active");
+  // Earlier-study panes locked to the active viewer: slot -> depth offset (mm) along the
+  // active series' scan direction, set when Lock is pressed (lib/slicePositions)
+  const [priorLocks, setPriorLocks] = useState({});
+  const priorLocksRef = useRef(priorLocks);
+  const [priorPicker, setPriorPicker] = useState(null); // { slot } while choosing a study to compare with
+  const [priorComparison, setPriorComparison] = useState(null);
+  const currentIndexRef = useRef(0);
+  const frameCountRef = useRef(0);       // for the cine interval
+  const fileSrcOfFrameRef = useRef(() => null);
+
   // Mask overlay opacity (0–1) — controlled by the user slider
   const [maskOpacity, setMaskOpacity] = useState(0.5);
+  const [atlasShown, setAtlasShown] = useState(false);
+  // Named ROIs in the 2D viewer, Horos-style (see lib/roiVolume) and the ROI list panel
+  const [rois, setRois] = useState([]);
+  const [roiPanelOpen, setRoiPanelOpen] = useState(false);
+  const [roiVolumesShown, setRoiVolumesShown] = useState(() => new Set()); // ROI names whose volume was computed
+  const [editingRoi, setEditingRoi] = useState(null); // { name, value } while renaming
+  // Key images (Horos's "key image" flag), saved with the series' measurements
+  const [keyImages, setKeyImages] = useState(() => new Set()); // imageIds
+  const keyImagesRef = useRef(keyImages);
+  keyImagesRef.current = keyImages;
+  const [tagPanelOpen, setTagPanelOpen] = useState(false); // DICOM tag browser
+  const [labelsAlwaysOn, setLabelsAlwaysOnState] = useState(getLabelsAlwaysOn); // measurement text on every annotation, not just hovered/selected
+  const toggleLabels = () => { setLabelsAlwaysOn(!labelsAlwaysOn); setLabelsAlwaysOnState(!labelsAlwaysOn); };
+  // RECIST panel, and the earlier studies' sums typed into it ({ baseline, nadir, newLesion }), saved with the series
+  const [recistPanelOpen, setRecistPanelOpen] = useState(false);
+  const [keyPanelOpen, setKeyPanelOpen] = useState(false);
+  const [recistReference, setRecistReference] = useState(null);
+  const recistReferenceRef = useRef(recistReference);
+  recistReferenceRef.current = recistReference;
+  // Regions drawn in the 3D view ({ uid, outline, tolerance, number }), saved with the series.
+  // Held here, since the 3D view unmounts in 2D mode; it grows them again when it opens.
+  const [mprRegions, setMprRegions] = useState([]);
+  const mprRegionsRef = useRef(mprRegions);
+  mprRegionsRef.current = mprRegions;
+  // The regions drawn or painted on this series, for the report
+  const onMarkedRegionsChangeRef = useRef(onMarkedRegionsChange);
+  onMarkedRegionsChangeRef.current = onMarkedRegionsChange;
+  useEffect(() => { onMarkedRegionsChangeRef.current?.(mprRegions); }, [mprRegions]);
+  const pixelFeedRef = useRef(null); // PixelValueLine's setter (see above)
 
   // Overlay card position — null means default (top-right corner)
   const [overlayPos, setOverlayPos] = useState(null);
@@ -272,13 +557,13 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   const [hasSelection, setHasSelection] = useState(false);
 
   // Arrow annotation custom dialog
-  const [arrowDialog, setArrowDialog] = useState(null); // { resolve: (label) => void }
+  const [arrowDialog, setArrowDialog] = useState(null); // { resolve: (label) => void, initial } — initial is the text being edited, "" for a new label
   const [arrowLabel, setArrowLabel] = useState("");
   const arrowInputRef = useRef(null);
 
-  const handleArrowTextRequest = useCallback((doneCallback) => {
-    setArrowLabel("");
-    setArrowDialog({ resolve: doneCallback });
+  const handleArrowTextRequest = useCallback((doneCallback, initial = "") => {
+    setArrowLabel(initial);
+    setArrowDialog({ resolve: doneCallback, initial });
   }, []);
 
   const submitArrowLabel = useCallback(() => {
@@ -291,7 +576,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
   const cancelArrowLabel = useCallback(() => {
     if (arrowDialog) {
-      arrowDialog.resolve("");
+      arrowDialog.resolve(arrowDialog.initial); // cancelling an edit keeps the old text
       setArrowDialog(null);
       setArrowLabel("");
     }
@@ -332,6 +617,151 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     return () => { cancelled = true; };
   }, [images]);
 
+  // Slice positions are frames (imageIds), but images, the side panel's selection and the
+  // AI / enhancement / translation results have one entry per file. A multi-frame file
+  // makes the two differ, so everything navigates by frame and maps to the file here.
+  const frameMap = useMemo(() => {
+    const fileBySrc = new Map(images.map((img, j) => [img.blobUrl ?? img.url, j]));
+    const fileOfFrame = imageIds.map(id => fileBySrc.get(id.replace(/^(wadouri|web):/, "").replace(/[?&]frame=\d+$/, "")) ?? -1);
+    const firstFrameOfFile = new Array(images.length).fill(-1);
+    fileOfFrame.forEach((j, i) => { if (j >= 0 && firstFrameOfFile[j] < 0) firstFrameOfFile[j] = i; });
+    return { fileOfFrame, firstFrameOfFile };
+  }, [images, imageIds]);
+  const frameCount = imageIds.length;
+  const fileOfFrame = (i) => (frameMap.fileOfFrame[i] >= 0 ? frameMap.fileOfFrame[i] : i);
+  const fileSrcOfFrame = (i) => { const img = images[fileOfFrame(i)]; return img ? img.blobUrl ?? img.url : null; };
+  // A result list's entry for a frame: per-file lists are mapped, per-frame ones pass through
+  const resultForFrame = (list, i) => list?.[list.length === frameCount ? i : fileOfFrame(i)];
+  frameCountRef.current = frameCount;
+  fileSrcOfFrameRef.current = fileSrcOfFrame;
+
+  // ── Which slices carry measurements, for the scrubber's marks ──
+  const [measuredSlices, setMeasuredSlices] = useState(null);
+  useEffect(() => {
+    const indexByImageId = new Map(imageIds.map((id, i) => [id, i]));
+    const update = () => {
+      const marks = new Array(imageIds.length).fill(false);
+      let any = false;
+      (csAnnotation.state.getAllAnnotations() ?? []).forEach(a => {
+        if (!SAVED_TOOL_NAMES.has(a.metadata?.toolName)) return;
+        const i = indexByImageId.get(a.metadata?.referencedImageId);
+        if (i !== undefined) { marks[i] = true; any = true; }
+      });
+      setMeasuredSlices(any ? marks : null);
+    };
+    update();
+    const events = [
+      csToolsEnums.Events.ANNOTATION_ADDED,     // also fires when saved measurements are restored
+      csToolsEnums.Events.ANNOTATION_COMPLETED,
+      csToolsEnums.Events.ANNOTATION_REMOVED,
+    ];
+    events.forEach(name => csEventTarget.addEventListener(name, update));
+    return () => events.forEach(name => csEventTarget.removeEventListener(name, update));
+  }, [imageIds]);
+
+  // ── Bidirectional measurements are RECIST lesions: name each one when it's drawn ──
+  useEffect(() => {
+    const nameLesion = (evt) => {
+      const annotation = evt.detail?.annotation;
+      if (annotation?.metadata?.toolName !== BidirectionalTool.toolName || annotation.data?.label) return;
+      if (!imageIds.includes(annotation.metadata.referencedImageId)) return;
+      annotation.data.label = suggestLesionName(imageIds);
+      activeVpRef.current?.current?.render?.();
+    };
+    csEventTarget.addEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameLesion);
+    return () => csEventTarget.removeEventListener(csToolsEnums.Events.ANNOTATION_COMPLETED, nameLesion);
+  }, [imageIds]);
+
+  // ── Saved measurements (lib/annotationPersistence) ──
+  // Restore once per series, then save (debounced) whenever a measurement is drawn,
+  // edited or deleted. Nothing is saved until the restore has succeeded, so a slow or
+  // failed load can never overwrite the saved set with an empty one.
+  const annotationsRestoredForRef = useRef(null); // series id whose saved set is loaded
+  const changedWhileLoadingRef = useRef(false);    // an edit came in before it had loaded
+  // Series whose saved regions have loaded — the 2D brush waits for it, so a new region
+  // isn't numbered before the saved ones are known
+  const [regionsLoadedFor, setRegionsLoadedFor] = useState(null);
+  const scheduleSaveRef = useRef(null);
+  const imageIdsRef = useRef(imageIds);
+  imageIdsRef.current = imageIds;
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+
+  useEffect(() => {
+    const seriesId = activeSeries?.id;
+    if (!seriesId || !imageIds.length || annotationsRestoredForRef.current === seriesId) return;
+    let cancelled = false;
+    setKeyImages(new Set());
+    setRecistReference(null);
+    setMprRegions([]);
+    getSeriesAnnotations(seriesId)
+      .then(({ annotations }) => {
+        if (cancelled) return;
+        if (restoreAnnotations(annotations, imageIds, images)) vpRef.current?.render?.();
+        // Keep any slice marked while this was loading
+        const savedKeys = restoreKeyImages(annotations, imageIds, images);
+        setKeyImages(prev => new Set([...savedKeys, ...prev]));
+        setRecistReference(restoreRecistReference(annotations));
+        // Keep any region drawn in the 3D view while this was loading
+        const savedRegions = restoreMprRegions(annotations, imageIds, images);
+        setMprRegions(prev => [...savedRegions, ...prev.filter(r => !savedRegions.some(s => s.uid === r.uid))]);
+        annotationsRestoredForRef.current = seriesId;
+        setRegionsLoadedFor(seriesId);
+        // Save what was drawn while this loaded (merged with the saved set) now, not at the next edit
+        if (changedWhileLoadingRef.current) {
+          changedWhileLoadingRef.current = false;
+          scheduleSaveRef.current?.();
+        }
+      })
+      .catch(err => {
+        console.warn("[Annotations] couldn't load saved measurements:", err);
+        if (!cancelled) setRegionsLoadedFor(seriesId); // don't hold the brush back for ever
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSeries?.id, imageIds]);
+
+  useEffect(() => {
+    const seriesId = activeSeries?.id;
+    if (!seriesId) return;
+    let timer = null;
+    changedWhileLoadingRef.current = false;
+    const save = (options) => {
+      timer = null;
+      saveSeriesAnnotations(seriesId, serializeAnnotations(imageIdsRef.current, imagesRef.current, {
+        keyImageIds: keyImagesRef.current,
+        recistReference: recistReferenceRef.current,
+        mprRegions: mprRegionsRef.current,
+      }), options)
+        .catch(err => console.warn("[Annotations] couldn't save measurements:", err));
+    };
+    const schedule = (evt) => {
+      if (evt?.detail?.changeType === csToolsEnums.ChangeTypes.StatsUpdated) return; // recalculated stats, not an edit
+      if (annotationsRestoredForRef.current !== seriesId) { changedWhileLoadingRef.current = true; return; }
+      clearTimeout(timer);
+      timer = setTimeout(save, 1000);
+    };
+    // Tab closed, reloaded or hidden: send a pending save now (keepalive outlives the page)
+    const flush = () => { if (timer) { clearTimeout(timer); save({ keepalive: true }); } };
+    const flushOnHide = () => { if (document.visibilityState === "hidden") flush(); };
+    document.addEventListener("visibilitychange", flushOnHide);
+    window.addEventListener("pagehide", flush);
+    scheduleSaveRef.current = schedule; // key-image changes save the same way
+    const events = [
+      csToolsEnums.Events.ANNOTATION_COMPLETED,
+      csToolsEnums.Events.ANNOTATION_MODIFIED,
+      csToolsEnums.Events.ANNOTATION_REMOVED,
+    ];
+    events.forEach(name => csEventTarget.addEventListener(name, schedule));
+    return () => {
+      scheduleSaveRef.current = null;
+      document.removeEventListener("visibilitychange", flushOnHide);
+      window.removeEventListener("pagehide", flush);
+      events.forEach(name => csEventTarget.removeEventListener(name, schedule));
+      if (timer) { clearTimeout(timer); save(); } // flush on series switch / unmount
+    };
+  }, [activeSeries?.id]);
+
   // Per-slice segmentation masks, in the same order as imageIds — fed to the MPR
   // viewport as a 3D labelmap so the mask reslices correctly on all 3 planes.
   // GradCAM heatmaps are per-class saliency, not a coherent 3D object, so they're excluded
@@ -340,14 +770,19 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
     if (!inferenceResult?.slices?.length) return null;
     const isGradCam = inferenceResult.slices.some(s => s.predicted_class != null);
     if (isGradCam) return null;
-    return inferenceResult.slices.map(s => s.mask || null);
-  }, [inferenceResult]);
+    return Array.from({ length: frameCount }, (_, i) => resultForFrame(inferenceResult.slices, i)?.mask || null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inferenceResult, frameMap]);
 
   // Per-slice confidence (only where the model found something) and the colour legend,
   // so clicking a finding in MPR can report the same confidence + label as the 2D card.
   const segmentationConfidences = useMemo(() => {
     if (!segmentationMaskSlices) return null;
-    return inferenceResult.slices.map(s => (s.detected && s.confidence != null ? s.confidence : null));
+    return Array.from({ length: frameCount }, (_, i) => {
+      const s = resultForFrame(inferenceResult.slices, i);
+      return s?.detected && s.confidence != null ? s.confidence : null;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inferenceResult, segmentationMaskSlices]);
   const segmentationLegend = inferenceResult?.label_legend ?? null;
   // Anatomy bundles (structure volumes, no lesion stats) show each structure in its own legend colour
@@ -384,23 +819,132 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Guard: only call setImageIndex if the viewport isn't already on that index —
   // otherwise the IMAGE_RENDERED → onSelectImage → setImageIndex loop blanks the viewport.
   useEffect(() => {
-    const idx = images.findIndex(img => (img.blobUrl ?? img.url) === selectedImage);
-    if (idx >= 0) {
-      if (vpRef.current?.getCurrentIndex?.() !== idx) {
-        vpRef.current?.setImageIndex(idx);
-      }
-      setCurrentIndex(idx);
-    }
-  }, [selectedImage, images]);
+    const file = images.findIndex(img => (img.blobUrl ?? img.url) === selectedImage);
+    if (file < 0) return;
+    const onFrame = vpRef.current?.getCurrentIndex?.() ?? currentIndexRef.current;
+    if (fileOfFrame(onFrame) === file) { setCurrentIndex(onFrame); return; }
+    const frame = frameMap.firstFrameOfFile[file] >= 0 ? frameMap.firstFrameOfFile[file] : file;
+    vpRef.current?.setImageIndex(frame);
+    setCurrentIndex(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedImage, images, frameMap]);
 
   // Slice navigation
   const goTo = useCallback((idx) => {
-    if (idx >= 0 && idx < images.length) {
-      onSelectImage?.(images[idx].blobUrl ?? images[idx].url);
+    if (idx >= 0 && idx < frameCount) {
+      syncDriverRef.current = "active"; // keys, scrubber and panels drive the active viewer
+      const src = fileSrcOfFrame(idx);
+      if (src) onSelectImage?.(src);
       vpRef.current?.setImageIndex(idx);
       setCurrentIndex(idx);
     }
-  }, [images, onSelectImage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images, frameMap, frameCount, onSelectImage]);
+
+  // ── Export: the active viewer as a picture / movie / print, the series as a ZIP ──
+  const exportBaseName = () => {
+    const parts = [activeSeries?.modality ?? dicomMeta?.modality, dicomMeta?.seriesDescription, viewMode === "stack" ? `slice${currentIndex + 1}` : viewMode];
+    return parts.filter(Boolean).join("_").replace(/[^\w.-]+/g, "_") || "image";
+  };
+  const exportFailed = (what, err) => {
+    console.error(`[Export] ${what}:`, err);
+    setExportStatus({ text: `${what} failed`, error: true });
+    setTimeout(() => setExportStatus(null), 4000);
+  };
+  const runExport = async (what, job) => {
+    setExportMenuOpen(false);
+    setExportStatus({ text: what });
+    try { await job(); setExportStatus(null); }
+    catch (err) { exportFailed(what, err); }
+  };
+  const saveImage = () => runExport("Saving image", async () => {
+    download(await canvasBlob(await captureViewer(viewportWrapRef.current)), `${exportBaseName()}.png`);
+  });
+  // Not through runExport: Safari only allows the clipboard write if it starts in the click
+  const copyViewerImage = () => {
+    setExportMenuOpen(false);
+    copyImage(captureViewer(viewportWrapRef.current).then(c => canvasBlob(c)))
+      .then(() => { setExportStatus({ text: "Copied" }); setTimeout(() => setExportStatus(null), 1500); })
+      .catch(err => exportFailed("Copy", err));
+  };
+  const printViewer = () => runExport("Preparing print", async () => {
+    printImage((await captureViewer(viewportWrapRef.current)).toDataURL("image/png"), "IntelliDiag image");
+  });
+  // Puts slice i of the 2D stack on screen, resolving once it has been drawn (IMAGE_RENDERED
+  // doesn't bubble: listen in capture)
+  const showSliceDrawn = (i) => new Promise(resolve => {
+    const root = viewportWrapRef.current;
+    const done = () => { root.removeEventListener(csEnums.Events.IMAGE_RENDERED, done, true); clearTimeout(timer); requestAnimationFrame(() => resolve()); };
+    const timer = setTimeout(done, 2000);
+    root.addEventListener(csEnums.Events.IMAGE_RENDERED, done, true);
+    if ((vpRef.current?.getCurrentIndex?.() ?? -1) === i) { vpRef.current?.render?.(); setTimeout(done, 50); }
+    else goTo(i);
+  });
+  // A movie through every slice of the 2D stack, back on the slice it started from
+  const saveMovie = () => runExport("Recording movie", async () => {
+    setPlaying(false);
+    const start = currentIndexRef.current;
+    try {
+      const { blob, extension } = await recordMovie(viewportWrapRef.current, frameCount, showSliceDrawn, {
+        fps, onProgress: pct => setExportStatus({ text: `Recording movie ${pct}%` }),
+      });
+      download(blob, `${exportBaseName().replace(/_slice\d+$/, "")}_movie.${extension}`);
+    } finally {
+      goTo(start);
+    }
+  });
+  // Each key image as on screen (PNG), in one ZIP
+  const keyIndices = () => imageIds.map((id, i) => (keyImages.has(id) ? i : -1)).filter(i => i >= 0);
+  const saveKeyPictures = () => runExport("Saving key images", async () => {
+    setPlaying(false);
+    const start = currentIndexRef.current;
+    const base = exportBaseName().replace(/_slice\d+$/, "");
+    const files = [];
+    try {
+      const indices = keyIndices();
+      for (const [n, i] of indices.entries()) {
+        await showSliceDrawn(i);
+        const blob = await canvasBlob(await captureViewer(viewportWrapRef.current));
+        files.push({ name: `${base}_key${String(n + 1).padStart(2, "0")}_slice${i + 1}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
+        setExportStatus({ text: `Saving key images ${Math.round(((n + 1) / indices.length) * 100)}%` });
+      }
+    } finally {
+      goTo(start);
+    }
+    if (!files.length) throw new Error("No key images");
+    download(zipFiles(files), `${base}_key_images.zip`);
+  });
+  // An image record's DICOM file; the token only goes to our backend (as Cornerstone's loader does)
+  const imageBytes = async (img) => {
+    const apiBase = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+    const src = img.blobUrl ?? img.url;
+    const token = localStorage.getItem("token");
+    const auth = token && !src.startsWith("blob:") && (!apiBase || src.includes(apiBase));
+    const res = await fetch(src, auth ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+    if (!res.ok) throw new Error(`HTTP ${res.status} for ${img.name ?? src}`);
+    return res.arrayBuffer();
+  };
+  // The picture as a DICOM Secondary Capture, with the series' patient and study, for a PACS
+  const saveDicomCapture = () => runExport("Saving DICOM", async () => {
+    const canvas = await captureViewer(viewportWrapRef.current);
+    const sourceImage = images[fileOfFrame(currentIndexRef.current)] ?? images.find(isDicomImage);
+    const source = sourceImage && isDicomImage(sourceImage) ? await imageBytes(sourceImage).catch(() => null) : null;
+    download(new Blob([secondaryCapture(canvas, source)], { type: "application/dicom" }), `${exportBaseName()}.dcm`);
+  });
+  // The open series' DICOM files
+  const downloadSeries = (anonymize, keyOnly = false) => runExport(anonymize ? "Anonymising series" : "Zipping series", async () => {
+    const getBytes = imageBytes;
+    // Key images: their files (a multi-frame file once, whole)
+    const chosen = keyOnly ? [...new Set(keyIndices().map(fileOfFrame))].sort((a, b) => a - b).map(i => images[i]).filter(Boolean) : images;
+    const { blob, name, count } = await seriesZip(chosen, getBytes, {
+      anonymize,
+      patient: dicomMeta?.patientName,
+      series: `${dicomMeta?.seriesDescription || activeSeries?.modality || "series"}${keyOnly ? " key images" : ""}`,
+      onProgress: pct => setExportStatus({ text: `${anonymize ? "Anonymising" : "Zipping"} ${pct}%` }),
+    });
+    if (!count) throw new Error("No DICOM files in this series");
+    download(blob, name);
+  });
 
   // Stable imageIds for the translation viewport — only recomputed when translationResult changes
   const translationImageIds = useMemo(() => {
@@ -416,53 +960,137 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   // Keep translation viewport in sync with the main slice index
   useEffect(() => {
     if (translationResult && vpRef2.current?.setImageIndex) {
-      vpRef2.current.setImageIndex(currentIndex);
+      vpRef2.current.setImageIndex((translationResult.slices?.length ?? 0) === frameCount ? currentIndex : fileOfFrame(currentIndex));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, translationResult]);
 
+
+  const toggleTool = (name) => setActiveTool(t => t === name ? null : name);
+
+  // ── Key images (2D view: they flag a slice) ──
+  const isKeyImage = keyImages.has(imageIds[currentIndex]);
+  const toggleKeyImage = () => {
+    const id = imageIds[currentIndex];
+    if (!id || viewMode !== "stack") return;
+    setKeyImages(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+    scheduleSaveRef.current?.();
+  };
+  const unmarkKeyImage = (index) => {
+    setKeyImages(prev => {
+      const next = new Set(prev);
+      next.delete(imageIds[index]);
+      return next;
+    });
+    scheduleSaveRef.current?.();
+  };
+  const goToNextKeyImage = () => {
+    const keyed = imageIds.map((id, i) => (keyImages.has(id) ? i : -1)).filter(i => i >= 0);
+    if (keyed.length) goTo(keyed.find(i => i > currentIndex) ?? keyed[0]);
+  };
+
+  // ── ROI list actions ──
+  const commitRoiRename = () => {
+    if (!editingRoi) return;
+    const newName = editingRoi.value.trim();
+    if (newName && newName !== editingRoi.name) {
+      renameRoi(imageIds, AREA_ROI_TOOL_NAMES, editingRoi.name, newName); // same name as another ROI merges them
+      setRoiVolumesShown(prev => {
+        if (!prev.has(editingRoi.name)) return prev;
+        const next = new Set(prev);
+        next.delete(editingRoi.name);
+        next.add(newName);
+        return next;
+      });
+      activeVp.current?.render?.();
+    }
+    setEditingRoi(null);
+  };
+  const removeRoi = (name) => {
+    deleteRoi(imageIds, AREA_ROI_TOOL_NAMES, name);
+    activeVp.current?.render?.();
+  };
+
+  // ── Window presets (CT only — MR has no standard windows) ──
+  const isCT = (dicomMeta?.modality || activeSeries?.modality || "").toUpperCase() === "CT";
+  const applyWindowPreset = (preset) => { activeVp.current?.setWindow(preset.center, preset.width); setPresetMenuOpen(false); };
+  const resetWindow = () => { activeVp.current?.resetWindow(); setPresetMenuOpen(false); };
+  const resetViewAll = () => {
+    activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false);
+    setInverted(false); setLeftTool("wl"); setActiveTool(null);
+  };
+
+  // ── Keyboard shortcuts, Horos/OsiriX-style (press ? for the list) ──
+  const SHORTCUT_TOOLS = { l: "ruler", a: "angle", o: "circle", b: "square", d: "polygon", t: "arrow", x: "marker", e: "bidirectional", n: "cobb", z: "magnify" };
   useEffect(() => {
     const h = (e) => {
-      // Delete / Backspace — remove selected annotation if one is active
+      const tag = e.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser/OS shortcuts alone
+      syncDriverRef.current = "active"; // shortcuts act on the active viewer
+
+      // Delete / Backspace — remove the selected annotation
       if (e.key === "Delete" || e.key === "Backspace") {
-        // Ignore if the user is typing in an input/textarea
-        const tag = e.target?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
         e.preventDefault();
-        const removed = activeVp.current?.deleteSelectedAnnotations();
-        if (removed) { setHasSelection(false); return; }
+        if (activeVp.current?.deleteSelectedAnnotations()) setHasSelection(false);
+        return;
       }
-      if (e.key === "ArrowUp" || e.key === "ArrowLeft") goTo(currentIndex - 1);
-      if (e.key === "ArrowDown" || e.key === "ArrowRight") goTo(currentIndex + 1);
+
+      const last = frameCount - 1;
+      switch (e.key) {
+        case "ArrowUp": case "ArrowLeft": goTo(currentIndex - 1); return;
+        case "ArrowDown": case "ArrowRight": goTo(currentIndex + 1); return;
+        case "PageUp": e.preventDefault(); goTo(Math.max(0, currentIndex - 10)); return;
+        case "PageDown": e.preventDefault(); goTo(Math.min(last, currentIndex + 10)); return;
+        case "Home": e.preventDefault(); goTo(0); return;
+        case "End": e.preventDefault(); goTo(last); return;
+        case " ": if (frameCount > 1) { e.preventDefault(); setPlaying(p => !p); } return;
+        case "Escape": setActiveTool(null); setPresetMenuOpen(false); setShortcutsOpen(false); setLayoutMenuOpen(false); return;
+        case "?": setShortcutsOpen(o => !o); return;
+        default: break;
+      }
+
+      if (/^[0-9]$/.test(e.key)) {
+        if (!isCT) return;
+        if (e.key === "0") resetWindow();
+        else {
+          const preset = CT_WINDOW_PRESETS.find(p => p.key === e.key);
+          if (preset) applyWindowPreset(preset);
+        }
+        return;
+      }
+
+      if (e.shiftKey && e.key.toLowerCase() === "k") { goToNextKeyImage(); return; }
+      if (e.shiftKey && e.key.toLowerCase() === "i") { setTagPanelOpen(o => !o); return; }
+
+      const key = e.key.toLowerCase();
+      switch (key) {
+        case "k": toggleKeyImage(); return;
+        case "s": setLeftTool("pointer"); setActiveTool(null); return;
+        case "w": setLeftTool("wl"); setActiveTool(null); return;
+        case "p": case "m": setLeftTool("pan"); setActiveTool(null); return; // M = Horos's "Move"
+        case "c": if (viewMode === "mpr") { setLeftTool("crosshairs"); setActiveTool(null); } return;
+        case "i": activeVp.current?.toggleInvert(); setInverted(i => !i); return;
+        case "r":
+          if (e.shiftKey) { activeVp.current?.rotateCCW(); setRotation(r => (r + 270) % 360); }
+          else { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }
+          return;
+        case "h": activeVp.current?.flipH(); setFlipH(f => !f); return;
+        case "v": activeVp.current?.flipV(); setFlipV(f => !f); return;
+        case "f": resetViewAll(); return;
+        default:
+          if (SHORTCUT_TOOLS[key] === "magnify" && viewMode !== "stack") return; // the magnifier is 2D-only
+          if (SHORTCUT_TOOLS[key]) toggleTool(SHORTCUT_TOOLS[key]);
+      }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [currentIndex, goTo]);
-
-  // Tool panel drag
-  const handlePanelGripDown = (e) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setPanelDragging(true);
-    const rect = viewportWrapRef.current.getBoundingClientRect();
-    const startX = e.clientX - rect.left - panelPos.x;
-    const startY = e.clientY - rect.top - panelPos.y;
-    const onMove = (mv) => {
-      const r = viewportWrapRef.current.getBoundingClientRect();
-      setPanelPos({
-        x: Math.max(0, mv.clientX - r.left - startX),
-        y: Math.max(0, mv.clientY - r.top - startY),
-      });
-    };
-    const onUp = () => {
-      setPanelDragging(false);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  const toggleTool = (name) => setActiveTool(t => t === name ? null : name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, goTo, frameCount, isCT, viewMode, imageIds, keyImages]);
 
   const imageEnhancement = () => {
     if (enhancementLoading) return;
@@ -487,33 +1115,258 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
   }, [enhancementLoading, enhancementResult]);
 
   // Pick the active viewport ref based on current view mode
-  const activeVp = viewMode === "stack" ? vpRef : volumeVpRef;
+  const activeVp = viewMode === "stack" ? vpRef : viewMode === "3d" ? render3dRef : volumeVpRef;
+
+  // What's in the toolbar changes how much room it needs: start again from the full one
+  const toolbarContentKey = [viewMode, multi, slabLabel(slab), !!fusion, aiLoading, translationActive, isCT].join("|");
+  useLayoutEffect(() => { setToolbarTier(0); }, [toolbarWidth, toolbarContentKey]);
+  // After each render: still overflowing → one tier down (before paint, so no flicker).
+  // Runs after every render on purpose — it only ever steps down, and stops at the last tier.
+  // Not while a menu is open: the toolbar mustn't rearrange under the pointer.
+  const toolbarMenuOpen = mprMenuOpen || slabMenuOpen || fusionMenuOpen || layoutMenuOpen || overflowMenuOpen || presetMenuOpen || exportMenuOpen;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const bar = toolbarRef.current;
+    const left = toolbarLeftRef.current;
+    const right = toolbarRightRef.current;
+    if (!bar || !left || !right || toolbarTier >= 3 || toolbarMenuOpen) return;
+    const style = getComputedStyle(bar);
+    const room = bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    // Width of the buttons themselves: the span of each group's own children. (scrollWidth
+    // would also count an open dropdown hanging off a button.)
+    const span = group => {
+      const boxes = [...group.children].map(el => el.getBoundingClientRect()).filter(r => r.width > 0);
+      return boxes.length ? Math.max(...boxes.map(r => r.right)) - Math.min(...boxes.map(r => r.left)) : 0;
+    };
+    // The Enhance button widens while hovered; measure it at rest so a hover doesn't shrink the toolbar
+    const enhanceExtra = Math.max(0, (enhanceBtnRef.current?.offsetWidth ?? 0) - ENHANCE_BTN_REST_PX);
+    const needed = span(left) - enhanceExtra + span(right) + parseFloat(style.columnGap || 0);
+    if (needed > room + 1) setToolbarTier(t => Math.min(3, t + 1));
+  });
+  const activeVpRef = useRef(activeVp);
+  activeVpRef.current = activeVp;
+
+  // ── Multi-viewer layout actions and linked scrolling ──
+  currentIndexRef.current = currentIndex;
+  const applyLayout = ({ layout: next, open }) => {
+    onLayoutChange?.(next);
+    if (open) onSelectSeries?.(open);
+  };
+  const linkActive = lay.linked && multi && viewMode === "stack"; // the MPR volume isn't a slice stack
+
+  // Keep the stored layout in step with the open series (e.g. after a series card was
+  // clicked, which replaces the active pane's series), so the side panel's "In a viewer" is right
+  useEffect(() => {
+    if (!layout) return;
+    const key = (l) => JSON.stringify([l.cols, l.rows, l.activeSlot, l.linked, l.panes.map(s => s?.id ?? null)]);
+    if (key(layout) !== key(lay)) onLayoutChange?.(lay);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lay]);
+
+  // The active series' slice positions, read once the layout has other viewers
+  useEffect(() => {
+    if (!multi || !imageIds.length) return;
+    let cancelled = false;
+    const geometries = geometryRef.current;
+    readSlicePositions(imageIds).then(geometry => {
+      if (cancelled) return;
+      geometries.active = geometry;
+      setGeometryVersion(v => v + 1);
+      Object.keys(paneHandlesRef.current).forEach(key => alignPaneRef.current(key));
+    });
+    return () => { cancelled = true; delete geometries.active; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multi, imageIds]);
+
+  // A viewer's slice changed: if it's the one being scrolled, move the others to match.
+  // Same-frame series match by position (when linked); locked earlier studies by depth
+  // along the active series' scan direction, plus their offset.
+  const syncFrom = (source, index) => {
+    if (!multi || viewMode !== "stack" || syncDriverRef.current !== source) return;
+    const geos = geometryRef.current;
+    const locks = priorLocksRef.current;
+    const from = geos[source]?.slices[index];
+    if (!from) return;
+    const normal = geos.active?.slices.find(Boolean)?.normal;
+    // The source's place as a depth in the active series
+    const activeDepth = !normal ? null
+      : source === "active" || canLink(geos.active, geos[source]) ? depthAlong(from, normal)
+      : locks[source] != null ? depthAlong(from, normal) - locks[source]
+      : null;
+    // A locked prior being scrolled moves the active viewer first; the others follow that
+    let anchor = from;
+    if (source !== "active" && locks[source] != null) {
+      const target = activeDepth == null ? null : sliceAtDepth(geos.active, normal, activeDepth);
+      if (target == null) return;
+      vpRef.current?.setImageIndex(target);
+      anchor = geos.active.slices[target];
+    }
+    Object.entries(geos).forEach(([key, geometry]) => {
+      if (key === source || (key === "active" && locks[source] != null)) return;
+      let target = null;
+      if (locks[key] != null) target = activeDepth == null ? null : sliceAtDepth(geometry, normal, activeDepth + locks[key]);
+      else if (linkActive) target = matchSlice(anchor, geometry);
+      if (target == null) return;
+      if (key === "active") vpRef.current?.setImageIndex(target);
+      else paneHandlesRef.current[key]?.setImageIndex(target);
+    });
+  };
+  // Lock an earlier-study pane to the active viewer where the two are now (the radiologist
+  // has scrolled it to the matching slice), or unlock it
+  const toggleLock = (slot) => {
+    const key = String(slot);
+    const locks = { ...priorLocksRef.current };
+    if (locks[key] != null) delete locks[key];
+    else {
+      const geos = geometryRef.current;
+      const normal = geos.active?.slices.find(Boolean)?.normal;
+      const here = geos.active?.slices[currentIndexRef.current];
+      const there = geos[key]?.slices[paneHandlesRef.current[key]?.getImageIndex?.() ?? -1];
+      if (!normal || !here || !there || !parallelTo(geos[key], normal)) return;
+      locks[key] = depthAlong(there, normal) - depthAlong(here, normal);
+    }
+    priorLocksRef.current = locks;
+    setPriorLocks(locks);
+  };
+  const lockStateOf = (slot) => {
+    const normal = geometryRef.current.active?.slices.find(Boolean)?.normal;
+    if (viewMode !== "stack" || !parallelTo(geometryRef.current[String(slot)], normal)) return null;
+    return priorLocks[String(slot)] != null ? "locked" : "unlocked";
+  };
+  // Window/level, invert, zoom and pan follow too. Window only between CT series (HU
+  // mean the same in each; MR intensities don't), pan only within one frame of reference.
+  const modalityOf = (key) => String(lay.panes[key === "active" ? lay.activeSlot : Number(key)]?.modality ?? "").toUpperCase();
+  const displayFor = (display, source, key) => ({
+    voiRange: modalityOf(source) === "CT" && modalityOf(key) === "CT" ? display.voiRange : null,
+    invert: display.invert,
+    zoom: display.zoom,
+    pan: canLink(geometryRef.current[source], geometryRef.current[key]) ? display.pan : null,
+  });
+  const syncDisplayFrom = (source, display) => {
+    if (!linkActive || syncDriverRef.current !== source) return;
+    ["active", ...Object.keys(paneHandlesRef.current)].forEach(key => {
+      if (key === source) return;
+      const shown = displayFor(display, source, key);
+      if (key === "active") {
+        vpRef.current?.applyDisplay(shown);
+        setInverted(shown.invert);
+      } else paneHandlesRef.current[key]?.applyDisplay(shown);
+    });
+  };
+  // Bring one pane to the active viewer's position and display (when it loads, or linking is turned on)
+  function alignPane(key) {
+    if (!linkActive) return;
+    const from = geometryRef.current.active?.slices[currentIndexRef.current];
+    const target = matchSlice(from, geometryRef.current[key]);
+    if (target != null) paneHandlesRef.current[key]?.setImageIndex(target);
+    const display = vpRef.current?.getDisplay();
+    if (display) paneHandlesRef.current[key]?.applyDisplay(displayFor(display, "active", key));
+  }
+  const alignPaneRef = useRef(alignPane); // the latest one, for async callers
+  alignPaneRef.current = alignPane;
+  const onPaneGeometry = (key, geometry) => {
+    if (geometry) geometryRef.current[key] = geometry;
+    else delete geometryRef.current[key];
+    if (!geometry && priorLocksRef.current[key] != null) { // the pane closed or shows another series
+      const { [key]: _gone, ...rest } = priorLocksRef.current;
+      priorLocksRef.current = rest;
+      setPriorLocks(rest);
+    }
+    setGeometryVersion(v => v + 1);
+    if (geometry) alignPane(key);
+  };
+  const toggleLinked = () => {
+    const next = { ...lay, linked: !lay.linked };
+    onLayoutChange?.(next);
+    if (next.linked) setTimeout(() => Object.keys(paneHandlesRef.current).forEach(key => alignPaneRef.current(key))); // after the re-render
+  };
+
+  // Show a series of an earlier study beside the open one: in the chosen pane, else the
+  // first empty one, else the next one (two viewers side by side when there was one)
+  const pickPrior = (series) => {
+    let base = multi ? lay : resizeLayout(lay, 2, 1, seriesList);
+    const others = base.panes.map((_, i) => i).filter(i => i !== base.activeSlot);
+    const slot = priorPicker?.slot ?? others.find(i => !base.panes[i]) ?? others.find(i => base.panes[i]?.prior) ?? others[0];
+    setPriorPicker(null);
+    const later = !!studyDate && new Date(series.prior.date) > new Date(studyDate);
+    applyLayout({ layout: placeSeries(base, slot, { ...series, prior: { ...series.prior, later } }).layout, open: null });
+  };
+  const priorPane = lay.panes.find((s, i) => i !== lay.activeSlot && s?.prior) ?? null;
+
+  // Lesion sizes against the earlier study's result from the same model, when there is one
+  useEffect(() => {
+    setPriorComparison(null);
+    if (inferenceResult?.volume_analysis?.total_volume_cm3 == null || !priorPane || priorPane.prior.later || !modelId) return;
+    let cancelled = false;
+    latestResult(priorPane.id, modelId)
+      .then(prior => { if (!cancelled) setPriorComparison(compareLesions(inferenceResult, prior, priorPane.prior.date)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inferenceResult, priorPane?.id, modelId]);
+  useEffect(() => { onPriorComparisonChange?.(priorComparison); }, [priorComparison]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mouse-over picks the driver; series cards can be dropped on any viewer
+  const paneHandlers = (key, slot) => ({
+    onMouseEnter: () => { syncDriverRef.current = key; },
+    onDragOver: (e) => {
+      if (!e.dataTransfer.types.includes(SERIES_DRAG_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      if (dropSlot !== slot) setDropSlot(slot);
+    },
+    onDragLeave: (e) => {
+      if (!e.currentTarget.contains(e.relatedTarget)) setDropSlot(s => (s === slot ? null : s));
+    },
+    onDrop: (e) => {
+      setDropSlot(null);
+      let series = null;
+      try { series = JSON.parse(e.dataTransfer.getData(SERIES_DRAG_TYPE)); } catch (_) { }
+      if (!series?.id) return;
+      e.preventDefault();
+      applyLayout(placeSeries(lay, slot, series));
+    },
+  });
+  const slotPlacement = (slot) => (multi ? { gridColumn: (slot % lay.cols) + 1, gridRow: Math.floor(slot / lay.cols) + 1 } : undefined);
+  const dropHighlight = (slot) => dropSlot === slot && (
+    <div className="absolute inset-0 z-[60] rounded-xl border-2 border-dashed border-[#0694FB] bg-[#0694FB]/10 pointer-events-none" />
+  );
+  const unshownSeries = seriesList.filter(s => !lay.panes.some(p => p && String(p.id) === String(s.id)));
 
   const drawTools = [
-    { name: "circle", icon: <LiaCircleSolid size={20} />, label: "Draw Circle (Elliptical ROI)" },
-    { name: "square", icon: <IoSquareOutline size={20} />, label: "Draw Rectangle ROI" },
-    { name: "arrow", icon: <GoArrowUpRight size={19} />, label: "Arrow annotation" },
-    { name: "polygon", icon: <PiPolygonLight size={19} />, label: "Polygon ROI" },
+    { name: "circle", icon: <LiaCircleSolid size={20} />, label: "Draw Circle (Elliptical ROI) (O)" },
+    { name: "square", icon: <IoSquareOutline size={20} />, label: "Draw Rectangle ROI (B)" },
+    { name: "arrow", icon: <GoArrowUpRight size={19} />, label: "Arrow annotation (T)" },
+    { name: "polygon", icon: <PiPolygonLight size={19} />, label: "Polygon ROI (D)" },
+    { name: "pencil", icon: <TbPencil size={19} />, label: "Pencil — freehand line" },
+    { name: "text", icon: <TbLetterT size={19} />, label: "Text label" },
+    // 2D and 3-plane views (they share the painted regions); not the 3D rendering
+    ...(viewMode !== "3d" ? [{ name: "brush", icon: <TbBrush size={19} />, label: "Brush — paint a region; Alt erases, [ ] size" }] : []),
   ];
 
   const measureTools = [
-    { name: "ruler", icon: <TbRulerMeasure size={19} />, label: "Length measurement" },
-    { name: "angle", icon: <TbAngle size={19} />, label: "Angle measurement" },
-    { name: "marker", icon: <TbCirclePlus size={19} />, label: "Probe marker" },
+    { name: "ruler", icon: <TbRulerMeasure size={19} />, label: "Length measurement (L)" },
+    { name: "angle", icon: <TbAngle size={19} />, label: "Angle measurement (A)" },
+    { name: "bidirectional", icon: <TbArrowsCross size={19} />, label: "Bidirectional — long and short axis, RECIST (E)" },
+    { name: "cobb", icon: <TbVectorBezier size={19} />, label: "Cobb angle — two lines (N)" },
+    { name: "marker", icon: <TbCirclePlus size={19} />, label: "Probe marker (X)" },
   ];
 
   return (
     <div className="flex flex-col gap-2 flex-1 min-w-0 h-full overflow-hidden">
 
       {/* ── Top toolbar ── */}
-      <div ref={toolbarRef} className="bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-0 min-w-0">
+      <div ref={toolbarRef} onMouseEnter={() => { syncDriverRef.current = "active"; }} className={`relative z-40 bg-[#161616] rounded-xl px-3 py-2 flex justify-between gap-2 shrink-0 ${toolbarTier >= 3 ? "flex-wrap gap-y-1.5" : ""}`}>
+        {/* Nothing in here shrinks or wraps its text: short of room it overflows, which is
+          what tells the toolbar to step down a tier. The dropdowns (absolutely positioned)
+          go back to normal wrapping — their items are inline buttons that must stack. */}
+        <div ref={toolbarLeftRef} className={`flex items-center gap-0 whitespace-nowrap [&>*]:shrink-0 [&_.absolute]:whitespace-normal ${toolbarTier >= 3 ? "flex-wrap gap-y-1" : "min-w-0"}`}>
           {/* ── Always visible: slice nav ── */}
           <ViewBtn icon={<FiChevronLeft size={16} />} label="Prev slice" disabled={currentIndex <= 0} onClick={() => goTo(currentIndex - 1)} />
           <span className="text-[#6B6B6B] text-[13px] font-mono w-[60px] text-center shrink-0">
-            {images.length > 0 ? `${currentIndex + 1} / ${images.length}` : "— / —"}
+            {frameCount > 0 ? `${currentIndex + 1} / ${frameCount}` : "— / —"}
           </span>
-          <ViewBtn icon={<FiChevronRight size={16} />} label="Next slice" disabled={currentIndex >= images.length - 1} onClick={() => goTo(currentIndex + 1)} />
+          <ViewBtn icon={<FiChevronRight size={16} />} label="Next slice" disabled={currentIndex >= frameCount - 1} onClick={() => goTo(currentIndex + 1)} />
 
           <VDivider />
 
@@ -526,18 +1379,57 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* ── Secondary tools: hidden when toolbar is narrow ── */}
           {!toolbarNarrow && (
-            <div className="flex items-center">
-              <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); }} />
+            <div className="flex items-center [&>*]:shrink-0">
+              <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit to window" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setLeftTool("wl"); setActiveTool(null); }} />
               <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
               <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
               <ViewBtn icon={<MdFlip size={16} />} label="Flip horizontal" active={flipH} onClick={() => { activeVp.current?.flipH(); setFlipH(f => !f); }} />
               <ViewBtn icon={<MdFlip size={16} style={{ transform: "rotate(90deg)" }} />} label="Flip vertical" active={flipV} onClick={() => { activeVp.current?.flipV(); setFlipV(f => !f); }} />
               <VDivider />
-              <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level — drag on image" active={wlActive} onClick={() => { setWlActive(w => !w); if (!wlActive) setActiveTool(null); }} />
+              <ViewBtn icon={<FiMousePointer size={15} />} label="Pointer — left-click does nothing; drag crosshair lines or measurements (S)" active={!activeTool && leftTool === "pointer"} onClick={() => { setLeftTool("pointer"); setActiveTool(null); }} />
+              <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level — left-drag (W)" active={!activeTool && leftTool === "wl"} onClick={() => { setLeftTool("wl"); setActiveTool(null); }} />
+              <ViewBtn icon={<FiMove size={15} />} label="Pan — left-drag (P)" active={!activeTool && leftTool === "pan"} onClick={() => { setLeftTool("pan"); setActiveTool(null); }} />
+              {viewMode === "mpr" && (
+                <ViewBtn icon={<FiCrosshair size={15} />} label="Crosshairs — click to jump (C)" active={!activeTool && leftTool === "crosshairs"} onClick={() => { setLeftTool("crosshairs"); setActiveTool(null); }} />
+              )}
+              {isCT && (
+                <div ref={presetMenuRef} className="relative">
+                  <button
+                    onClick={() => setPresetMenuOpen(o => !o)}
+                    title="Window presets (1–9, 0 = original)"
+                    className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium border-none cursor-pointer transition-all shrink-0 ${presetMenuOpen ? "bg-[#1a1a1a] text-white" : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"}`}
+                  >
+                    Presets <FiChevronDown size={11} />
+                  </button>
+                  {presetMenuOpen && (
+                    <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl overflow-hidden min-w-[200px] py-1">
+                      {CT_WINDOW_PRESETS.map(p => (
+                        <button
+                          key={p.key}
+                          onClick={() => applyWindowPreset(p)}
+                          className="w-full flex items-center gap-3 px-3 py-1.5 text-left text-[12px] text-[#CCCCCC] hover:bg-[#1a1a1a] hover:text-white bg-transparent border-none cursor-pointer"
+                        >
+                          <span className="text-[#0694FB] font-mono w-3">{p.key}</span>
+                          <span className="flex-1">{p.name}</span>
+                          <span className="text-[#6B6B6B] font-mono text-[10px]">{`${p.width}/${p.center}`}</span>
+                        </button>
+                      ))}
+                      <button
+                        onClick={resetWindow}
+                        className="w-full flex items-center gap-3 px-3 py-1.5 text-left text-[12px] text-[#CCCCCC] hover:bg-[#1a1a1a] hover:text-white bg-transparent border-none cursor-pointer border-t border-[#2a2a2a]"
+                      >
+                        <span className="text-[#0694FB] font-mono w-3">0</span>
+                        <span className="flex-1">Original (from image)</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              <ViewBtn icon={<FiHelpCircle size={15} />} label="Keyboard shortcuts (?)" active={shortcutsOpen} onClick={() => setShortcutsOpen(o => !o)} />
               <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
               <VDivider />
               <button
-                onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); switchViewMode("stack"); }}
+                onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setLeftTool("wl"); setActiveTool(null); switchViewMode("stack"); }}
                 className="text-[#6B6B6B] hover:text-white text-[12px] font-mono px-2 py-1 rounded-lg hover:bg-[#1a1a1a] bg-transparent border-none cursor-pointer transition-all shrink-0"
               >
                 RESET
@@ -555,10 +1447,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               ···
             </button>
             {overflowMenuOpen && (
-              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl overflow-hidden min-w-[180px]">
+              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl overflow-hidden min-w-[220px]">
                 {/* Fit / Rotate / Flip */}
                 <div className="flex items-center gap-1 px-3 py-2 border-b border-[#2a2a2a]">
-                  <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); setOverflowMenuOpen(false); }} />
+                  <ViewBtn icon={<FiMaximize2 size={12} />} label="Fit" onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setLeftTool("wl"); setActiveTool(null); setOverflowMenuOpen(false); }} />
                   <ViewBtn icon={<FiRotateCcw size={16} />} label="Rotate CCW" onClick={() => { activeVp.current?.rotateCCW(); setRotation(r => ((r - 90) + 360) % 360); }} />
                   <ViewBtn icon={<FiRotateCw size={16} />} label="Rotate CW" onClick={() => { activeVp.current?.rotateCW(); setRotation(r => (r + 90) % 360); }} />
                   <ViewBtn icon={<MdFlip size={16} />} label="Flip H" active={flipH} onClick={() => { activeVp.current?.flipH(); setFlipH(f => !f); }} />
@@ -566,14 +1458,44 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 </div>
                 {/* W/L + Invert */}
                 <div className="flex items-center gap-1 px-3 py-2 border-b border-[#2a2a2a]">
-                  <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level" active={wlActive} onClick={() => { setWlActive(w => !w); if (!wlActive) setActiveTool(null); }} />
+                  <ViewBtn icon={<FiMousePointer size={15} />} label="Pointer" active={!activeTool && leftTool === "pointer"} onClick={() => { setLeftTool("pointer"); setActiveTool(null); }} />
+                  <ViewBtn icon={<RiContrastFill size={16} />} label="Window / Level" active={!activeTool && leftTool === "wl"} onClick={() => { setLeftTool("wl"); setActiveTool(null); }} />
+                  <ViewBtn icon={<FiMove size={15} />} label="Pan" active={!activeTool && leftTool === "pan"} onClick={() => { setLeftTool("pan"); setActiveTool(null); }} />
+                  {viewMode === "mpr" && (
+                    <ViewBtn icon={<FiCrosshair size={15} />} label="Crosshairs (C)" active={!activeTool && leftTool === "crosshairs"} onClick={() => { setLeftTool("crosshairs"); setActiveTool(null); }} />
+                  )}
                   <ViewBtn icon={<MdInvertColors size={20} />} label="Invert" active={inverted} onClick={() => { activeVp.current?.toggleInvert(); setInverted(i => !i); }} />
-                  <span className="text-[#555] text-[11px] ml-1">W/L · Invert</span>
+                  <ViewBtn icon={<FiHelpCircle size={15} />} label="Keyboard shortcuts (?)" active={shortcutsOpen} onClick={() => { setShortcutsOpen(o => !o); setOverflowMenuOpen(false); }} />
                 </div>
+                {/* CT window presets */}
+                {isCT && (
+                  <div className="px-3 py-2 border-b border-[#2a2a2a] flex flex-col gap-1">
+                    <span className="text-[#555] text-[11px]">Window presets</span>
+                    <div className="grid grid-cols-2 gap-1">
+                      {CT_WINDOW_PRESETS.map(p => (
+                        <button
+                          key={p.key}
+                          onClick={() => { applyWindowPreset(p); setOverflowMenuOpen(false); }}
+                          className="flex items-center gap-1.5 px-2 py-1 rounded-md text-left text-[11px] text-[#CCCCCC] hover:bg-[#1a1a1a] hover:text-white bg-transparent border-none cursor-pointer"
+                        >
+                          <span className="text-[#0694FB] font-mono">{p.key}</span>
+                          <span className="truncate">{p.name}</span>
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => { resetWindow(); setOverflowMenuOpen(false); }}
+                        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-left text-[11px] text-[#CCCCCC] hover:bg-[#1a1a1a] hover:text-white bg-transparent border-none cursor-pointer"
+                      >
+                        <span className="text-[#0694FB] font-mono">0</span>
+                        <span className="truncate">Original</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {/* Reset */}
                 <div className="px-3 py-2">
                   <button
-                    onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setWlActive(false); setActiveTool(null); switchViewMode("stack"); setOverflowMenuOpen(false); }}
+                    onClick={() => { activeVp.current?.resetFit(); setZoomPct(100); setRotation(0); setFlipH(false); setFlipV(false); setInverted(false); setLeftTool("wl"); setActiveTool(null); switchViewMode("stack"); setOverflowMenuOpen(false); }}
                     className="w-full text-left text-[#6B6B6B] hover:text-white text-[12px] font-mono px-2 py-1 rounded-lg hover:bg-[#1a1a1a] bg-transparent border-none cursor-pointer transition-all"
                   >
                     RESET ALL
@@ -594,24 +1516,265 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 }`}
             >
               <TbView360 size={15} />
-              {viewMode === "stack" ? "MPR" : `MPR · ${activePlane.toUpperCase()}`}
+              {viewMode === "stack" ? "MPR" : viewMode === "3d" ? "3D" : toolbarCompact ? "MPR" : `MPR · ${activePlane.toUpperCase()}`}
             </button>
             {mprMenuOpen && (
               <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[150px]">
                 <button
-                  onClick={() => { switchViewMode("stack"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  onClick={() => { switchViewMode("stack"); setMprMenuOpen(false); setActiveTool(null); setLeftTool("wl"); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "stack" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
                   2D Stack
                 </button>
                 <button
-                  onClick={() => { switchViewMode("mpr"); setMprMenuOpen(false); setActiveTool(null); setWlActive(false); }}
+                  onClick={() => { switchViewMode("mpr"); setMprMenuOpen(false); setActiveTool(null); setLeftTool("wl"); }}
                   className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "mpr" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
                 >
                   MPR (3-pane + crosshairs)
                 </button>
+                <button
+                  onClick={() => { switchViewMode("3d"); setMprMenuOpen(false); setActiveTool(null); }}
+                  className={`w-full text-left px-4 py-2.5 text-[12px] border-none cursor-pointer transition-colors ${viewMode === "3d" ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                >
+                  3D rendering
+                </button>
               </div>
             )}
+          </div>
+
+          {/* ── 3D rendering only: preset ── */}
+          {viewMode === "3d" && (
+            <select
+              value={renderPreset ?? presetsFor(activeSeries?.modality)[0][0]}
+              onChange={e => setRenderPreset(e.target.value)}
+              title="What the 3D rendering shows"
+              className={`ml-1 bg-[#111] border border-[#2a2a2a] rounded-lg px-2 py-1 text-white text-[12px] outline-none cursor-pointer shrink-0 ${toolbarCompact ? "max-w-[96px]" : ""}`}
+            >
+              {presetsFor(activeSeries?.modality).map(([name, label]) => <option key={name} value={name}>{label}</option>)}
+            </select>
+          )}
+
+          {/* ── 3D view only: thick slab ── */}
+          {viewMode === "mpr" && (
+            <div ref={slabMenuRef} className="relative ml-1">
+              <button
+                onClick={() => setSlabMenuOpen(v => !v)}
+                title="Thick slab — MIP / MinIP / average through a slab instead of one plane"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${slabLabel(slab)
+                  ? "bg-[#F59E0B] text-black"
+                  : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+                  }`}
+              >
+                {slabLabel(slab) ? (toolbarCompact ? SLAB_MODES[slab.mode].label : slabLabel(slab)) : "Slab"}
+              </button>
+              {slabMenuOpen && (
+                <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl w-[230px] p-3 flex flex-col gap-2.5">
+                  <div className="grid grid-cols-4 gap-1">
+                    {[["off", "Off"], ...Object.entries(SLAB_MODES).map(([k, m]) => [k, m.label])].map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        onClick={() => setSlab(prev => ({ ...prev, mode }))}
+                        className={`px-1 py-1 rounded-md text-[11px] border-none cursor-pointer ${slab.mode === mode ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className={`flex flex-col gap-1.5 ${slab.mode === "off" ? "opacity-40 pointer-events-none" : ""}`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-[#868686]">Thickness</span>
+                      <span className="text-[12px] text-white font-mono">{`${slab.mm} mm`}</span>
+                    </div>
+                    <input
+                      type="range" min={1} max={100} step={1} value={slab.mm}
+                      onChange={e => setSlab(prev => ({ ...prev, mm: Number(e.target.value) }))}
+                      className="w-full accent-[#0694FB]"
+                    />
+                    <div className="flex gap-1">
+                      {[3, 5, 10, 20, 40].map(mm => (
+                        <button
+                          key={mm}
+                          onClick={() => setSlab(prev => ({ ...prev, mm }))}
+                          className={`flex-1 py-0.5 rounded-md text-[10px] font-mono border-none cursor-pointer ${slab.mm === mm ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                        >
+                          {mm}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="text-[10px] text-[#6B6B6B] leading-snug">MIP for vessels and nodules, MinIP for airways. The pixel readout is off while a slab is shown.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── 3D view only: fusion ── */}
+          {viewMode === "mpr" && (
+            <div ref={fusionMenuRef} className="relative ml-1">
+              <button
+                onClick={() => setFusionMenuOpen(v => !v)}
+                title="Fusion — show a PET / NM series of this study over this one, in colour"
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 ${fusion
+                  ? "bg-[#F472B6] text-black"
+                  : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+                  }`}
+              >
+                {fusion ? "Fused" : "Fuse"}
+              </button>
+              {fusionMenuOpen && (
+                <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl z-50 shadow-xl w-[250px] p-3 flex flex-col gap-2.5">
+                  {fusionCandidates.length === 0 ? (
+                    <span className="text-[11px] text-[#6B6B6B] leading-snug">No PET or nuclear medicine series in this study to fuse.</span>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[11px] text-[#868686]">Overlay</span>
+                      <button
+                        onClick={() => setFusion(null)}
+                        className={`text-left px-2 py-1 rounded-md text-[11px] border-none cursor-pointer ${!fusion ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                      >None</button>
+                      {fusionCandidates.map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => fuseWith(s)}
+                          className={`text-left px-2 py-1 rounded-md text-[11px] border-none cursor-pointer truncate ${fusion?.seriesId === s.id ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                          title={s.description || s.name}
+                        >{`${(s.modality || "").toUpperCase()} · ${s.description || s.name || "series"}`}</button>
+                      ))}
+                    </div>
+                  )}
+                  {fusion && (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[11px] text-[#868686]">Colour scale</span>
+                        <div className="flex flex-wrap gap-1">
+                          {FUSION_COLORMAPS.map(([name, label]) => (
+                            <button
+                              key={name}
+                              onClick={() => setFusion(prev => ({ ...prev, colormap: name }))}
+                              className={`px-2 py-0.5 rounded-md text-[10px] border-none cursor-pointer ${fusion.colormap === name ? "bg-[#0694FB] text-white" : "bg-[#111] text-[#999] hover:text-white"}`}
+                            >{label}</button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-[#868686]">Opacity</span>
+                          <span className="text-[11px] text-white font-mono">{`${Math.round(fusion.opacity * 100)}%`}</span>
+                        </div>
+                        <input
+                          type="range" min={0.1} max={1} step={0.05} value={fusion.opacity}
+                          onChange={e => setFusion(prev => ({ ...prev, opacity: Number(e.target.value) }))}
+                          className="w-full accent-[#0694FB]"
+                        />
+                      </div>
+                      <span className="text-[10px] text-[#6B6B6B] leading-snug">Placed by scanner coordinates — lines up for PET and CT from the same scan.</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Always visible: viewer layout ── */}
+          <div ref={layoutMenuRef} className="relative ml-1">
+            <button
+              onClick={() => setLayoutMenuOpen(v => !v)}
+              disabled={translationActive}
+              title={translationActive ? "Close the translation split view to use layouts" : "Viewer layout — show several series side by side"}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ${multi
+                ? "bg-[#0694FB] text-white"
+                : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white"
+                }`}
+            >
+              <TbLayoutGrid size={15} />
+              {multi ? `${lay.cols}×${lay.rows}` : toolbarCompact ? null : "Layout"}
+            </button>
+            {layoutMenuOpen && (
+              <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[210px] py-1">
+                {LAYOUTS.map(l => {
+                  const current = l.cols === lay.cols && l.rows === lay.rows;
+                  return (
+                    <button
+                      key={`${l.cols}x${l.rows}`}
+                      onClick={() => { applyLayout({ layout: resizeLayout(lay, l.cols, l.rows, seriesList), open: null }); setLayoutMenuOpen(false); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2 text-left text-[12px] border-none cursor-pointer transition-colors ${current ? "bg-[#0694FB] text-white" : "bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white"}`}
+                    >
+                      <LayoutGlyph cols={l.cols} rows={l.rows} />
+                      {l.label}
+                    </button>
+                  );
+                })}
+                <div className="h-px bg-[#2a2a2a] my-1" />
+                <button
+                  onClick={toggleLinked}
+                  title="Viewers showing the same patient position (same frame of reference) scroll together"
+                  className="w-full flex items-center gap-3 px-3 py-2 text-left text-[12px] bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white border-none cursor-pointer"
+                >
+                  {lay.linked ? <TbLink size={16} className="text-[#0694FB]" /> : <TbLinkOff size={16} />}
+                  <span className="flex-1">Scroll viewers together</span>
+                  {lay.linked && <FiCheck size={13} className="text-[#0694FB]" />}
+                </button>
+                <button
+                  onClick={() => { setLayoutMenuOpen(false); setPriorPicker({ slot: null }); }}
+                  title="Open a series of the patient's earlier (or later) study beside this one"
+                  className="w-full flex items-center gap-3 px-3 py-2 text-left text-[12px] bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white border-none cursor-pointer"
+                >
+                  <TbHistory size={16} />
+                  <span className="flex-1">Compare with another study…</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* ── Always visible: export (picture, movie, print, DICOM ZIP) ── */}
+          <div ref={exportMenuRef} className="relative ml-1">
+            <button
+              onClick={() => setExportMenuOpen(v => !v)}
+              disabled={imageIds.length === 0 || (!!exportStatus && !exportStatus.error)}
+              title={exportStatus?.text ?? "Export — save, copy or print the image, record a movie, download the series"}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium border-none cursor-pointer transition-all shrink-0 disabled:cursor-not-allowed ${exportStatus?.error
+                ? "bg-red-700 text-white"
+                : exportStatus ? "bg-[#1a1a1a] text-white"
+                : "bg-transparent text-[#6B6B6B] hover:bg-[#1a1a1a] hover:text-white disabled:opacity-40"
+                }`}
+            >
+              {exportStatus && !exportStatus.error ? <FiLoader size={14} className="animate-spin" /> : <FiDownload size={14} />}
+              {exportStatus ? exportStatus.text : toolbarCompact ? null : "Export"}
+            </button>
+            {exportMenuOpen && (() => {
+              const item = (label, onClick, { disabled, hint } = {}) => (
+                <button
+                  onClick={onClick}
+                  disabled={disabled}
+                  title={hint}
+                  className="w-full flex items-center px-3 py-2 text-left text-[12px] bg-transparent text-[#999] hover:bg-[#1a1a1a] hover:text-white border-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  {label}
+                </button>
+              );
+              return (
+                <div className="absolute top-full left-0 mt-1 bg-[#161616] border border-[#2a2a2a] rounded-xl overflow-hidden z-50 shadow-xl min-w-[230px] py-1">
+                  <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Image (without patient details)</span>
+                  {item("Save as PNG", saveImage)}
+                  {item("Save as DICOM", saveDicomCapture, { hint: "A secondary-capture image with this patient and study, to send to a PACS" })}
+                  {item("Copy to clipboard", copyViewerImage, { disabled: !window.ClipboardItem, hint: window.ClipboardItem ? undefined : "This browser can't copy images" })}
+                  {item("Print", printViewer)}
+                  {item(`Save movie (${frameCount} slices)`, saveMovie, {
+                    disabled: viewMode !== "stack" || frameCount < 2 || !window.MediaRecorder,
+                    hint: viewMode !== "stack" ? "Movies are recorded from the 2D view" : frameCount < 2 ? "Only one slice" : undefined,
+                  })}
+                  <div className="h-px bg-[#2a2a2a] my-1" />
+                  <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">Series DICOM files</span>
+                  {item("Download as ZIP", () => downloadSeries(false))}
+                  {item("Download anonymised ZIP", () => downloadSeries(true), { hint: "Names, IDs, addresses and institution removed; dates kept to the year; new study, series and image UIDs" })}
+                  <div className="h-px bg-[#2a2a2a] my-1" />
+                  <span className="block px-3 pt-1 pb-0.5 text-[#555] text-[11px]">{`Key images${keyImages.size ? ` (${keyImages.size})` : " — none marked"}`}</span>
+                  {item("Pictures as ZIP", saveKeyPictures, { disabled: !keyImages.size || viewMode !== "stack", hint: viewMode !== "stack" ? "Key images are captured from the 2D view" : undefined })}
+                  {item("DICOM files as ZIP", () => downloadSeries(false, true), { disabled: !keyImages.size })}
+                  {item("Anonymised DICOM ZIP", () => downloadSeries(true, true), { disabled: !keyImages.size })}
+                </div>
+              );
+            })()}
           </div>
 
           <VDivider />
@@ -619,6 +1782,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── Always visible: Enhance button ── */}
           <div className="relative flex items-center shrink-0">
             <motion.button
+              ref={enhanceBtnRef}
               onClick={imageEnhancement}
               onMouseEnter={() => setEnhancementHovered(true)}
               onMouseLeave={() => setEnhancementHovered(false)}
@@ -686,12 +1850,13 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         {/* Slice navigation */}
 
 
-        <div className="flex items-center gap-2">
+        <div ref={toolbarRightRef} className="flex items-center gap-2 shrink-0 whitespace-nowrap">
           <button
             onClick={() => onRunAnalysis()}
             disabled={aiLoading}
             className="flex items-center justify-center gap-2 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#036cb8] text-white text-[13px] border border-[#1E1E1E] hover:border-[#2a2a2a] cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-            style={{ minWidth: 148 }}
+            style={{ minWidth: toolbarCompact && !aiLoading ? 0 : 148 }}
+            title="Run the selected AI model on this series"
           >
             {aiLoading ? (
               inferenceProgress != null ? (
@@ -712,21 +1877,21 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   Analyzing…
                 </>
               )
-            ) : <>Run Analysis</>}
+            ) : <>{toolbarCompact ? "Run AI" : "Run Analysis"}</>}
           </button>
-          <button
+          {(translationActive || translationPairsFor(dicomMeta?.modality || activeSeries?.modality).length > 0) && <button
             onClick={() => translationActive ? onCloseTranslation() : onRunTranslation()}
             className={`flex items-center gap-2.5 px-4 py-[8px] rounded-full text-[13px] cursor-pointer transition-all border-none ${translationActive
               ? "bg-[#A855F7] text-white"
               : "bg-[#303030] text-[#a1a1a1] hover:text-white hover:bg-[#222]"
               }`}
           >
-            Translate Image
+            {toolbarCompact ? "Translate" : "Translate Image"}
             {/* Toggle pill */}
             <span className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-200 shrink-0 ${translationActive ? "bg-white/80" : "bg-[#6e6e6e]"}`}>
               <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-200 ${translationActive ? "left-[18px]" : "left-0.5"}`} />
             </span>
-          </button>
+          </button>}
           {/* <button className="flex items-center gap-1.5 px-4 py-[8px] rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors">
             Sign Report
           </button> */}
@@ -735,7 +1900,92 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
       {/* ── Viewport ── */}
       <div className="flex-1 min-h-0 flex flex-row gap-2">
-        <div ref={viewportWrapRef} className="flex-1 bg-black rounded-xl relative overflow-hidden">
+        {/* ── Annotation tools — docked beside the viewer so they never cover the image ── */}
+        <div className={`shrink-0 ${viewMode === "3d" ? "hidden" : "flex"} flex-col items-center gap-1 bg-[#161616] rounded-xl px-1.5 py-2 overflow-y-auto select-none`} style={{ scrollbarWidth: "none" }}>
+          {/* Draw tools */}
+          {drawTools.map(t => (
+            <ToolBtn key={t.name} icon={t.icon} label={t.label} active={activeTool === t.name} onClick={() => toggleTool(t.name)} />
+          ))}
+
+          <HDivider />
+
+          {/* Measure tools */}
+          {measureTools.map(t => (
+            <ToolBtn key={t.name} icon={t.icon} label={t.label} active={activeTool === t.name} onClick={() => toggleTool(t.name)} />
+          ))}
+
+          <HDivider />
+
+          {/* Magnifier — hold the left button over the image (2D only) */}
+          {viewMode === "stack" && (
+            <ToolBtn icon={<TbZoomIn size={18} />} label="Magnifier — hold left button (Z)" active={activeTool === "magnify"} onClick={() => toggleTool("magnify")} />
+          )}
+
+          <HDivider />
+
+          {/* ROI list (named ROIs + volumes) */}
+          <ToolBtn icon={<FiList size={15} />} label="ROI list — names and volumes" active={roiPanelOpen} onClick={() => setRoiPanelOpen(o => !o)} />
+
+          {/* Key image flag for this slice */}
+          {viewMode === "stack" && (
+            <ToolBtn
+              icon={isKeyImage ? <TbStarFilled size={17} className="text-[#FACC15]" /> : <TbStar size={17} />}
+              label={`${isKeyImage ? "Unmark" : "Mark"} key image (K) · Shift+K next${keyImages.size ? ` · ${keyImages.size} marked` : ""}`}
+              onClick={toggleKeyImage}
+            />
+          )}
+          {viewMode === "stack" && (
+            <ToolBtn icon={<TbStars size={17} />} label={`Key images — list and export${keyImages.size ? ` (${keyImages.size})` : ""}`} active={keyPanelOpen} onClick={() => setKeyPanelOpen(o => !o)} />
+          )}
+
+          {/* RECIST 1.1 — lesions from the bidirectional tool */}
+          <ToolBtn icon={<TbTargetArrow size={17} />} label="RECIST — lesions, sum of diameters, response" active={recistPanelOpen} onClick={() => setRecistPanelOpen(o => !o)} />
+
+          {/* DICOM tag browser */}
+          <ToolBtn icon={<TbTags size={17} />} label="DICOM tags (Shift+I)" active={tagPanelOpen} onClick={() => setTagPanelOpen(o => !o)} />
+
+          {/* Measurement labels: always on, or only on the hovered/selected annotation */}
+          <ToolBtn icon={<TbTextCaption size={17} />} label={labelsAlwaysOn ? "Labels always on — click to show only on hover/select" : "Labels on hover/select — click to always show them"} active={labelsAlwaysOn} onClick={toggleLabels} />
+
+          <HDivider />
+
+          {/* Delete selected annotation */}
+          <ToolBtn
+            icon={<FiDelete size={15} />}
+            label={hasSelection ? "Delete selected (Del)" : "Click an annotation to select it"}
+            active={hasSelection}
+            onClick={() => {
+              const removed = activeVp.current?.deleteSelectedAnnotations();
+              if (removed) setHasSelection(false);
+            }}
+          />
+
+          {/* Clear all annotations */}
+          <ToolBtn icon={<FiTrash2 size={15} />} label="Clear all annotations" onClick={() => {
+            // This series' measurements only: not the layout's other viewers, and never
+            // Crosshairs' own annotations (removing those breaks the MPR crosshairs). In MPR a
+            // measurement off the acquisition plane has no image reference, so it counts too.
+            const onSeries = new Set(imageIds);
+            (csAnnotation.state.getAllAnnotations() ?? [])
+              .filter(a => SAVED_TOOL_NAMES.has(a.metadata?.toolName) && (!a.metadata.referencedImageId || onSeries.has(a.metadata.referencedImageId)))
+              .forEach(a => { try { csAnnotation.state.removeAnnotation(a.annotationUID); } catch (_) { } });
+            setHasSelection(false);
+            activeVp.current?.render?.();
+          }} />
+        </div>
+
+        {/* ── Viewer grid: the active viewer (full tools) in its cell, the layout's other panes around it ── */}
+        <div
+          className="flex-1 min-w-0 grid gap-2"
+          style={{ gridTemplateColumns: `repeat(${multi ? lay.cols : 1}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${multi ? lay.rows : 1}, minmax(0, 1fr))` }}
+        >
+        <div
+          ref={viewportWrapRef}
+          {...paneHandlers("active", lay.activeSlot)}
+          className={`bg-black rounded-xl relative overflow-hidden min-w-0 min-h-0 ${multi ? "ring-1 ring-[#0694FB]/70" : ""}`}
+          style={slotPlacement(lay.activeSlot)}
+        >
+          {dropHighlight(lay.activeSlot)}
 
           {/* Empty state */}
           {imageIds.length === 0 && (
@@ -752,28 +2002,53 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                 ref={vpRef}
                 imageIds={imageIds}
                 activeTool={activeTool}
-                windowLevel={wlActive}
+                leftTool={leftTool}
                 onIndexChange={(idx) => {
                   setCurrentIndex(idx);
-                  const img = images[idx];
-                  if (img) onSelectImage?.(img.blobUrl ?? img.url);
+                  const src = fileSrcOfFrame(idx);
+                  if (src) onSelectImage?.(src);
+                  syncFrom("active", idx);
                 }}
+                onDisplayChange={(display) => { setInverted(display.invert); syncDisplayFrom("active", display); }}
                 onArrowTextRequest={handleArrowTextRequest}
                 onCameraChanged={handleCameraChanged}
+                onRoisChange={setRois}
+                onPixelValue={(probe) => pixelFeedRef.current?.(probe)}
+                brushRegions={mprRegions}
+                brushReady={regionsLoadedFor != null && String(regionsLoadedFor) === String(activeSeries?.id)}
+                onBrushRegionsChange={(brushes) => {
+                  // The 2D view owns the per-slice brush regions while it's open; 3D-view polygons and
+                  // brush regions in the earlier whole-volume form (which it can't show) pass through
+                  const next = [...mprRegionsRef.current.filter(r => r.kind !== "brush" || !r.slices), ...brushes];
+                  setMprRegions(next);
+                  mprRegionsRef.current = next;
+                  scheduleSaveRef.current?.();
+                }}
+              />
+            ) : viewMode === "3d" ? (
+              <CornerstoneVolume3D
+                ref={render3dRef}
+                imageIds={imageIds}
+                preset={renderPreset ?? presetsFor(activeSeries?.modality)[0][0]}
               />
             ) : (
               <CornerstoneVolumeViewport
                 ref={volumeVpRef}
                 imageIds={imageIds}
                 activeTool={activeTool}
-                windowLevel={wlActive}
+                leftTool={leftTool}
                 onArrowTextRequest={handleArrowTextRequest}
                 onActivePlaneChange={setActivePlane}
                 maskSlices={segmentationMaskSlices}
                 maskConfidences={segmentationConfidences}
                 maskLegend={segmentationLegend}
                 colorByClass={segmentationIsAnatomy}
+                onRoisChange={setRois}
                 maskOpacity={maskOpacity}
+                savedRegions={mprRegions}
+                slab={slab}
+                fusion={fusion?.imageIds ? fusion : null}
+                onRegionsChange={(regions) => { setMprRegions(regions); mprRegionsRef.current = regions; scheduleSaveRef.current?.(); }}
               />
             )}
           </div>
@@ -781,8 +2056,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
           {/* ── MPR segmentation opacity control — the 2D overlay's slider card only
             renders in stack mode, but the mask is a real labelmap volume here too,
             so give it an equivalent (lighter) control. ── */}
-          {viewMode !== "stack" && segmentationMaskSlices && (
-            <div className="absolute top-3 right-3 z-30 w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg">
+          {viewMode === "mpr" && segmentationMaskSlices && (
+            <div data-export-skip className="absolute top-3 right-3 z-30 w-[220px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg">
               <div className="px-3 py-2 flex items-center gap-2">
                 <span className="text-[12px] font-semibold text-white flex-1">Segmentation</span>
                 <button
@@ -805,8 +2080,74 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   {Math.round(maskOpacity * 100)}%
                 </span>
               </div>
+              {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult?.class_volumes_cm3} structures={inferenceResult?.structures} />}
+              <ResultWarnings warnings={inferenceResult?.warnings} />
+              <MidlineShift shift={inferenceResult?.volume_analysis?.midline_shift} />
             </div>
           )}
+
+          {/* ── Keyboard shortcuts (? to toggle) — same dialog design as the app's other dialogs ── */}
+          <AnimatePresence>
+            {shortcutsOpen && (() => {
+              const groups = [
+                ["Mouse", [["Left drag", "Window / level (or chosen tool)"], ["Middle drag / Shift+left", "Pan"], ["Right drag", "Zoom"], ["Wheel", "Scroll slices"]]],
+                ["Slices", [["↑ ↓ ← →", "Previous / next"], ["Page Up / Down", "Jump 10"], ["Home / End", "First / last"], ["Space", "Play / pause cine"]]],
+                ["Window", [["1 – 9", "CT presets"], ["0", "Original window"], ["I", "Invert"]]],
+                ["Left-button tool", [["S", "Pointer (does nothing; grab lines)"], ["W", "Window / level"], ["P or M", "Pan"], ["C", "Crosshairs (MPR)"], ["Esc", "Drop measurement tool"]]],
+                ["Measure", [["L", "Length"], ["A", "Angle"], ["E", "Bidirectional (RECIST)"], ["N", "Cobb angle"], ["O", "Ellipse"], ["B", "Rectangle"], ["D", "Polygon"], ["T", "Arrow"], ["X", "Probe"], ["Delete", "Delete selected"]]],
+                ["View", [["R / Shift+R", "Rotate CW / CCW"], ["H / V", "Flip horizontal / vertical"], ["F", "Fit & reset"], ["Z", "Magnifier (2D, hold left)"]]],
+                ["Images", [["K", "Mark / unmark key image"], ["Shift+K", "Next key image"], ["Shift+I", "DICOM tags"]]],
+                ["Layout", [["Double-click", "Make a viewer the active one"], ["Drag series card", "Show it in a viewer"]]],
+              ];
+              return (
+                <motion.div data-export-skip
+                  className="fixed inset-0 z-[999] flex items-center justify-center"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.2 }}
+                  onClick={() => setShortcutsOpen(false)}
+                >
+                  <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+                  <motion.div
+                    initial={{ y: 24, opacity: 0, scale: 0.97 }}
+                    animate={{ y: 0, opacity: 1, scale: 1 }}
+                    exit={{ y: 16, opacity: 0, scale: 0.97 }}
+                    transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
+                    onClick={e => e.stopPropagation()}
+                    className="relative w-full max-w-[600px] max-h-[85vh] bg-[#161616] border border-[#1E1E1E] rounded-2xl flex flex-col overflow-hidden"
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between px-7 pt-7 pb-5 shrink-0">
+                      <div>
+                        <div className="flex flex-row gap-2"><FiHelpCircle size={20} className="text-[#ffffff]" /><h2 className="text-white text-[17px] font-medium m-0">Keyboard shortcuts</h2></div>
+                        <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">
+                          Mouse and keyboard controls for the viewer. Press ? to show or hide this list.
+                        </p>
+                      </div>
+                      <button onClick={() => setShortcutsOpen(false)} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
+                        <FiX size={18} />
+                      </button>
+                    </div>
+                    {/* Body */}
+                    <div className="px-7 pb-7 overflow-y-auto grid grid-cols-2 gap-x-8 gap-y-5">
+                      {groups.map(([title, rows]) => (
+                        <div key={title} className="flex flex-col gap-1.5">
+                          <span className="text-[#0694FB] text-[11px] uppercase tracking-wide">{title}</span>
+                          {rows.map(([keys, action]) => (
+                            <div key={keys} className="flex items-center justify-between gap-3 text-[12px]">
+                              <span className="font-mono text-white bg-[#1E1E1E] rounded px-1.5 py-0.5 whitespace-nowrap">{keys}</span>
+                              <span className="text-[#949494] text-right">{action}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                </motion.div>
+              );
+            })()}
+          </AnimatePresence>
 
           {/* DICOM corner overlays */}
           {imageIds.length > 0 && (
@@ -818,20 +2159,16 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               zoomPct={zoomPct}
               rotation={rotation}
               inverted={inverted}
+              pixelFeed={viewMode === "stack" ? pixelFeedRef : null}
+              isKeyImage={viewMode === "stack" && isKeyImage}
+              viewMode={viewMode}
             />
-          )}
-
-          {/* W/L hint */}
-          {wlActive && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-black/60 border border-[#0694FB]/30 rounded-lg px-3 py-1 pointer-events-none">
-              <p className="text-[#0694FB] text-[10px] font-mono m-0">Left drag: adjust Window / Level</p>
-            </div>
           )}
 
           {/* ── Job failed banner ── */}
           <AnimatePresence>
             {jobStatus === "failed" && (
-              <motion.div
+              <motion.div data-export-skip
                 className="absolute top-3 left-1/2 z-30 flex items-center gap-2 bg-red-600 border border-red-500/30 rounded-full px-4 py-2 pointer-events-none"
                 style={{ x: "-50%" }}
                 initial={{ y: -60, opacity: 0 }}
@@ -845,137 +2182,9 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
             )}
           </AnimatePresence>
 
-          {/* ── Draggable annotation toolbar ── */}
-          <div
-            style={{ left: panelPos.x, top: panelPos.y }}
-            className="absolute z-20 flex flex-col items-center gap-1 bg-[#0d0d0d]/90 border border-[#1E1E1E] rounded-xl px-1.5 py-2 backdrop-blur-sm select-none"
-          >
-            {/* Drag handle */}
-            <div
-              onMouseDown={handlePanelGripDown}
-              className={`w-full flex justify-center py-0.5 mb-0.5 rounded-lg cursor-grab active:cursor-grabbing hover:bg-[#1a1a1a] transition-colors ${panelDragging ? "cursor-grabbing" : ""}`}
-              title="Drag to move"
-            >
-              <svg width="14" height="10" viewBox="0 0 14 10" fill="none">
-                <circle cx="3" cy="2" r="1.2" fill="#6B6B6B" />
-                <circle cx="7" cy="2" r="1.2" fill="#6B6B6B" />
-                <circle cx="11" cy="2" r="1.2" fill="#6B6B6B" />
-                <circle cx="3" cy="8" r="1.2" fill="#6B6B6B" />
-                <circle cx="7" cy="8" r="1.2" fill="#6B6B6B" />
-                <circle cx="11" cy="8" r="1.2" fill="#6B6B6B" />
-              </svg>
-            </div>
-
-            {/* Draw tools */}
-            {drawTools.map(t => (
-              <ToolBtn key={t.name} icon={t.icon} label={t.label} active={activeTool === t.name} onClick={() => toggleTool(t.name)} />
-            ))}
-
-            <HDivider />
-
-            {/* Measure tools */}
-            {measureTools.map(t => (
-              <ToolBtn key={t.name} icon={t.icon} label={t.label} active={activeTool === t.name} onClick={() => toggleTool(t.name)} />
-            ))}
-
-            <HDivider />
-
-            {/* Delete selected annotation */}
-            <ToolBtn
-              icon={<FiDelete size={15} />}
-              label={hasSelection ? "Delete selected (Del)" : "Click an annotation to select it"}
-              active={hasSelection}
-              onClick={() => {
-                const removed = activeVp.current?.deleteSelectedAnnotations();
-                if (removed) setHasSelection(false);
-              }}
-            />
-
-            {/* Clear all annotations */}
-            <ToolBtn icon={<FiTrash2 size={15} />} label="Clear all annotations" onClick={() => {
-              try { csAnnotation.state.removeAllAnnotations(); } catch (_) { }
-              setHasSelection(false);
-              activeVp.current?.render?.();
-            }} />
-          </div>
-
-          {/* ── Cine playback panel ── */}
-          {images.length > 1 && (
-            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-[#0d0d0d]/85 border border-[#1E1E1E] rounded-full px-4 py-2 backdrop-blur-sm select-none">
-              {/* Skip to first */}
-              <button
-                onClick={() => { setPlaying(false); goTo(0); }}
-                title="First slice"
-                className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
-              >
-                <FiSkipBack size={14} />
-              </button>
-
-              {/* Play / Pause */}
-              <button
-                onClick={() => setPlaying(p => !p)}
-                title={playing ? "Pause" : "Play through slices"}
-                className={`w-9 h-9 flex items-center justify-center rounded-full border-none cursor-pointer transition-all ${playing
-                  ? "bg-white text-black hover:bg-white/80"
-                  : "bg-[#0694FB] text-white hover:bg-[#0578d1]"
-                  }`}
-              >
-                {playing ? <FiPause size={16} /> : <FiPlay size={16} style={{ marginLeft: 2 }} />}
-              </button>
-
-              {/* Skip to last */}
-              <button
-                onClick={() => { setPlaying(false); goTo(images.length - 1); }}
-                title="Last slice"
-                className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
-              >
-                <FiSkipForward size={14} />
-              </button>
-
-              {/* Divider */}
-              <div className="w-px h-5 bg-[#2a2a2a]" />
-
-              {/* Scrubber */}
-              <input
-                type="range"
-                min={0}
-                max={images.length - 1}
-                value={currentIndex}
-                onChange={(e) => { setPlaying(false); goTo(Number(e.target.value)); }}
-                className="w-[120px] h-1 accent-[#0694FB] cursor-pointer"
-                title={`Slice ${currentIndex + 1} / ${images.length}`}
-              />
-
-              {/* Frame counter */}
-              <span className="text-[#6B6B6B] text-[11px] font-mono w-[50px] text-center shrink-0">
-                {currentIndex + 1}/{images.length}
-              </span>
-
-              {/* Divider */}
-              <div className="w-px h-5 bg-[#2a2a2a]" />
-
-              {/* Speed control */}
-              <button
-                onClick={() => setFps(f => Math.max(1, f - 2))}
-                title="Slower"
-                className="text-[#6B6B6B] hover:text-white text-[11px] font-mono bg-transparent border-none cursor-pointer transition-colors px-1"
-              >
-                −
-              </button>
-              <span className="text-[#6B6B6B] text-[13px] w-[32px] text-center shrink-0">{fps} fps</span>
-              <button
-                onClick={() => setFps(f => Math.min(30, f + 2))}
-                title="Faster"
-                className="text-[#6B6B6B] hover:text-white text-[11px] font-mono bg-transparent border-none cursor-pointer transition-colors px-1"
-              >
-                +
-              </button>
-            </div>
-          )}
-
           {/* ── Enhancement overlay (sits between DICOM and segmentation) ── */}
           {enhancementResult && enhancementActive && viewMode === "stack" && (() => {
-            const eSlice = enhancementResult.slices?.[currentIndex];
+            const eSlice = resultForFrame(enhancementResult.slices, currentIndex);
             const eOverlay = eSlice?.enhanced_image;
             if (!eOverlay) return null;
             const eSrc = eOverlay.startsWith("data:") ? eOverlay : `data:image/png;base64,${eOverlay}`;
@@ -1002,12 +2211,13 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* ── Segmentation mask overlay ── */}
           {inferenceResult && viewMode === "stack" && (() => {
-            const sliceData = inferenceResult.slices?.[currentIndex];
+            const sliceData = resultForFrame(inferenceResult.slices, currentIndex);
             const overlay = sliceData?.mask;
             // Classification results (e.g. breast density) have no mask but still get the card
             if (!overlay && sliceData?.predicted_class == null) return null;
             const isBase64 = overlay && !overlay.startsWith("http") && !overlay.startsWith("data:");
             const overlaySrc = !overlay ? null : isBase64 ? `data:image/png;base64,${overlay}` : overlay;
+            const atlasSrc = atlasShown && sliceData?.atlas ? `data:image/png;base64,${sliceData.atlas}` : null;
 
             // GradCAM: predicted_class / scores are non-null; segmentation: both null
             const isGradCam = sliceData?.predicted_class != null;
@@ -1035,8 +2245,23 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               overlayLabel = "Segmentation";
             }
 
+            const overlayTransform = [
+              `translate(${maskTransform.panX}px, ${maskTransform.panY}px)`,
+              `scale(${maskTransform.zoom})`,
+              `rotate(${maskTransform.rotation}deg)`,
+              maskTransform.flipH ? "scaleX(-1)" : "",
+              maskTransform.flipV ? "scaleY(-1)" : "",
+            ].filter(Boolean).join(" ");
+
             return (
               <>
+                {/* Atlas regions (brain lobes), under the mask */}
+                {atlasSrc && <img
+                  src={atlasSrc}
+                  alt="brain regions"
+                  style={{ transformOrigin: "center center", transform: overlayTransform }}
+                  className="absolute inset-0 w-full h-full object-contain z-[19] pointer-events-none"
+                />}
                 {/* Overlay image — screen blend so white regions light up over the DICOM,
                   coloured orange-red via CSS filter for clinical clarity */}
                 {overlaySrc && <img
@@ -1048,13 +2273,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                     mixBlendMode: segmentationIsAnatomy ? "normal" : "screen",
                     filter: segmentationIsAnatomy ? "none" : "sepia(1) saturate(8) hue-rotate(320deg)",
                     transformOrigin: "center center",
-                    transform: [
-                      `translate(${maskTransform.panX}px, ${maskTransform.panY}px)`,
-                      `scale(${maskTransform.zoom})`,
-                      `rotate(${maskTransform.rotation}deg)`,
-                      maskTransform.flipH ? "scaleX(-1)" : "",
-                      maskTransform.flipV ? "scaleY(-1)" : "",
-                    ].filter(Boolean).join(" "),
+                    transform: overlayTransform,
                   }}
                   className="absolute inset-0 w-full h-full object-contain z-20 pointer-events-none"
                 />}
@@ -1067,7 +2286,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   const signalLabel = conf >= 0.75 ? "High confidence" : conf >= 0.4 ? "Moderate" : "Low confidence";
 
                   return (
-                    <div
+                    <div data-export-skip
                       className="absolute z-30 w-[300px] overflow-hidden rounded-xl bg-[#161616] border border-[#1E1E1E] backdrop-blur-sm shadow-lg"
                       style={overlayPos ? { left: overlayPos.x, top: overlayPos.y } : { top: 12, right: 12 }}
                     >
@@ -1084,7 +2303,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                       {/* Body */}
                       <div className="px-3 pb-2.5">
                         <span className="text-[13px] font-semibold text-white">
-                          {`Slice ${currentIndex + 1} of ${inferenceResult.slices?.length ?? "—"}`}
+                          {`Slice ${currentIndex + 1} of ${frameCount || "—"}`}
                         </span>
                         <p className={`mt-1.5 text-[12px] leading-relaxed m-0 ${badgeColor}`}>
                           {badgeSentence}
@@ -1135,6 +2354,11 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                           >✕</button>
                         </span>
                       </div>
+                      {segmentationIsAnatomy && <SegmentationLegend legend={segmentationLegend} volumes={inferenceResult.class_volumes_cm3} structures={inferenceResult.structures} />}
+                      <ResultWarnings warnings={inferenceResult.warnings} />
+                      <MidlineShift shift={inferenceResult.volume_analysis?.midline_shift} />
+                      <AtlasRegions legend={inferenceResult.atlas_legend} shown={atlasShown} onToggle={setAtlasShown} />
+                      <PriorComparison comparison={priorComparison} />
                     </div>
                   );
                 })()}
@@ -1144,6 +2368,204 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
 
           {/* placeholder — dialog rendered at root level below */}
         </div>
+
+        {multi && lay.panes.map((series, slot) => slot === lay.activeSlot ? null : (
+          <div
+            key={`pane-${slot}`}
+            {...paneHandlers(String(slot), slot)}
+            className="bg-black rounded-xl relative overflow-hidden min-w-0 min-h-0"
+            style={slotPlacement(slot)}
+          >
+            {series ? (
+              <SeriesPane
+                key={series.id}
+                ref={handle => { if (handle) paneHandlesRef.current[slot] = handle; else delete paneHandlesRef.current[slot]; }}
+                series={series}
+                leftTool={leftTool}
+                linked={linkActive && canLink(geometryRef.current.active, geometryRef.current[slot])}
+                lockState={series.prior ? lockStateOf(slot) : null}
+                onToggleLock={() => toggleLock(slot)}
+                onIndexChange={(index) => syncFrom(String(slot), index)}
+                onDisplayChange={(display) => syncDisplayFrom(String(slot), display)}
+                onGeometry={(geometry) => onPaneGeometry(String(slot), geometry)}
+                onActivate={() => applyLayout(activatePane(lay, slot))}
+                onRemove={() => applyLayout({ layout: clearPane(lay, slot), open: null })}
+              />
+            ) : (
+              <EmptyPane series={unshownSeries} onPick={(s) => applyLayout(placeSeries(lay, slot, s))} onPickPrior={() => setPriorPicker({ slot })} />
+            )}
+            {dropHighlight(slot)}
+          </div>
+        ))}
+        </div>
+
+        {/* ── ROI list — named ROIs; contours sharing a name on different slices are one ROI ── */}
+        {roiPanelOpen && (
+          <div className="shrink-0 w-[250px] bg-[#161616] rounded-xl flex flex-col overflow-hidden select-none">
+            <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#1E1E1E] shrink-0">
+              <span className="text-white text-[13px] font-semibold">{`ROIs${rois.length ? ` (${rois.length})` : ""}`}</span>
+              <button onClick={() => setRoiPanelOpen(false)} className="text-[#6B6B6B] hover:text-white bg-transparent border-none cursor-pointer p-0" title="Close">
+                <FiX size={15} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#1B1B1B #000" }}>
+              {rois.length === 0 && (
+                <p className="text-[#6B6B6B] text-[12px] leading-relaxed m-0 px-3 py-4">
+                  No ROIs yet. Draw an ellipse, circle, rectangle or polygon. Contours with the same name on
+                  different slices form one ROI, and its volume is computed from all of them.
+                </p>
+              )}
+
+              {rois.map(roi => {
+                const editing = editingRoi?.name === roi.name;
+                const shown = roiVolumesShown.has(roi.name);
+                const ct = roi.meanUnit === "HU";
+                return (
+                  <div key={roi.name} className="px-3 py-2.5 flex flex-col gap-1 border-b border-[#1E1E1E]">
+                    <div className="flex items-center gap-2">
+                      {editing ? (
+                        <input
+                          autoFocus
+                          value={editingRoi.value}
+                          onChange={e => setEditingRoi(r => ({ ...r, value: e.target.value }))}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") commitRoiRename();
+                            if (e.key === "Escape") setEditingRoi(null);
+                          }}
+                          onBlur={commitRoiRename}
+                          className="flex-1 min-w-0 bg-[#111] border border-[#0694FB] rounded-md px-1.5 py-0.5 text-white text-[12px] outline-none"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => (viewMode === "stack" ? goTo(roi.firstSlice - 1) : volumeVpRef.current?.focusRoi(roi.name))}
+                          title={viewMode === "stack" ? "Go to its first slice" : "Centre the crosshairs on it"}
+                          className="flex-1 min-w-0 text-left text-white text-[12px] font-medium truncate bg-transparent border-none cursor-pointer p-0 hover:text-[#0694FB]"
+                        >
+                          {roi.name}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setEditingRoi({ name: roi.name, value: roi.name })}
+                        title="Rename (use another ROI's name to merge them)"
+                        className="text-[#6B6B6B] hover:text-white bg-transparent border-none cursor-pointer p-0"
+                      >
+                        <FiEdit2 size={12} />
+                      </button>
+                      <button
+                        onClick={() => removeRoi(roi.name)}
+                        title="Delete this ROI (all its contours)"
+                        className="text-[#6B6B6B] hover:text-red-400 bg-transparent border-none cursor-pointer p-0"
+                      >
+                        <FiTrash2 size={12} />
+                      </button>
+                    </div>
+
+                    <span className="text-[11px] text-[#868686]">
+                      {roi.slices.length === 1
+                        ? `Slice ${roi.firstSlice} · ${roi.contourCount} contour${roi.contourCount === 1 ? "" : "s"}`
+                        : `Slices ${roi.firstSlice}–${roi.lastSlice} · outlined on ${roi.slices.length}`}
+                    </span>
+
+                    {roi.slices.length < 2 ? (
+                      viewMode === "stack" ? (
+                        <span className="text-[11px] text-[#6B6B6B]">Outline it on 2+ slices for a volume, or grow it in the 3D view</span>
+                      ) : (
+                        <div className="flex flex-col gap-1 mt-0.5">
+                          <span className="text-[11px] text-[#6B6B6B]">Outline it on 2+ slices for a volume, or:</span>
+                          <button
+                            onClick={() => volumeVpRef.current?.growRoi(roi.name)}
+                            title="Use this contour as a seed and grow it through the neighbouring slices"
+                            className="self-start px-2.5 py-1 rounded-full bg-[rgba(6,148,251,0.17)] hover:bg-[rgba(6,148,251,0.25)] text-[#0694FB] text-[11px] font-medium border-none cursor-pointer"
+                          >
+                            Grow to 3D
+                          </button>
+                        </div>
+                      )
+                    ) : !shown ? (
+                      <button
+                        onClick={() => setRoiVolumesShown(prev => new Set(prev).add(roi.name))}
+                        className="self-start mt-0.5 px-2.5 py-1 rounded-full bg-[rgba(6,148,251,0.17)] hover:bg-[rgba(6,148,251,0.25)] text-[#0694FB] text-[11px] font-medium border-none cursor-pointer"
+                      >
+                        Compute volume
+                      </button>
+                    ) : roi.volumeCm3 == null ? (
+                      <span className="text-[11px] text-[#6B6B6B]">These images carry no position data (e.g. plain PNG/JPG), so volume can't be measured</span>
+                    ) : (
+                      <div className="mt-1 rounded-lg bg-[#111] px-2.5 py-2 flex flex-col gap-1">
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-[11px] text-[#868686]">Volume</span>
+                          <span className="text-[13px] text-[#0694FB] font-mono">{`${roi.volumeCm3.toFixed(2)} cm³`}</span>
+                        </div>
+                        {roi.sizeMm && (
+                          <div className="flex items-baseline justify-between gap-3" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
+                            <span className="text-[11px] text-[#868686] shrink-0">Size</span>
+                            <span className="flex flex-col items-end">
+                              <span className="text-[12px] text-white font-mono whitespace-nowrap">{formatSize(roi.sizeMm)}</span>
+                              <span className="text-[10px] text-[#6B6B6B] whitespace-nowrap">{SIZE_AXES_LABEL}</span>
+                            </span>
+                          </div>
+                        )}
+                        {roi.skippedSlices > 0 && (
+                          <span className="text-[10px] text-[#6B6B6B]">
+                            {`${roi.skippedSlices} slice${roi.skippedSlices === 1 ? "" : "s"} between outlines filled in by interpolation`}
+                          </span>
+                        )}
+                        {roi.mean != null && (
+                          <div className="flex items-baseline justify-between">
+                            <span className="text-[11px] text-[#868686]">{ct ? "Mean" : "Mean intensity"}</span>
+                            <span className="text-[12px] text-white font-mono">{`${roi.mean.toFixed(1)}${ct ? " HU" : ""}`}</span>
+                          </div>
+                        )}
+                        {roi.mean != null && roi.meanFromContours < roi.contourCount && (
+                          <span className="text-[10px] text-[#6B6B6B]">
+                            {`Mean from ${roi.meanFromContours} of ${roi.contourCount} contours. Scroll through the others to include them.`}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── RECIST 1.1 ── */}
+        {priorPicker && (
+          <PriorStudyPicker caseId={caseId} studyId={studyId} openStudyDate={studyDate} onPick={pickPrior} onClose={() => setPriorPicker(null)} />
+        )}
+
+        {keyPanelOpen && viewMode === "stack" && (
+          <KeyImagesPanel
+            keyed={keyIndices().map(index => ({
+              index,
+              imageId: imageIds[index],
+              src: frameMap.fileOfFrame.filter(f => f === fileOfFrame(index)).length > 1 ? null : fileSrcOfFrame(index), // multi-frame: no thumbnail (it would show frame 1)
+            }))}
+            currentIndex={currentIndex}
+            total={frameCount}
+            onGoTo={goTo}
+            onUnmark={unmarkKeyImage}
+            onClose={() => setKeyPanelOpen(false)}
+            onSavePictures={saveKeyPictures}
+            onDownloadDicom={anonymize => downloadSeries(anonymize, true)}
+          />
+        )}
+
+        {recistPanelOpen && (
+          <RecistPanel
+            imageIds={imageIds}
+            reference={recistReference}
+            onReferenceChange={(next) => { setRecistReference(next); recistReferenceRef.current = next; scheduleSaveRef.current?.(); }}
+            onEdited={() => { activeVp.current?.render?.(); scheduleSaveRef.current?.(); }}
+            onGoToSlice={viewMode === "stack" ? goTo : undefined}
+            onClose={() => setRecistPanelOpen(false)}
+          />
+        )}
+
+        {/* ── DICOM tag browser — follows the slice on screen ── */}
+        {tagPanelOpen && <DicomTagPanel imageId={imageIds[currentIndex]} onClose={() => setTagPanelOpen(false)} />}
 
         {/* ── Right panel: translation result ── */}
         {translationActive && (
@@ -1245,6 +2667,79 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
         )}
       </div>
 
+      {/* ── Cine / slice bar — docked under the viewer (as in Horos) so it never covers the image ── */}
+      {frameCount > 1 && viewMode !== "3d" && (
+        <div className="shrink-0 bg-[#161616] rounded-xl px-4 py-2 flex items-center gap-3 select-none">
+          {/* Skip to first */}
+          <button
+            onClick={() => { setPlaying(false); goTo(0); }}
+            title="First slice"
+            className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
+          >
+            <FiSkipBack size={14} />
+          </button>
+
+          {/* Play / Pause */}
+          <button
+            onClick={() => setPlaying(p => !p)}
+            title={playing ? "Pause" : "Play through slices"}
+            className={`w-9 h-9 flex items-center justify-center rounded-full border-none cursor-pointer transition-all ${playing
+              ? "bg-white text-black hover:bg-white/80"
+              : "bg-[#0694FB] text-white hover:bg-[#0578d1]"
+              }`}
+          >
+            {playing ? <FiPause size={16} /> : <FiPlay size={16} style={{ marginLeft: 2 }} />}
+          </button>
+
+          {/* Skip to last */}
+          <button
+            onClick={() => { setPlaying(false); goTo(frameCount - 1); }}
+            title="Last slice"
+            className="w-7 h-7 flex items-center justify-center rounded-full bg-transparent border-none text-[#6B6B6B] hover:text-white cursor-pointer transition-colors"
+          >
+            <FiSkipForward size={14} />
+          </button>
+
+          {/* Divider */}
+          <div className="w-px h-5 bg-[#2a2a2a]" />
+
+          {/* Scrubber */}
+          <SliceScrubber
+            count={frameCount}
+            index={currentIndex}
+            onSeek={(i) => { setPlaying(false); goTo(i); }}
+            detected={inferenceResult?.slices ? Array.from({ length: frameCount }, (_, i) => !!resultForFrame(inferenceResult.slices, i)?.detected) : null}
+            measured={measuredSlices}
+            keyed={keyImages.size ? imageIds.map(id => keyImages.has(id)) : null}
+          />
+
+          {/* Frame counter */}
+          <span className="text-[#6B6B6B] text-[11px] font-mono w-[50px] text-center shrink-0">
+            {currentIndex + 1}/{frameCount}
+          </span>
+
+          {/* Divider */}
+          <div className="w-px h-5 bg-[#2a2a2a]" />
+
+          {/* Speed control */}
+          <button
+            onClick={() => setFps(f => Math.max(1, f - 2))}
+            title="Slower"
+            className="text-[#6B6B6B] hover:text-white text-[11px] font-mono bg-transparent border-none cursor-pointer transition-colors px-1"
+          >
+            −
+          </button>
+          <span className="text-[#6B6B6B] text-[13px] w-[32px] text-center shrink-0">{fps} fps</span>
+          <button
+            onClick={() => setFps(f => Math.min(30, f + 2))}
+            title="Faster"
+            className="text-[#6B6B6B] hover:text-white text-[11px] font-mono bg-transparent border-none cursor-pointer transition-colors px-1"
+          >
+            +
+          </button>
+        </div>
+      )}
+
       {/* ── Arrow annotation label dialog ── */}
       <AnimatePresence>
         {arrowDialog && (
@@ -1268,8 +2763,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
               {/* Header */}
               <div className="flex items-start justify-between px-7 pt-7 pb-5">
                 <div>
-                  <h2 className="text-white text-[17px] font-medium m-0">Annotation Label</h2>
-                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">Enter a label for this annotation</p>
+                  <h2 className="text-white text-[17px] font-medium m-0">{arrowDialog.initial ? "Edit Label" : "Annotation Label"}</h2>
+                  <p className="text-[#6B6B6B] text-[13px] m-0 mt-1">{arrowDialog.initial ? "Change this annotation's label" : "Enter a label for this annotation"}</p>
                 </div>
                 <button onClick={cancelArrowLabel} className="text-[#4a4a4a] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-1 mt-0.5">
                   <FiX size={18} />
@@ -1302,7 +2797,7 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                   onClick={submitArrowLabel}
                   className="flex-1 py-2.5 rounded-full bg-[#0694FB] hover:bg-[#0578d1] text-white text-[13px] font-medium border-none cursor-pointer transition-colors"
                 >
-                  Add Label
+                  {arrowDialog.initial ? "Save" : "Add Label"}
                 </button>
               </div>
             </motion.div>

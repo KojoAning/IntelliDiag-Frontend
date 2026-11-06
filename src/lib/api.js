@@ -1,4 +1,17 @@
+import { clearSeriesStore } from "./seriesStore";
+import { LAYOUT_STORAGE_KEY } from "./viewerLayout";
+
 const BASE = (process.env.REACT_APP_API_BASE || process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
+
+// ── Ending the session on this device ───────────────────────────────────────
+// Drops the stored credentials and the on-disk copy of downloaded series (lib/seriesStore),
+// so no patient images stay behind. Waits (briefly) for the store to clear, since callers
+// usually navigate away straight after.
+export async function clearLocalSession() {
+  ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k));
+  try { sessionStorage.removeItem(LAYOUT_STORAGE_KEY); } catch { /* blocked */ }
+  await Promise.race([clearSeriesStore().catch(() => {}), new Promise(resolve => setTimeout(resolve, 1500))]);
+}
 
 // ── Token refresh ────────────────────────────────────────────────────────────
 let refreshPromise = null;
@@ -19,7 +32,7 @@ async function tryRefreshToken() {
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
       if (!res.ok) {
-        ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k));
+        await clearLocalSession();
         window.location.href = "/login";
         return false;
       }
@@ -28,7 +41,7 @@ async function tryRefreshToken() {
       localStorage.setItem("refresh_token", data.refresh_token);
       return true;
     } catch {
-      ["token","refresh_token","name","role","sub","email"].forEach(k => localStorage.removeItem(k));
+      await clearLocalSession();
       window.location.href = "/login";
       return false;
     } finally {
@@ -39,15 +52,21 @@ async function tryRefreshToken() {
   return refreshPromise;
 }
 
-async function request(method, path, body) {
+// keepalive: the request survives the page closing (saves flushed on pagehide). Browsers
+// refuse keepalive bodies over 64 KB, so a bigger one goes as a normal request (which
+// may not finish if the page is closing)
+const KEEPALIVE_MAX_BYTES = 60 * 1024;
+async function request(method, path, body, { keepalive = false } = {}) {
   const token = localStorage.getItem("token");
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const bodyText = body !== undefined ? JSON.stringify(body) : undefined;
 
   let res = await fetch(`${BASE}${path}`, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: bodyText,
+    keepalive: keepalive && new Blob([bodyText ?? ""]).size <= KEEPALIVE_MAX_BYTES,
   });
 
   // On 401, try refreshing the access token and retry once
@@ -115,6 +134,8 @@ export const getPatientById = (id)       => request("GET", `/patients/${id}`);
 export const getCases       = (qs = "")  => request("GET", `/cases/${qs}`);
 export const getStudies     = (qs = "")  => request("GET", `/imaging-studies/${qs}`);
 export const deleteStudy    = (studyId)  => request("DELETE", `/imaging-studies/${studyId}`);
+export const getStudy       = (studyId)  => request("GET", `/imaging-studies/${studyId}`);
+export const updateStudy    = (studyId, body, options) => request("PATCH", `/imaging-studies/${studyId}`, body, options);
 export const getDicomImages = (qs = "")  => request("GET", `/dicom/${qs}`);
 export const getReports     = (qs = "")  => request("GET", `/reports/${qs}`);
 export const getRecentJobs  = ()         => request("GET", `/jobs/recent`);
@@ -139,6 +160,16 @@ export const getDicomDownloadUrl = async (imageId) => {
  */
 export function getSeriesForStudy(studyId) {
   return request("GET", `/series/study/${studyId}`);
+}
+
+/**
+ * GET / PUT /series/{series_id}/annotations — viewer measurements saved with the series
+ */
+export function getSeriesAnnotations(seriesId) {
+  return request("GET", `/series/${seriesId}/annotations`);
+}
+export function saveSeriesAnnotations(seriesId, annotations, options) {
+  return request("PUT", `/series/${seriesId}/annotations`, { annotations }, options);
 }
 
 /**
@@ -349,3 +380,24 @@ export function getModels(modality) {
 export function runInference(modelId, imageId) {
   return request("POST", `/models/${modelId}/infer`, { image_id: imageId });
 }
+
+/**
+ * PACS (backend routers/pacs): connections searched over DICOMweb, and studies copied
+ * from them into a case.
+ */
+export const getPacsConnections   = ()         => request("GET",    `/pacs/connections`);
+export const createPacsConnection = (body)     => request("POST",   `/pacs/connections`, body);
+export const updatePacsConnection = (id, body) => request("PATCH",  `/pacs/connections/${id}`, body);
+export const deletePacsConnection = (id)       => request("DELETE", `/pacs/connections/${id}`);
+export const testPacsConnection   = (id)       => request("POST",   `/pacs/connections/${id}/test`);
+// filters: { patient_name, patient_id, accession_number, date_from, date_to, modality, limit, offset }
+export function searchPacsStudies(id, filters = {}) {
+  const qs = new URLSearchParams(Object.entries(filters).filter(([, v]) => v !== "" && v != null)).toString();
+  return request("GET", `/pacs/connections/${id}/studies${qs ? `?${qs}` : ""}`);
+}
+export const getPacsStudySeries = (id, studyUid) => request("GET", `/pacs/connections/${id}/studies/${encodeURIComponent(studyUid)}/series`);
+// body: { case_id, study_instance_uid, series_instance_uids?, description? }
+export const retrievePacsStudy  = (id, body)     => request("POST", `/pacs/connections/${id}/retrieve`, body);
+export const getPacsRetrievals  = ()             => request("GET",  `/pacs/retrievals`);
+// Carry on an import that stopped part-way (retrieval.can_resume)
+export const resumePacsRetrieval = (retrievalId) => request("POST", `/pacs/retrievals/${retrievalId}/resume`);

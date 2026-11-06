@@ -7,13 +7,18 @@ const PAIRS = [
   { from: "MR", to: "CT", description: "Generate CT equivalent from MR scan" },
 ];
 
+// Only the translations that start from this series' modality ("MRI" counts as MR) — also
+// decides whether the viewer shows its Translate switch at all
+export function translationPairsFor(modality) {
+  const normalized = (modality || "").toUpperCase().replace(/^MRI$/, "MR");
+  return PAIRS.filter(pair => pair.from === normalized);
+}
+
 function TranslationPanel({ onTranslate, modality }) {
   const [selected, setSelected] = useState(null); // { from, to }
   const [running, setRunning] = useState(false);
 
-  // Only offer the translation that starts from this series' modality ("MRI" counts as MR)
-  const normalized = (modality || "").toUpperCase().replace(/^MRI$/, "MR");
-  const pairs = PAIRS.filter(pair => pair.from === normalized);
+  const pairs = translationPairsFor(modality);
 
   const handleRun = async () => {
     if (!selected || running) return;

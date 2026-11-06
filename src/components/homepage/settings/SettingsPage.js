@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { FiCheck, FiX } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
-import { getSettings, patchProfileSettings, patchNotificationSettings, patchSecuritySettings, patchDataRetentionSettings, getSessions, signOut, signOutAll, revokeSession, changePassword } from "../../../lib/api";
+import { getSettings, patchProfileSettings, patchNotificationSettings, patchSecuritySettings, patchDataRetentionSettings, getSessions, signOut, signOutAll, revokeSession, changePassword, clearLocalSession } from "../../../lib/api";
 
 const fadeUp = {
   hidden: { opacity: 0, y: 18 },
@@ -409,7 +409,7 @@ function SecurityTab({ s, onUpdate }) {
       await signOutAll();
       // Sign out locally too — all sessions including current are revoked
       try { await signOut(); } catch { }
-      ["token", "refresh_token", "name", "role", "sub", "email"].forEach(k => localStorage.removeItem(k));
+      await clearLocalSession();
       window.location.href = "/";
     } catch {
       setSignOutAllLoading(false);

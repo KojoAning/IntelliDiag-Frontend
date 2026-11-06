@@ -73,7 +73,7 @@ function renderInline(text) {
 // Height below which we collapse to the compact "View Report" button
 const COLLAPSE_THRESHOLD = 260;
 
-function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving, impression = "", onImpressionChange, patientHistory = "", onPatientHistoryChange, activeTab: controlledTab, onTabChange }) {
+function LLMResponse({ response, loading, expandReport, onSaveReport, reportSaving, impression = "", onImpressionChange, patientHistory = "", onPatientHistoryChange, exam = null, onExamChange, activeTab: controlledTab, onTabChange }) {
   const [collapsed, setCollapsed] = useState(false);
   // Tab can be driven from outside (the "no patient history" prompt jumps straight to it)
   const [localTab, setLocalTab] = useState("system");
@@ -208,6 +208,27 @@ function LLMResponse({ response, loading, expandReport, onSaveReport, reportSavi
         </div>
       ) : activeTab === "history" ? (
         <div className="flex flex-col gap-2 flex-1 min-h-[200px]">
+          {exam && (
+            <div className="flex flex-col gap-1.5 shrink-0">
+              <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0">Exam</p>
+              <div className="flex gap-2">
+                <span className="shrink-0 self-center px-2 py-1 rounded-md bg-[#111] border border-[#1E1E1E] text-[11px] text-white font-mono">{exam.modality || "—"}</span>
+                <input
+                  value={exam.studyName}
+                  onChange={(e) => onExamChange?.({ studyName: e.target.value })}
+                  placeholder="Exam, e.g. CT abdomen and pelvis with contrast"
+                  className="flex-1 min-w-0 bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB]"
+                />
+              </div>
+              <input
+                value={exam.bodyRegion}
+                onChange={(e) => onExamChange?.({ bodyRegion: e.target.value })}
+                placeholder="Body region, e.g. abdomen / pelvis"
+                className="bg-[#111] border border-[#1E1E1E] rounded-lg px-2.5 py-1.5 text-white text-[12px] outline-none placeholder-[#3a3a3a] focus:border-[#0694FB]"
+              />
+              <p className="text-[#6B6B6B] text-[11px] m-0">Filled in from the study; correct it and the report uses yours as confirmed.</p>
+            </div>
+          )}
           <p className="text-[#6B6B6B] text-[10px] uppercase tracking-wide m-0 shrink-0">Clinical History</p>
           <textarea
             value={patientHistory}

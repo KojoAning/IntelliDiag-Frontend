@@ -4,15 +4,71 @@ import { motion, AnimatePresence } from "framer-motion";
 import { FiX } from "react-icons/fi";
 import Appbar from "../appbar/appbar";
 import Sidepanel from "./sidepanel";
+import SeriesDownloadPreview from "./SeriesDownloadPreview";
 import Midsection from "./midsection";
 import RightSection from "./rightsection";
-import { getSeriesForStudy, uploadDicom, getModels, authFetch } from "../../../lib/api";
+import { getSeriesForStudy, uploadDicom, getModels, authFetch, getStudy, updateStudy } from "../../../lib/api";
+import { readSavedLayout, saveLayout } from "../../../lib/viewerLayout";
 import { loadSeries, invalidateSeries, prefetchSeriesInBackground, PROJECTION_MODALITIES } from "../../../lib/seriesCache";
 import { Info, } from "lucide-react";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
-function WorkspaceViewer() {
+// The patient history typed into the report is the study's clinical indication (what the
+// Add Study form calls "indication", and reports print as "Clinical history"). The latest
+// text per study is kept here too, since the workspace remounts on every series switch.
+const historyByStudy = new Map();
+const examByStudy = new Map();
+const HISTORY_SAVE_DELAY_MS = 800;
+
+// The exam as the radiologist has it on the study ("CT · CT ABDOMEN PELVIS · abdomen"),
+// sent as confirmed; null when it's empty
+function confirmedExam(exam) {
+  if (!exam) return null;
+  const text = [exam.modality, exam.studyName, exam.bodyRegion].map(v => (v || "").trim()).filter(Boolean).join(" · ");
+  return text || null;
+}
+
+// A finished job's result: the inference service returns it inline (local dev) or as a
+// link to the stored copy (deployed) — either way, the result
+async function fetchJobResults(jobId) {
+  const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
+  if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
+  const raw = await res.json();
+  return raw.url && !raw.slices ? fetch(raw.url).then(r => r.json()) : raw;
+}
+
+// Drawn / painted regions with measurements, as the report takes them
+function markedRegionsForReport(regions) {
+  const rows = (regions ?? [])
+    .filter(r => r.summary?.volumeCm3 != null)
+    .map(r => ({
+      name: `${r.kind === "brush" ? "Brush" : "Region"} ${r.number ?? ""}`.trim(),
+      volume_cm3: Math.round(r.summary.volumeCm3 * 100) / 100,
+      size_mm: r.summary.sizeMm ?? null,
+      location: r.summary.location ?? null,
+      level: r.summary.level ?? null,
+    }));
+  return rows.length ? rows : null;
+}
+
+// What the inference worker works out for the report — which model ran, what kind of scan
+// it is, structure / lesion sizes — passed through as the result holds it
+function reportFacts(results) {
+  const vol = results.volume_analysis ?? {};
+  return {
+    model: results.model ?? null,
+    exam: results.dicom_metadata?.exam ?? null,
+    structures: results.structures ?? null,
+    organ_assessments: results.organ_assessments?.length ? results.organ_assessments : null,
+    lesions: vol.lesions?.length ? vol.lesions : null,
+    largest_lesion_size_mm: vol.largest_lesion_size_mm ?? null,
+    tumour_parts_cm3: vol.tumour_parts_cm3 ?? null,
+    midline_shift: vol.midline_shift ?? null,
+  };
+}
+
+function WorkspaceViewer({ layout, onLayoutChange }) {
   const { state: navState } = useLocation();
   const navigate = useNavigate();
 
@@ -71,6 +127,98 @@ function WorkspaceViewer() {
       })
       .catch(() => { });
   }, [activeSeries?.id, caseId, studyId]);
+
+  // ── Patient history: load from the study, save (debounced) as it's typed. Nothing is
+  // saved until it has loaded, so a failed load can't wipe the stored text.
+  const historyLoadedForRef = useRef(historyByStudy.has(String(studyId)) ? String(studyId) : null);
+  const historyDirtyRef = useRef(false); // typed before the load finished — keep what was typed
+  // The exam as recorded on the study (modality, name, body region) — editable next to the
+  // history, saved with it, and sent to the report as confirmed by the radiologist
+  const [exam, setExam] = useState(null); // { modality, studyName, bodyRegion, edited }
+  const examRef = useRef(exam);
+  examRef.current = exam;
+  // Regions the radiologist drew or painted on the open series (midsection), for the report
+  const markedRegionsRef = useRef([]);
+  // Lesion totals against the same model's result on an earlier study shown beside (midsection)
+  const priorComparisonRef = useRef(null);
+  const patientHistoryRef = useRef(patientHistory);
+  patientHistoryRef.current = patientHistory;
+  const historyTimerRef = useRef(null);
+  useEffect(() => {
+    const id = studyId && String(studyId);
+    if (!id || historyLoadedForRef.current === id) return;
+    if (historyByStudy.has(id) && examByStudy.has(id)) {
+      setPatientHistory(historyByStudy.get(id));
+      setExam(examByStudy.get(id));
+      historyLoadedForRef.current = id;
+      return;
+    }
+    let cancelled = false;
+    getStudy(id)
+      .then(study => {
+        if (cancelled) return;
+        const loadedExam = { modality: study?.modality ?? "", studyName: study?.study_name ?? "", bodyRegion: study?.body_region ?? "", date: study?.study_date ?? null, edited: false };
+        setExam(loadedExam);
+        examByStudy.set(id, loadedExam);
+        const saved = study?.clinical_indication ?? "";
+        if (!historyDirtyRef.current) setPatientHistory(saved);
+        historyByStudy.set(id, historyDirtyRef.current ? patientHistoryRef.current : saved);
+        historyLoadedForRef.current = id;
+        if (historyDirtyRef.current) historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
+      })
+      .catch(err => console.warn("[History] couldn't load the study's clinical history:", err));
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studyId]);
+
+  const saveHistory = useCallback((options) => {
+    historyTimerRef.current = null;
+    const id = historyLoadedForRef.current;
+    if (!id) return;
+    const examNow = examRef.current;
+    updateStudy(id, {
+      clinical_indication: patientHistoryRef.current.trim() || null,
+      ...(examNow?.edited && examNow.studyName.trim() ? { study_name: examNow.studyName.trim() } : {}),
+      ...(examNow?.edited ? { body_region: examNow.bodyRegion.trim() } : {}),
+    }, options)
+      .catch(err => console.warn("[History] couldn't save the clinical history:", err));
+  }, []);
+  const handleExamChange = (change) => {
+    const id = historyLoadedForRef.current;
+    if (!id || !examRef.current) return;
+    const next = { ...examRef.current, ...change, edited: true };
+    setExam(next);
+    examRef.current = next;
+    examByStudy.set(id, next);
+    clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
+  };
+  const handlePatientHistoryChange = (text) => {
+    setPatientHistory(text);
+    patientHistoryRef.current = text;
+    historyDirtyRef.current = true;
+    const id = historyLoadedForRef.current;
+    if (!id) return; // saved once the load finishes and the next edit comes in
+    historyByStudy.set(id, text);
+    clearTimeout(historyTimerRef.current);
+    historyTimerRef.current = setTimeout(saveHistory, HISTORY_SAVE_DELAY_MS);
+  };
+  // Flush on series switch / leaving the viewer, and when the tab is closed, reloaded or
+  // hidden (keepalive lets the save finish after the page is gone)
+  useEffect(() => {
+    const flush = (options) => {
+      if (historyTimerRef.current) { clearTimeout(historyTimerRef.current); saveHistory(options); }
+    };
+    const onHide = () => { if (document.visibilityState === "hidden") flush({ keepalive: true }); };
+    const onPageHide = () => flush({ keepalive: true });
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      flush();
+    };
+  }, [saveHistory]);
 
   // Every series in the study, for the side panel's series cards
   useEffect(() => {
@@ -149,16 +297,7 @@ function WorkspaceViewer() {
           updateCtx('10000001', { enhancementLoading: true, enhancementProgress: 100 });
           try {
             let results;
-            if (process.env.NODE_ENV === 'development') {
-              const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-              if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-              results = await resR.json();
-            } else {
-              const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-              if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-              const { url } = await res.json();
-              results = await fetch(url).then(r => r.json());
-            }
+            results = await fetchJobResults(jobId);
             if (!cancelled) updateCtx('10000001', { enhancementResult: results });
           } catch {
             if (!cancelled) updateCtx('10000001', { jobStatus: 'failed' });
@@ -212,16 +351,7 @@ function WorkspaceViewer() {
       updateCtx(pollModelId, { aiLoading: true, inferenceProgress: null });
       try {
         let results;
-        if (process.env.NODE_ENV === 'development') {
-          const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-          if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-          results = await resR.json();
-        } else {
-          const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${jobId}`);
-          if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-          const { url } = await res.json();
-          results = await fetch(url).then(r => r.json());
-        }
+        results = await fetchJobResults(jobId);
         if (cancelled) return;
         updateCtx(pollModelId, { inferenceResult: results, jobStatus: "completed" });
 
@@ -241,7 +371,7 @@ function WorkspaceViewer() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            metadata: null,
+            metadata: results.dicom_metadata ?? null,
             patient_context: null,
             model_type: isClassification ? "classification" : isGradCam ? "gradcam" : "segmentation",
             detected: isAnatomy || isClassification ? null : detectedSlices.length > 0,
@@ -249,6 +379,7 @@ function WorkspaceViewer() {
             scores: isGradCam ? (results.scores ?? slices[0]?.scores ?? null) : null,
             class_labels: results.class_labels ?? null,
             class_volumes_cm3: results.class_volumes_cm3 ?? null,
+            input_warnings: results.warnings?.length ? results.warnings : null,
             mean_confidence: meanConf,
             mean_coverage_pct: meanCoverage,
             total_slices: results.slice_count ?? slices.length,
@@ -259,6 +390,10 @@ function WorkspaceViewer() {
             largest_lesion_volume_cm3: vol.largest_lesion_volume_cm3 ?? null,
             largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
             detection_location: vol.detection_location ?? null,
+            ...reportFacts(results),
+            exam_confirmed: confirmedExam(examRef.current),
+            marked_regions: markedRegionsForReport(markedRegionsRef.current),
+            prior_comparison: priorComparisonRef.current,
           }),
         });
 
@@ -591,7 +726,7 @@ function WorkspaceViewer() {
             user_email: localStorage.getItem("email"),
             user_name: localStorage.getItem("name"),
             model_id: 10000001,
-            viewplane: viewMode === "mpr" ? "axial" : viewMode,
+            viewplane: viewMode === "stack" ? viewMode : "axial", // MPR and 3D both run on the axial stack
           }),
         });
         if (!response.ok) {
@@ -620,16 +755,7 @@ function WorkspaceViewer() {
           updateCtx('10000001', { enhancementProgress: Math.round(status.progress ?? 0) });
         } else if (status.status === "completed") {
           updateCtx('10000001', { enhancementProgress: 100 });
-          if (process.env.NODE_ENV === 'development') {
-            const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-            results = await resR.json();
-          } else {
-            const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-            const { url } = await res.json();
-            results = await fetch(url).then(r => r.json());
-          }
+          results = await fetchJobResults(job_id);
           break;
         } else if (status.status === "failed") {
           updateCtx('10000001', { jobStatus: "failed" });
@@ -763,16 +889,7 @@ function WorkspaceViewer() {
           updateCtx(capturedModelId, { inferenceProgress: 100 });
 
 
-          if (process.env.NODE_ENV === 'development') {
-            const resR = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!resR.ok) throw new Error(`Results fetch failed: ${resR.status}`);
-            results = await resR.json();
-          } else {
-            const res = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${job_id}`);
-            if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
-            const { url } = await res.json();
-            results = await fetch(url).then(r => r.json());
-          }
+          results = await fetchJobResults(job_id);
           break;
         } else if (status.status === "failed") {
           updateCtx(capturedModelId, { jobStatus: "failed" });
@@ -827,6 +944,7 @@ function WorkspaceViewer() {
             scores: isGradCam ? (results.scores ?? slices[0]?.scores ?? null) : null,
             class_labels: results.class_labels ?? null,
             class_volumes_cm3: results.class_volumes_cm3 ?? null,
+            input_warnings: results.warnings?.length ? results.warnings : null,
             mean_confidence: meanConf,
             mean_coverage_pct: meanCoverage,
             total_slices: results.slice_count ?? slices.length,
@@ -837,6 +955,10 @@ function WorkspaceViewer() {
             largest_lesion_volume_cm3: vol.largest_lesion_volume_cm3 ?? null,
             largest_lesion_slice_range: vol.largest_lesion_slice_range ?? null,
             detection_location: vol.detection_location ?? null,
+            ...reportFacts(results),
+            exam_confirmed: confirmedExam(examRef.current),
+            marked_regions: markedRegionsForReport(markedRegionsRef.current),
+            prior_comparison: priorComparisonRef.current,
           }),
         });
 
@@ -1451,8 +1573,14 @@ function WorkspaceViewer() {
             <div className="flex flex-row gap-4 flex-1 min-h-0 overflow-hidden relative">
               {(imagesLoading || uploading) && (
                 <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 rounded-xl">
-                  <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
-                  <p className="text-[#6B6B6B] text-sm m-0">{uploading ? "Uploading…" : "Loading images…"}</p>
+                  {uploading ? (
+                    <>
+                      <div className="w-8 h-8 border-2 border-[#0694FB] border-t-transparent rounded-full animate-spin" />
+                      <p className="text-[#6B6B6B] text-sm m-0">Uploading…</p>
+                    </>
+                  ) : (
+                    <SeriesDownloadPreview seriesId={activeSeries?.id} />
+                  )}
                 </div>
               )}
               {uploadError && (
@@ -1470,6 +1598,7 @@ function WorkspaceViewer() {
                 seriesList={seriesList}
                 activeSeries={activeSeries}
                 onSelectSeries={handleSelectSeries}
+                shownSeriesIds={translationActive ? [] : layout?.panes?.filter(Boolean).map(s => String(s.id))}
               />
               <Midsection
                 selectedImage={selectedImage}
@@ -1495,9 +1624,19 @@ function WorkspaceViewer() {
                 onCloseTranslation={() => { setTranslationActive(false); setTranslationResult(null); setTranslationProgress(null); setTranslationLoading(false); }}
                 jobStatus={jobStatus}
                 onViewModeChange={setViewMode}
+                onMarkedRegionsChange={(regions) => { markedRegionsRef.current = regions; }}
+                onPriorComparisonChange={(comparison) => { priorComparisonRef.current = comparison; }}
+                caseId={caseId}
+                studyId={studyId}
+                studyDate={exam?.date}
+                modelId={currentModelId}
+                layout={layout}
+                onLayoutChange={onLayoutChange}
+                seriesList={seriesList}
+                onSelectSeries={handleSelectSeries}
               />
               <div className="w-[20%] min-w-[260px] flex flex-col gap-4 overflow-hidden">
-                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={setPatientHistory} reportTab={reportTab} onReportTabChange={setReportTab} />
+                <RightSection aiResponse={aiResponse} aiLoading={aiLoading} onModelSelect={setSelectedModel} expandReport={expandAiReport} onTranslate={setselectedTranslationMode} selectedModel={selectedModel} onSaveReport={handleSaveReport} reportSaving={reportSaving} modality={dicomMetadata?.modality || activeSeries?.modality} impression={impression} onImpressionChange={setImpression} patientHistory={patientHistory} onPatientHistoryChange={handlePatientHistoryChange} exam={exam} onExamChange={handleExamChange} reportTab={reportTab} onReportTabChange={setReportTab} />
               </div>
             </div>
 
@@ -1512,9 +1651,14 @@ function WorkspaceViewer() {
 
 // Remount the whole workspace when the series changes, so inference results, masks,
 // translation and the loaded volume from one series never leak into another.
+// The viewer layout (lib/viewerLayout) lives out here, so making another pane active —
+// which opens its series and remounts the workspace — keeps the other panes in place.
+// It's also kept for the tab, so a reload comes back to the same viewers.
 function WorkspaceViewerRoute() {
   const { state } = useLocation();
-  return <WorkspaceViewer key={state?.series?.id ?? "none"} />;
+  const [layout, setLayout] = useState(() => readSavedLayout(state?.series?.id));
+  useEffect(() => { saveLayout(layout); }, [layout]);
+  return <WorkspaceViewer key={state?.series?.id ?? "none"} layout={layout} onLayoutChange={setLayout} />;
 }
 
 export default WorkspaceViewerRoute;

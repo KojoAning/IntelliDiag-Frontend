@@ -22,6 +22,15 @@ export async function retireJob(jobId) {
   } catch { /* the next run replaces it anyway */ }
 }
 
+// Whether a job of the series is worth picking up instead of starting another: one that
+// finished, or one still pending/running that has been updated recently. A failed or
+// stalled one should be retired and replaced.
+export function isReusable(job) {
+  const status = String(job.status).toLowerCase();
+  if (status === "completed") return true;
+  return (status === "pending" || status === "running") && Date.now() - Date.parse(job.updated_at) <= STALL_MS;
+}
+
 // → "completed" | "failed" | "cancelled" (isCancelled() came true). Throws, with a message
 // for the user, when the job has stalled, is gone, or the server can't be reached.
 export async function waitForJob(jobId, { onProgress, isCancelled = () => false, interval = 2000 } = {}) {

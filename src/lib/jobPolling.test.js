@@ -1,4 +1,4 @@
-import { waitForJob, STALL_MS } from "./jobPolling";
+import { isReusable, waitForJob, STALL_MS } from "./jobPolling";
 import { authFetch } from "./api";
 
 jest.mock("./api", () => ({ authFetch: jest.fn() }));
@@ -43,4 +43,12 @@ test("stops when cancelled", async () => {
   let gone = false;
   authFetch.mockImplementation(async () => { gone = true; return job("running", 5); });
   await expect(waitForJob("j", { interval: 1, isCancelled: () => gone })).resolves.toBe("cancelled");
+});
+
+test("only finished or live jobs are reused", () => {
+  const at = ageMs => new Date(Date.now() - ageMs).toISOString();
+  expect(isReusable({ status: "completed", updated_at: at(STALL_MS * 10) })).toBe(true);
+  expect(isReusable({ status: "running", updated_at: at(1000) })).toBe(true);
+  expect(isReusable({ status: "pending", updated_at: at(STALL_MS + 1000) })).toBe(false);
+  expect(isReusable({ status: "failed", updated_at: at(0) })).toBe(false);
 });

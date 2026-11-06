@@ -11,6 +11,7 @@ import { getSeriesForStudy, uploadDicom, getModels, authFetch, getStudy, updateS
 import { readSavedLayout, saveLayout } from "../../../lib/viewerLayout";
 import { loadSeries, invalidateSeries, prefetchSeriesInBackground, PROJECTION_MODALITIES } from "../../../lib/seriesCache";
 import { Info, } from "lucide-react";
+import { waitForJob } from "../../../lib/jobPolling";
 
 const API_BASE = (process.env.REACT_APP_API_URL || "").trim().replace(/\/$/, "");
 
@@ -258,6 +259,12 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
   };
 
   const fileInputRef = useRef(null);
+  // False once the viewer has gone, so AI-job waits started from a button stop polling
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
 
   // ── Per-model context helpers ─────────────────────────────────────────────────
   const updateCtx = useCallback((modelId, patch) => {
@@ -313,23 +320,13 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
 
           updateCtx('10000001', { enhancementLoading: true, enhancementProgress: status === 'running' ? 0 : null });
 
-          while (!cancelled) {
-            await new Promise(r => setTimeout(r, 2500));
-            if (cancelled) break;
-            try {
-              const res = await authFetch(`${API_BASE}/jobs/check_status/${jobId}`);
-              if (!res.ok || cancelled) break;
-              const data = await res.json();
-              if (data.status === 'running') {
-                updateCtx('10000001', { enhancementProgress: Math.round(data.progress ?? 0) });
-              } else if (data.status === 'completed') {
-                await fetchEnhancementResults(); break;
-              } else if (data.status === 'failed') {
-                if (!cancelled) updateCtx('10000001', { jobStatus: 'failed', enhancementLoading: false, enhancementProgress: null });
-                break;
-              }
-            } catch { break; }
-          }
+          const outcome = await waitForJob(jobId, {
+            interval: 2500,
+            isCancelled: () => cancelled,
+            onProgress: progress => updateCtx('10000001', { enhancementProgress: progress }),
+          }).catch(() => "failed");
+          if (outcome === "completed") await fetchEnhancementResults();
+          else if (outcome === "failed") updateCtx('10000001', { jobStatus: 'failed', enhancementLoading: false, enhancementProgress: null });
         };
 
         pollEnhancement();
@@ -448,23 +445,19 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
       // Still running/pending — show progress UI and poll until done
       updateCtx(pollModelId, { aiLoading: true, inferenceProgress: status === "running" ? 0 : null });
 
-      while (!cancelled) {
-        await new Promise(r => setTimeout(r, 2500));
-        if (cancelled) break;
-        try {
-          const res = await authFetch(`${API_BASE}/jobs/check_status/${jobId}`);
-          if (!res.ok || cancelled) break;
-          const data = await res.json();
-          if (data.status === "running") {
-            updateCtx(pollModelId, { inferenceProgress: Math.round(data.progress ?? 0) });
-          } else if (data.status === "completed") {
-            await fetchResults(); break;
-          } else if (data.status === "failed") {
-            if (!cancelled) updateCtx(pollModelId, { jobStatus: "failed", aiLoading: false, inferenceProgress: null });
-            break;
-          }
-        } catch { break; }
+      let outcome;
+      try {
+        outcome = await waitForJob(jobId, {
+          interval: 2500,
+          isCancelled: () => cancelled,
+          onProgress: progress => updateCtx(pollModelId, { inferenceProgress: progress }),
+        });
+      } catch (e) {
+        updateCtx(pollModelId, { aiResponse: `Error: ${e.message}` });
+        outcome = "failed";
       }
+      if (outcome === "completed") await fetchResults();
+      else if (outcome === "failed") updateCtx(pollModelId, { jobStatus: "failed", aiLoading: false, inferenceProgress: null });
     };
 
     poll();
@@ -740,29 +733,18 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
 
 
       let results = null;
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000));
-
-        const statusRes = await authFetch(`${API_BASE}/jobs/check_status/${job_id}`);
-        if (!statusRes.ok) {
-          const errText = await statusRes.text().catch(() => "");
-          throw new Error(`Status check failed: ${statusRes.status} — ${errText.slice(0, 200)}`);
-        }
-
-        const status = await statusRes.json();
-
-        if (status.status === "running") {
-          updateCtx('10000001', { enhancementProgress: Math.round(status.progress ?? 0) });
-        } else if (status.status === "completed") {
-          updateCtx('10000001', { enhancementProgress: 100 });
-          results = await fetchJobResults(job_id);
-          break;
-        } else if (status.status === "failed") {
-          updateCtx('10000001', { jobStatus: "failed" });
-          setJobFailedDialog(true);
-          throw new Error(status.message || "Image Enhancement job failed");
-        }
+      const outcome = await waitForJob(job_id, {
+        isCancelled: () => !aliveRef.current,
+        onProgress: progress => updateCtx('10000001', { enhancementProgress: progress }),
+      });
+      if (outcome === "cancelled") return;
+      if (outcome === "failed") {
+        updateCtx('10000001', { jobStatus: "failed" });
+        setJobFailedDialog(true);
+        throw new Error("Image Enhancement job failed");
       }
+      updateCtx('10000001', { enhancementProgress: 100 });
+      results = await fetchJobResults(job_id);
       if (!results) throw new Error("No results received from inference job");
       updateCtx('10000001', { enhancementResult: results });
 
@@ -872,32 +854,18 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
 
       // Step 3: Poll until COMPLETED or FAILED
       let results = null;
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000));
-
-        const statusRes = await authFetch(`${API_BASE}/jobs/check_status/${job_id}`);
-        if (!statusRes.ok) {
-          const errText = await statusRes.text().catch(() => "");
-          throw new Error(`Status check failed: ${statusRes.status} — ${errText.slice(0, 200)}`);
-        }
-
-        const status = await statusRes.json();
-
-        if (status.status === "running") {
-          updateCtx(capturedModelId, { inferenceProgress: Math.round(status.progress ?? 0) });
-        } else if (status.status === "completed") {
-          updateCtx(capturedModelId, { inferenceProgress: 100 });
-
-
-          results = await fetchJobResults(job_id);
-          break;
-        } else if (status.status === "failed") {
-          updateCtx(capturedModelId, { jobStatus: "failed" });
-          setJobFailedDialog(true);
-          throw new Error(status.message || "Inference job failed");
-        }
-        // any other status (PENDING, QUEUED, etc.) — keep polling
+      const outcome = await waitForJob(job_id, {
+        isCancelled: () => !aliveRef.current,
+        onProgress: progress => updateCtx(capturedModelId, { inferenceProgress: progress }),
+      });
+      if (outcome === "cancelled") return;
+      if (outcome === "failed") {
+        updateCtx(capturedModelId, { jobStatus: "failed" });
+        setJobFailedDialog(true);
+        throw new Error("Inference job failed");
       }
+      updateCtx(capturedModelId, { inferenceProgress: 100 });
+      results = await fetchJobResults(job_id);
 
       if (!results) throw new Error("No results received from inference job");
       updateCtx(capturedModelId, { inferenceResult: results });
@@ -1071,26 +1039,18 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
         return raw;
       };
 
-      // Poll until completed or failed
-      while (true) {
-        await new Promise(r => setTimeout(r, 2000));
-        const statusRes = await authFetch(`${API_BASE}/jobs/check_status/${activeJobId}`);
-        if (!statusRes.ok) throw new Error(`Status check failed: ${statusRes.status}`);
-        const status = await statusRes.json();
-
-        if (status.status === "running") {
-          setTranslationProgress(Math.round(status.progress ?? 0));
-        } else if (status.status === "completed") {
-          setTranslationProgress(100);
-          const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
-          if (!resultsRes.ok) throw new Error(`Results fetch failed: ${resultsRes.status}`);
-          const raw = await resultsRes.json();
-          setTranslationResult(await resolveResults(raw));
-          break;
-        } else if (status.status === "failed") {
-          throw new Error(status.message || "Translation job failed");
-        }
-      }
+      // Wait until completed or failed
+      const outcome = await waitForJob(activeJobId, {
+        isCancelled: () => !aliveRef.current,
+        onProgress: setTranslationProgress,
+      });
+      if (outcome === "cancelled") return;
+      if (outcome === "failed") throw new Error("Translation job failed");
+      setTranslationProgress(100);
+      const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
+      if (!resultsRes.ok) throw new Error(`Results fetch failed: ${resultsRes.status}`);
+      const raw = await resultsRes.json();
+      setTranslationResult(await resolveResults(raw));
     } catch (e) {
       setTranslationActive(false);
     } finally {

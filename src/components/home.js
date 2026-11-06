@@ -843,7 +843,10 @@ function ImmersiveOverlay({ close, size, expired = false, next = "/dashboard" })
         throw new Error(parseApiError(data, "Sign up failed"));
       }
 
+      const data = await res.json().catch(() => ({}));
       setView("verify");
+      // The account exists but the code wasn't sent — say so, Resend tries again
+      if (/couldn't be sent/i.test(data.detail ?? "")) setError(data.detail);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -927,11 +930,16 @@ function ImmersiveOverlay({ close, size, expired = false, next = "/dashboard" })
 
     try {
       const baseURL = process.env.REACT_APP_API_URL || "";
-      await fetch(`${baseURL}/auth/resend-otp`, {
+      const res = await fetch(`${baseURL}/auth/resend-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: signUpEmail }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(parseApiError(data, "Could not resend code. Try again."));
+        return;
+      }
       setResendCooldown(60);
       const timer = setInterval(() => {
         setResendCooldown(prev => {

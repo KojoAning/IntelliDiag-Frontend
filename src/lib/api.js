@@ -16,13 +16,29 @@ export async function clearLocalSession() {
 // ── Token refresh ────────────────────────────────────────────────────────────
 let refreshPromise = null;
 
+// The home page with sign-in open, coming back here afterwards (see home.js)
+export function signInUrl(expired = true) {
+  const next = window.location.pathname + window.location.search;
+  const params = new URLSearchParams({ signin: expired ? "expired" : "1" });
+  if (next !== "/" && !next.startsWith("/?")) params.set("next", next);
+  return `/?${params}`;
+}
+
+// The session is over: drop it and go to sign-in
+async function endSession() {
+  await clearLocalSession();
+  window.location.href = signInUrl();
+}
 
 async function tryRefreshToken() {
   // Deduplicate: if a refresh is already in flight, piggyback on it
   if (refreshPromise) return refreshPromise;
 
   const refreshToken = localStorage.getItem("refresh_token");
-  if (!refreshToken) return false;
+  if (!refreshToken) {
+    await endSession();
+    return false;
+  }
 
   refreshPromise = (async () => {
     try {
@@ -31,19 +47,19 @@ async function tryRefreshToken() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refreshToken }),
       });
-      if (!res.ok) {
-        await clearLocalSession();
-        window.location.href = "/login";
+      // Only a refused refresh ends the session; a busy (429) or failing (5xx) server
+      // fails this one request and the next one tries again
+      if (res.status === 401 || res.status === 403) {
+        await endSession();
         return false;
       }
+      if (!res.ok) return false;
       const data = await res.json();
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("refresh_token", data.refresh_token);
       return true;
     } catch {
-      await clearLocalSession();
-      window.location.href = "/login";
-      return false;
+      return false; // offline or the server unreachable — keep the session
     } finally {
       refreshPromise = null;
     }
@@ -97,7 +113,7 @@ async function request(method, path, body, { keepalive = false } = {}) {
  * Drop-in replacement for `fetch()` that:
  *   1. Injects the Bearer token from localStorage
  *   2. On 401, attempts a token refresh and retries the request once
- *   3. On refresh failure, clears tokens and redirects to /login
+ *   3. When the refresh is refused, clears tokens and goes to sign-in
  *
  * Usage (same signature as fetch):
  *   const res = await authFetch(url, { method: "POST", body: ... });

@@ -9,7 +9,7 @@ import {
   animate,
   useIsPresent,
 } from "framer-motion";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Info } from "lucide-react";
 import { FiX } from "react-icons/fi";
 import styled, { createGlobalStyle } from "styled-components";
@@ -485,9 +485,14 @@ const GradientCircle = styled(motion.div)`
   will-change: transform;
 `;
 
+// ?signin=1 (or =expired, after a session ends) opens sign-in; ?next= is where to go after
+const safeNext = (next) => (next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
+
 function Homepage() {
   const navigate = useNavigate();
-  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+  const [searchParams] = useSearchParams();
+  const signinParam = searchParams.get("signin");
+  const [isOverlayOpen, setIsOverlayOpen] = useState(Boolean(signinParam));
   const ref = useRef(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -543,7 +548,12 @@ function Homepage() {
 
         <AnimatePresence>
           {isOverlayOpen ? (
-            <ImmersiveOverlay close={closeOverlay} size={size} />
+            <ImmersiveOverlay
+              close={closeOverlay}
+              size={size}
+              expired={signinParam === "expired"}
+              next={safeNext(searchParams.get("next"))}
+            />
           ) : null}
         </AnimatePresence>
       </HomepageContainer>
@@ -660,7 +670,7 @@ function GradientOverlay({ size }) {
   );
 }
 
-function ImmersiveOverlay({ close, size }) {
+function ImmersiveOverlay({ close, size, expired = false, next = "/dashboard" }) {
   const navigate = useNavigate();
   const [view, setView] = useState("signin");
 
@@ -747,7 +757,7 @@ function ImmersiveOverlay({ close, size }) {
       localStorage.setItem("sub", sub);
       localStorage.setItem("email", signInEmail);
 
-      navigate("/dashboard");
+      navigate(next);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -1118,7 +1128,9 @@ function ImmersiveOverlay({ close, size }) {
               <ModalHeader>
                 <ModalTitle>Sign In to your account</ModalTitle>
                 <ModalSubtitle>
-                  Sign in to access all the features and functions of our platform
+                  {expired
+                    ? "Your session has ended — sign in again to carry on where you were"
+                    : "Sign in to access all the features and functions of our platform"}
                 </ModalSubtitle>
               </ModalHeader>
 

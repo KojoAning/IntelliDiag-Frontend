@@ -3,7 +3,7 @@ import React, { useRef, useEffect, useState } from "react";
 import gsap from "gsap";
 import ScrollTrigger from "gsap/ScrollTrigger";
 import Navbar from "./components/navbar/Navbar";
-import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import { BrowserRouter as Router, Navigate, Route, Routes } from "react-router-dom";
 import Homepage from "./components/home";
 import About from "./components/about";
 import Partners from "./components/partners";
@@ -418,6 +418,9 @@ function App() {
               </div>
             </div>
           } />
+          {/* Old sign-in links, and any address that isn't a page */}
+          <Route path="/login" element={<Navigate to="/?signin=1" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Router>
     </div>

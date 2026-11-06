@@ -140,10 +140,15 @@ async function fetchSeriesBulk(seriesId, imgs) {
     published = Date.now();
     setEntry(String(seriesId), { partial: { slices: slices.slice(), total } });
   };
+  // The download holds every file the store has under the series UID; the preview leaves out
+  // ones that aren't among the series' images (deleted since)
+  const liveUids = new Set(imgs.map(img => img.sopInstanceUid).filter(Boolean));
   const take = (newParts) => {
     for (const part of newParts) {
       parts.push(part);
-      slices.push({ instanceNumber: parseDicomInstanceInfo(part).instanceNumber, buffer: part });
+      const { instanceNumber, sopUid } = parseDicomInstanceInfo(part);
+      if (liveUids.size && sopUid && !liveUids.has(sopUid)) continue;
+      slices.push({ instanceNumber, buffer: part });
     }
     if (newParts.length && Date.now() - published > PARTIAL_EVERY_MS) publish();
   };

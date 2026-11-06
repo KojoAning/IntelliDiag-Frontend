@@ -435,12 +435,8 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
               className="text-[#6B6B6B] hover:text-white text-[12px] bg-transparent border-none cursor-pointer p-0">✕</button>
           </div>
           <div className="flex flex-col gap-1.5 px-3 pb-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-[#6B6B6B]">Volume</span>
-              <span className="text-[13px] text-[#0694FB] font-mono">{`${card.volumeCm3.toFixed(2)} cm³`}</span>
-            </div>
             {card.sizeMm && (
-              <div className="flex items-baseline justify-between gap-3" title={`Maximum extent ${SIZE_AXES_LABEL}`}>
+              <div className="flex items-baseline justify-between gap-3" title={`Maximum extent, ${SIZE_AXES_LABEL}: front–back × side–side × head–foot (AP × TR × CC)`}>
                 <span className="text-[11px] text-[#6B6B6B]">Size</span>
                 <span className="flex flex-col items-end">
                   <span className="text-[12px] text-white font-mono whitespace-nowrap">{formatSize(card.sizeMm)}</span>
@@ -448,6 +444,10 @@ export default function StackBrushLayer({ getViewport, element, imageIds, active
                 </span>
               </div>
             )}
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-[#6B6B6B]">Volume</span>
+              <span className="text-[13px] text-[#0694FB] font-mono">{`${card.volumeCm3.toFixed(2)} cm³`}</span>
+            </div>
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-[#6B6B6B]">Slices painted</span>
               <span className="text-[11px] text-[#949494] font-mono">{card.slices}</span>

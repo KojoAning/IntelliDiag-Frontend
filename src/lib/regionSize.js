@@ -40,4 +40,5 @@ export function formatSize(size) {
   return `${values.map(v => (v / 10).toFixed(1)).join(" × ")} cm`;
 }
 
-export const SIZE_AXES_LABEL = "AP × TR × CC";
+// Length × breadth × height: front–back × side–side × head–foot (AP × TR × CC)
+export const SIZE_AXES_LABEL = "length × breadth × height";

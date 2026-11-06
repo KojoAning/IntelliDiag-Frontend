@@ -203,9 +203,9 @@ function SegmentationLegend({ legend, volumes, structures }) {
         {shown.map(r => (
           <div key={r.name} className="flex items-center gap-2 text-[11px]">
             <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: `rgb(${r.rgb.join(",")})` }} />
-            <span className="flex-1 min-w-0 truncate text-[#CCCCCC]" title={r.size ? `${r.label} — ${r.volume} cm³, ${r.size} (${SIZE_AXES_LABEL})` : r.label}>{r.label}</span>
-            <span className="text-[#6B6B6B] font-mono shrink-0" title={r.size ? `Maximum extent ${SIZE_AXES_LABEL}` : undefined}>
-              {r.size ? `${r.volume} cm³ · ${r.size}` : `${r.volume} cm³`}
+            <span className="flex-1 min-w-0 truncate text-[#CCCCCC]" title={r.size ? `${r.label} — ${r.size} (${SIZE_AXES_LABEL}), ${r.volume} cm³` : r.label}>{r.label}</span>
+            <span className="text-[#6B6B6B] font-mono shrink-0" title={r.size ? `Size (${SIZE_AXES_LABEL}: front–back × side–side × head–foot), then volume` : undefined}>
+              {r.size ? `${r.size} · ${r.volume} cm³` : `${r.volume} cm³`}
             </span>
           </div>
         ))}
@@ -2493,12 +2493,8 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                       <span className="text-[11px] text-[#6B6B6B]">These images carry no position data (e.g. plain PNG/JPG), so volume can't be measured</span>
                     ) : (
                       <div className="mt-1 rounded-lg bg-[#111] px-2.5 py-2 flex flex-col gap-1">
-                        <div className="flex items-baseline justify-between">
-                          <span className="text-[11px] text-[#868686]">Volume</span>
-                          <span className="text-[13px] text-[#0694FB] font-mono">{`${roi.volumeCm3.toFixed(2)} cm³`}</span>
-                        </div>
                         {roi.sizeMm && (
-                          <div className="flex items-baseline justify-between gap-3" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
+                          <div className="flex items-baseline justify-between gap-3" title={`Maximum extent, ${SIZE_AXES_LABEL}: front–back × side–side × head–foot (AP × TR × CC)`}>
                             <span className="text-[11px] text-[#868686] shrink-0">Size</span>
                             <span className="flex flex-col items-end">
                               <span className="text-[12px] text-white font-mono whitespace-nowrap">{formatSize(roi.sizeMm)}</span>
@@ -2506,6 +2502,10 @@ function Midsection({ selectedImage, onSelectImage, images = [], activeStudy, ac
                             </span>
                           </div>
                         )}
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-[11px] text-[#868686]">Volume</span>
+                          <span className="text-[13px] text-[#0694FB] font-mono">{`${roi.volumeCm3.toFixed(2)} cm³`}</span>
+                        </div>
                         {roi.skippedSlices > 0 && (
                           <span className="text-[10px] text-[#6B6B6B]">
                             {`${roi.skippedSlices} slice${roi.skippedSlices === 1 ? "" : "s"} between outlines filled in by interpolation`}

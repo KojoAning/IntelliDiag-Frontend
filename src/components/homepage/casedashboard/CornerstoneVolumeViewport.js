@@ -2328,12 +2328,12 @@ const CornerstoneVolumeViewport = forwardRef(function CornerstoneVolumeViewport(
 
               {/* Measurements */}
               <div className="flex flex-col gap-1.5 px-3 pb-2.5">
-                {row("Volume", <span className="text-[13px] text-[#0694FB] font-mono">{`${selectedLesion.volumeCm3.toFixed(2)} cm³`}</span>)}
                 {selectedLesion.sizeMm && row("Size", (
-                  <span className="text-[12px] text-white font-mono" title={`Maximum extent ${SIZE_AXES_LABEL}: front–back × side–side × head–foot`}>
+                  <span className="text-[12px] text-white font-mono" title={`Maximum extent, ${SIZE_AXES_LABEL}: front–back × side–side × head–foot (AP × TR × CC)`}>
                     {formatSize(selectedLesion.sizeMm)} <span className="text-[10px] text-[#6B6B6B]">{SIZE_AXES_LABEL}</span>
                   </span>
                 ))}
+                {row("Volume", <span className="text-[13px] text-[#0694FB] font-mono">{`${selectedLesion.volumeCm3.toFixed(2)} cm³`}</span>)}
                 {selectedLesion.location && row("Location", (
                   <span className="text-[11px] text-white text-right" title="From the anatomy model's structures under the region">
                     {selectedLesion.location.map(l => `${l.name} ${l.pct}%`).join(", ")}

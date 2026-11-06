@@ -214,7 +214,7 @@ function ProfileTab({ s, onUpdate }) {
         <SettingRow label="License number" description="Medical license for report signing." value={s.license_number} fieldKey="license_number" onSave={save} />
       </SectionCard>
       <SectionCard title="Contact">
-        <SettingRow label="Email address" description="Used for login and notifications." value={s.email} fieldKey="email" onSave={save} />
+        <SettingRow label="Email address" description="Used for login and notifications. To change it, contact support." value={s.email} />
         <SettingRow label="Phone number" description="Optional — used for urgent alerts." value={s.phone_number} fieldKey="phone_number" onSave={save} />
       </SectionCard>
     </div>

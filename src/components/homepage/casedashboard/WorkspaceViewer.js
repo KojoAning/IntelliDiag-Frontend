@@ -364,7 +364,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
         const meanCoverage = slices.length ? slices.reduce((a, s) => a + (s.coverage_pct ?? 0), 0) / slices.length : 0;
         const vol = results.volume_analysis ?? {};
 
-        const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
+        const reportRes = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -869,7 +869,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
         const vol = results.volume_analysis ?? {};
         const meta = results.dicom_metadata ?? null;
 
-        const reportRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
+        const reportRes = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/report/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -976,7 +976,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
           activeJobId = existing.id;
           // If already completed, fetch results immediately and bail out
           if (existing.status === "completed") {
-            const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
+            const resultsRes = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
             if (resultsRes.ok) {
               const raw = await resultsRes.json();
               const resolved = raw.url && !raw.slices
@@ -1034,7 +1034,7 @@ function WorkspaceViewer({ layout, onLayoutChange }) {
       if (outcome === "cancelled") return;
       if (outcome === "failed") throw new Error("Translation job failed");
       setTranslationProgress(100);
-      const resultsRes = await fetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
+      const resultsRes = await authFetch(`${process.env.REACT_APP_API_INFERENCE_BASE}/results/${activeJobId}`);
       if (!resultsRes.ok) throw new Error(`Results fetch failed: ${resultsRes.status}`);
       const raw = await resultsRes.json();
       setTranslationResult(await resolveResults(raw));
